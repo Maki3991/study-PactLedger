@@ -119,6 +119,8 @@ created → researching → strategizing → backtesting → risk_review
 
 当前不会买卖股票，也不会发起真实链上交易。回测、风险退回、用户批准和执行回执会进入统一任务快照与审计界面。
 
+链上队友的接口、数据模型、测试清单与演示口径见 [`../docs/INJECTIVE_AGENT_PAYMENT_HANDOFF.md`](../docs/INJECTIVE_AGENT_PAYMENT_HANDOFF.md)。
+
 ## Ubuntu 宿主机直接部署
 
 生产应用不依赖 Zeabur 构建，也不需要 Docker。服务器直接拉取 Git 分支，在宿主机完成依赖安装和前端构建，再由 systemd 运行 Fastify：
