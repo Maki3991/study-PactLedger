@@ -13,15 +13,17 @@ const demoInput: CreateTaskInput = {
 export function useTaskWorkflow() {
   const [task, setTask] = useState<TaskSnapshot>()
   const [error, setError] = useState<string>()
+  const [submitting, setSubmitting] = useState(false)
   const unsubscribeRef = useRef<() => void>(() => undefined)
 
   useEffect(() => () => unsubscribeRef.current(), [])
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (input: CreateTaskInput = demoInput) => {
     setError(undefined)
+    setSubmitting(true)
     unsubscribeRef.current()
     try {
-      const created = await createTask(demoInput)
+      const created = await createTask(input)
       setTask(created)
       unsubscribeRef.current = subscribeToTask(
         created.id,
@@ -30,6 +32,8 @@ export function useTaskWorkflow() {
       )
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '任务创建失败')
+    } finally {
+      setSubmitting(false)
     }
   }, [])
 
@@ -46,5 +50,5 @@ export function useTaskWorkflow() {
     }
   }, [task])
 
-  return { task, error, start, approveAndExecute }
+  return { task, error, submitting, start, approveAndExecute }
 }

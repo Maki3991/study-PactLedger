@@ -1,78 +1,72 @@
 import { useState } from 'react'
 import {
-  Activity,
-  Bell,
+  ArrowLeft,
+  ArrowRight,
+  BadgeCheck,
   Bot,
-  BrainCircuit,
+  Check,
   ChevronDown,
-  Command,
+  Circle,
   Database,
-  FlaskConical,
+  FileCheck2,
+  Fingerprint,
   GitBranch,
-  History,
-  LayoutDashboard,
+  LoaderCircle,
+  LockKeyhole,
   LogOut,
-  Menu,
-  Network,
-  PanelLeftClose,
-  Search,
+  Play,
+  RotateCcw,
   ShieldCheck,
-  Vault,
-  WalletCards,
-  X,
+  Workflow,
 } from 'lucide-react'
-import { AgentRail } from './components/AgentRail'
 import { AuthScreen } from './components/AuthScreen'
-import { useAuth } from './services/useAuth'
+import type {
+  AgentRun,
+  CreateTaskInput,
+  TaskPhase,
+  TaskSnapshot,
+} from './domain/trading'
 import type { AuthUser } from './services/authClient'
-import { EvolutionPanel } from './components/EvolutionPanel'
-import { FirewallPanel } from './components/FirewallPanel'
-import { InjectiveConfigDrawer } from './components/InjectiveConfigDrawer'
-import { demoAgents, firewallRules, initialCandidates, timeline } from './services/demoData'
-import { useTaskWorkflow } from './services/useTaskWorkflow'
+import { useAuth } from './services/useAuth'
 import { useInjectiveConfig } from './services/useInjectiveConfig'
 import { usePandaConfig } from './services/usePandaConfig'
-import { TaskFlowView } from './views/TaskFlowView'
-import { StrategyLabView } from './views/StrategyLabView'
-import { MemoryBankView } from './views/MemoryBankView'
-import { ExecutionView } from './views/ExecutionView'
-import { TreasuryView } from './views/TreasuryView'
-import { TreasuryOverviewView } from './views/TreasuryOverviewView'
+import { useTaskWorkflow } from './services/useTaskWorkflow'
 
-const navigation = [
-  { label: '基座总览', icon: LayoutDashboard, active: true },
-  { label: '股票量化', icon: Activity },
-  { label: '任务流', icon: Network },
-  { label: '策略实验', icon: FlaskConical },
-  { label: '统一账本', icon: Database },
-  { label: '链上执行', icon: WalletCards },
-  { label: '资金流', icon: Vault },
+const presets = [
+  { symbol: '000001.SZ', name: '平安银行' },
+  { symbol: '600519.SH', name: '贵州茅台' },
+  { symbol: '300750.SZ', name: '宁德时代' },
 ]
 
-const viewMeta: Record<string, { title: string; subtitle: string }> = {
-  '基座总览': { title: 'Agent Treasury 控制基座', subtitle: '统一管理 Agent 账户、动作意图、资金策略、审批、执行与审计证据。' },
-  '股票量化': { title: '股票策略进化任务', subtitle: '使用 PandaAI 股票数据生成、回测和验证策略，再提交统一 Action Intent。' },
-  '任务流': { title: 'A2A 任务编排', subtitle: '多 Agent 协作管线的实时状态与交互记录。' },
-  '策略实验': { title: '策略竞争实验室', subtitle: 'Champion–Challenger 回测对比与版本进化历史。' },
-  '统一账本': { title: '统一审计账本', subtitle: '跨案例保存数据来源、策略版本、Policy 决策和执行回执。' },
-  '链上执行': { title: 'Injective 执行适配器', subtitle: '为合约团队保留明确的 Intent 输入与 Receipt 输出边界。' },
-  '资金流': { title: 'Agent Treasury', subtitle: '7 个 Agent 账户实时余额、资金流向与不可篡改审计账本。' },
-}
+const phaseOrder: TaskPhase[] = [
+  'created',
+  'researching',
+  'strategizing',
+  'backtesting',
+  'risk_review',
+  'awaiting_approval',
+  'approved',
+  'executing',
+  'executed',
+]
+
+type StepState = 'pending' | 'active' | 'complete' | 'failed'
 
 function App() {
   const { session, validating, login, register, logout } = useAuth()
 
   if (validating) {
     return (
-      <div className="app-boot">
-        <Command size={28} />
-        <p>正在恢复会话…</p>
+      <div className="kx-boot">
+        <span className="kx-brand-glyph"><Workflow size={18} /></span>
+        <LoaderCircle size={18} className="spin" />
+        <p>正在恢复产品实例…</p>
       </div>
     )
   }
 
   if (!session) return <AuthScreen onLogin={login} onRegister={register} />
-  return <Workspace user={session.user} onLogout={logout} />
+  return <KaleidoWorkspace user={session.user} onLogout={logout} />
 }
 
 interface WorkspaceProps {
@@ -80,171 +74,408 @@ interface WorkspaceProps {
   onLogout: () => Promise<void>
 }
 
-function Workspace({ user, onLogout }: WorkspaceProps) {
-  const [selectedStrategy, setSelectedStrategy] = useState<string>()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [configOpen, setConfigOpen] = useState(false)
-  const [activeNav, setActiveNav] = useState('基座总览')
-  const { task, error, start, approveAndExecute } = useTaskWorkflow()
-  const injective = useInjectiveConfig()
+function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
+  const [symbol, setSymbol] = useState('000001.SZ')
+  const [inputError, setInputError] = useState<string>()
+  const { task, error, submitting, start, approveAndExecute } = useTaskWorkflow()
   const panda = usePandaConfig()
+  const injective = useInjectiveConfig()
+  const normalizedSymbol = symbol.trim().toUpperCase()
+  const canStart = !submitting && (!task || task.phase === 'executed' || task.phase === 'failed')
+  const executionReady = injective.status?.readyForExecution === true
 
-  const agents = task?.agents ?? demoAgents
-  const candidates = task?.candidates.length ? task.candidates : initialCandidates
-  const rules = task?.firewallRules ?? firewallRules
-  const events = task ? task.timeline : timeline
-  const executionState = task?.execution.state ?? 'ready'
-  const activeStrategyId = selectedStrategy
-    ?? candidates.find((candidate) => candidate.status === 'approved')?.id
-    ?? candidates[0]?.id
-    ?? 'v1'
-  const canStart = !task || task.phase === 'executed' || task.phase === 'failed'
-  const runLabel = !task
-    ? '启动演示'
-    : task.phase === 'awaiting_approval'
-      ? '等待批准'
-      : task.phase === 'executed' ? '已完成' : 'Live run'
+  const submit = () => {
+    if (!/^\d{6}\.(SZ|SH|BJ)$/.test(normalizedSymbol)) {
+      setInputError('请输入 A 股代码，例如 000001.SZ')
+      return
+    }
+    setInputError(undefined)
+    const input: CreateTaskInput = {
+      objective: `使用 PandaAI 数据研究 ${normalizedSymbol}，生成可解释的股票策略，并通过 PactLedger 风控、审批与执行适配器形成审计回执。`,
+      budgetUsdt: 1_000,
+      maxLossPct: 5,
+      maxAssetPct: 30,
+      asset: normalizedSymbol,
+    }
+    void start(input)
+  }
 
   return (
-    <div className="app-shell">
-      <aside className={sidebarOpen ? 'sidebar open' : 'sidebar'}>
-        <div className="brand-block">
-          <div className="brand-mark" aria-hidden="true"><Command size={18} /></div>
-          <div><strong>Agent Treasury</strong><span>CONTROL PLANE</span></div>
-          <button className="mobile-close icon-button" title="关闭导航" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
+    <div className="kx-app">
+      <header className="kx-nav">
+        <a className="kx-nav-brand" href="/">
+          <span className="kx-brand-glyph"><Workflow size={16} /></span>
+          <span><strong>PactLedger</strong><small>Base</small></span>
+        </a>
+        <div className="kx-product-path" aria-label="产品层级">
+          <ArrowRight size={13} />
+          <span>KaleidoX</span>
+          <em>Product 01</em>
         </div>
-
-        <nav className="primary-nav" aria-label="主导航">
-          <span className="nav-label">WORKSPACE</span>
-          {navigation.map(({ label, icon: Icon, active }) => (
-            <button
-              className={(activeNav === label || (active && activeNav === '基座总览')) ? 'nav-item active' : 'nav-item'}
-              key={label}
-              onClick={() => { setActiveNav(label); setSidebarOpen(false) }}
-            >
-              <Icon size={17} /><span>{label}</span>
-              {label === '任务流' && <small>1</small>}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-spacer" />
-        <div className="system-health">
-          <div className="health-label"><span><i /> Systems nominal</span><strong>98.6%</strong></div>
-          <div className="health-track"><span /></div>
-          <p>7 Accounts · 24 Skills</p>
+        <div className="kx-nav-actions">
+          <StatusPill
+            label={panda.status?.provider === 'panda-data' ? 'PandaData Live' : 'Panda Replay'}
+            tone={panda.status?.provider === 'panda-data' ? 'ok' : 'review'}
+          />
+          <StatusPill
+            label={injective.status?.mode === 'testnet' ? 'Injective Testnet' : 'Mock Adapter'}
+            tone={executionReady ? 'ok' : 'review'}
+          />
+          <span className="kx-user-name">{user.username}</span>
+          <button className="kx-icon-button" type="button" title="退出登录" onClick={() => void onLogout()}>
+            <LogOut size={16} />
+          </button>
         </div>
-        <div className="profile-row">
-          <span className="avatar">{user.username.slice(0, 2).toUpperCase()}</span>
-          <span><strong>{user.username}</strong><small>Operator</small></span>
-          <button className="icon-button" title="退出登录" onClick={() => void onLogout()}><LogOut size={16} /></button>
-        </div>
-      </aside>
+      </header>
 
-      {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
+      <main className="kx-main">
+        <section className="kx-intro">
+          <a className="kx-back" href="/"><ArrowLeft size={14} /> 返回基座</a>
+          <p className="kx-kicker">PACTLEDGER PRODUCT INSTANCE · 01</p>
+          <h1>把一个股票目标，变成<br />一条受控的交易意图。</h1>
+          <p className="kx-intro-copy">
+            KaleidoX 负责股票研究，PactLedger 负责账户、策略边界、审批和回执。
+            业务 Agent 可以变化，资金控制面无需重建。
+          </p>
+        </section>
 
-      <div className="workspace">
-        <header className="topbar">
-          <button className="mobile-menu icon-button" title="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={19} /></button>
-          <div className="breadcrumb"><span>任务中心</span><i>/</i><strong>Stock Quant Evolution</strong></div>
-          <div className="topbar-actions">
-            <button className="search-button"><Search size={16} /><span>搜索</span><kbd>⌘ K</kbd></button>
-            <button className={`network-badge ${injective.status?.credentialsConfigured ? 'configured' : 'pending'}`} onClick={() => setConfigOpen(true)}>
-              <i /> Injective Testnet
-            </button>
-            <span className={`network-badge passive-badge ${panda.status?.provider === 'panda-data' ? 'configured' : 'pending'}`}>
-              <i /> PandaAI {panda.status?.provider === 'panda-data' ? 'Live' : 'Replay'}
-            </span>
-            <button className="icon-button notification-button" title="通知"><Bell size={18} /><i /></button>
+        <section className="kx-base-ribbon" aria-label="PactLedger 复用能力">
+          <div className="kx-base-ribbon-title">
+            <span>Powered by PactLedger</span>
+            <strong>这个样例只新增股票 Skill，其余全部复用基座。</strong>
           </div>
-        </header>
+          <div className="kx-primitive-list">
+            <Primitive icon={Database} label="Agent Account" detail="隔离预算" />
+            <Primitive icon={ShieldCheck} label="Policy Engine" detail="规则纠偏" />
+            <Primitive icon={Fingerprint} label="Action Intent" detail="统一接口" />
+            <Primitive icon={FileCheck2} label="Receipt Ledger" detail="可审计回执" />
+          </div>
+        </section>
 
-        <main>
-          <section className="mission-header">
-            <div>
-              <span className="mission-id">MISSION / {task?.missionId ?? 'KX-260723-DEMO'}</span>
-              <h1>{viewMeta[activeNav]?.title ?? 'Agent Treasury 控制基座'}</h1>
-              <p>{viewMeta[activeNav]?.subtitle ?? ''}</p>
-            </div>
-            <div className="mission-controls">
-              <button className="secondary-action"><History size={16} /> 历史快照</button>
-              <button className="status-control" onClick={start} disabled={!canStart}><span className="pulse-dot" /> {runLabel} <ChevronDown size={15} /></button>
-            </div>
-          </section>
-
-          {error && <div className="api-error" role="alert">{error}</div>}
-
-          {(activeNav === '股票量化' || activeNav === '链上执行') && (
-            <section className="constraint-strip" aria-label="任务授权范围">
-              <div className="constraint-title"><ShieldCheck size={17} /><span>用户授权边界</span></div>
-              <div><span>预算</span><strong>1,000 USDT</strong></div>
-              <div><span>最大亏损</span><strong>5.0%</strong></div>
-              <div><span>单一股票仓位</span><strong>≤ 30%</strong></div>
-              <div><span>研究标的</span><strong>000001.SZ</strong></div>
-              <span className="immutable-tag">IMMUTABLE</span>
-            </section>
-          )}
-
-          {activeNav === '基座总览' && <TreasuryOverviewView task={task} panda={panda.status} injective={injective.status} />}
-
-          {activeNav === '股票量化' && (
-            <div className="dashboard-grid">
-              <AgentRail agents={agents} />
-              <EvolutionPanel candidates={candidates} selectedId={activeStrategyId} onSelect={setSelectedStrategy} />
-              <FirewallPanel
-                rules={rules}
-                executionState={executionState}
-                canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
-                executionMode={injective.status?.mode}
-                strategyVersion={task?.actionIntent?.strategyVersion}
-                transactionHash={task?.execution.transactionHash}
-                onExecute={approveAndExecute}
+        <section className="kx-launch" aria-labelledby="launch-title">
+          <div className="kx-launch-copy">
+            <span>01 · 任务输入</span>
+            <h2 id="launch-title">选择一只股票，运行完整 Agent 流程。</h2>
+            <p>默认使用 18 个月日线、5% 最大回撤和 30% 单股仓位上限。</p>
+          </div>
+          <div className="kx-launch-control">
+            <label htmlFor="stock-symbol">A 股代码</label>
+            <div className="kx-symbol-row">
+              <input
+                id="stock-symbol"
+                value={symbol}
+                onChange={(event) => setSymbol(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter' && canStart) submit() }}
+                aria-invalid={Boolean(inputError)}
+                disabled={!canStart}
               />
-
-              <section className="panel timeline-panel" aria-labelledby="timeline-heading">
-                <div className="panel-heading">
-                  <div><span className="eyebrow">Decision ledger</span><h2 id="timeline-heading">决策证据链</h2></div>
-                  <button className="icon-button" title="筛选记录"><PanelLeftClose size={17} /></button>
-                </div>
-                <div className="timeline-list">
-                  {events.map((event, index) => (
-                    <div className={`timeline-event ${event.tone}`} key={`${event.time}-${index}`}>
-                      <time>{event.time}</time><i />
-                      <div><strong>{event.title}</strong><span>{event.detail}</span></div>
-                    </div>
-                  ))}
-                </div>
-              </section>
+              <button className="kx-primary" type="button" onClick={submit} disabled={!canStart}>
+                {submitting || (task && !['awaiting_approval', 'executed', 'failed'].includes(task.phase))
+                  ? <LoaderCircle size={17} className="spin" />
+                  : task?.phase === 'executed' ? <RotateCcw size={17} /> : <Play size={17} />}
+                {task?.phase === 'executed' ? '运行新任务' : submitting ? '正在创建' : '运行股票 Agent'}
+              </button>
             </div>
-          )}
+            <div className="kx-presets" aria-label="股票示例">
+              {presets.map((preset) => (
+                <button key={preset.symbol} type="button" disabled={!canStart} onClick={() => setSymbol(preset.symbol)}>
+                  <span>{preset.name}</span>{preset.symbol}
+                </button>
+              ))}
+            </div>
+            {inputError && <p className="kx-inline-error" role="alert">{inputError}</p>}
+          </div>
+        </section>
 
-          {activeNav === '任务流' && <TaskFlowView task={task} />}
-          {activeNav === '策略实验' && <StrategyLabView task={task} />}
-          {activeNav === '统一账本' && <MemoryBankView task={task} />}
-          {activeNav === '链上执行' && (
-            <ExecutionView
-              task={task}
-              rules={rules}
-              executionState={executionState}
-              canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
-              transactionHash={task?.execution.transactionHash}
-              injectiveStatus={injective.status}
-              onExecute={approveAndExecute}
-            />
-          )}
-          {activeNav === '资金流' && <TreasuryView taskId={task?.id} />}
+        {(error || panda.error || injective.error) && (
+          <div className="kx-api-error" role="alert">{error ?? panda.error ?? injective.error}</div>
+        )}
 
-          <footer className="workspace-footer">
-            <span><BrainCircuit size={14} /> PandaAI {panda.status?.provider === 'panda-data' ? 'Data Live' : 'Replay'}</span>
-            <span><Bot size={14} /> Unified Action Intent</span>
-            <span><GitBranch size={14} /> Treasury API v0.2</span>
-            <span className="latency"><Activity size={14} /> 84ms</span>
-          </footer>
-        </main>
-      </div>
-      <InjectiveConfigDrawer open={configOpen} status={injective.status} error={injective.error} onClose={() => setConfigOpen(false)} />
+        <section className="kx-story" aria-label="量化交易 MVP 流程">
+          <div className="kx-story-main">
+            <StoryStep
+              number="02"
+              label="数据证据"
+              owner="KaleidoX + PandaAI"
+              state={dataState(task)}
+              title={task?.quantEvidence ? `${task.quantEvidence.symbol} 日线已归档` : '等待 PandaAI 股票数据'}
+              summary={task?.quantEvidence
+                ? `${task.quantEvidence.barCount} 根日线 · ${providerName(task)} · ${task.quantEvidence.startDate}—${task.quantEvidence.endDate}`
+                : '运行任务后，数据来源、接口、日期与条数会在这里留下证据。'}
+            >
+              {task?.quantEvidence && (
+                <EvidenceDetails label="查看数据契约">
+                  <EvidenceGrid rows={[
+                    ['数据模式', providerName(task)],
+                    ['调用方法', task.quantEvidence.sourceMethod],
+                    ['SDK', `panda_data ${task.quantEvidence.sdkVersion}`],
+                    ['复权方式', task.quantEvidence.adjustment === 'pre-adjusted' ? '前复权' : '确定性合成'],
+                    ['Skill', task.quantEvidence.skill],
+                    ['抓取时间', formatTime(task.quantEvidence.fetchedAt)],
+                  ]} />
+                  <p className="kx-evidence-note">{task.quantEvidence.note}</p>
+                </EvidenceDetails>
+              )}
+            </StoryStep>
+
+            <StoryStep
+              number="03"
+              label="研究与回测"
+              owner="KaleidoX Agents"
+              state={analysisState(task)}
+              title={winner(task) ? `${winner(task)?.name} 成为候选策略` : '六个 Agent 协作生成策略证据'}
+              summary={winner(task)
+                ? `Sharpe ${winner(task)?.sharpe.toFixed(2)} · 最大回撤 ${winner(task)?.drawdownPct.toFixed(2)}% · 样本外 ${winner(task)?.oosReturn.toFixed(2)}%`
+                : '研究、策略、回测和独立风控按顺序推进，不让语言模型直接决定交易。'}
+            >
+              {task && <AgentLine agents={task.agents} />}
+              {task?.researchSummary && <p className="kx-research-summary">{task.researchSummary}</p>}
+              {task?.candidates.length ? (
+                <EvidenceDetails label="比较三个策略版本" open>
+                  <StrategyTable task={task} />
+                </EvidenceDetails>
+              ) : null}
+            </StoryStep>
+
+            <StoryStep
+              number="04"
+              label="资金策略"
+              owner="PactLedger Base"
+              state={policyState(task)}
+              title={task?.actionIntent ? 'Policy Engine 已把 40% 仓位修正为 25%' : '基座在交易前执行不可绕过的检查'}
+              summary={task?.actionIntent
+                ? '股票 Agent 提交业务建议，PactLedger 只接受满足预算、回撤、仓位和白名单的版本。'
+                : '同一套 Policy Engine 也可以约束拼单、采购、订阅或任意 Agent 支付。'}
+            >
+              {task?.firewallRules && <PolicyList task={task} />}
+              {task?.timeline.some((event) => event.tone === 'warning') && (
+                <div className="kx-correction">
+                  <span><GitBranch size={15} /> Policy correction</span>
+                  <strong>40% 建议仓位</strong><ArrowRight size={14} /><strong>25% 合规意图</strong>
+                </div>
+              )}
+            </StoryStep>
+
+            <StoryStep
+              number="05"
+              label="人工批准"
+              owner="PactLedger Base"
+              state={approvalState(task)}
+              title={task?.actionIntent ? '统一 Action Intent 已生成' : '高风险动作必须由用户确认'}
+              summary={task?.actionIntent
+                ? `${task.actionIntent.side.toUpperCase()} ${task.actionIntent.symbol} · ${task.actionIntent.notional} ${task.actionIntent.currency} · ${task.actionIntent.strategyVersion}`
+                : '研究结果不会直接越过权限边界，只有批准后的 Intent 才会进入执行适配器。'}
+            >
+              {task?.actionIntent && (
+                <div className="kx-intent">
+                  <div><span>Intent ID</span><strong>{task.actionIntent.id}</strong></div>
+                  <div><span>业务来源</span><strong>KaleidoX / investment</strong></div>
+                  <div><span>状态</span><strong>{task.actionIntent.status}</strong></div>
+                </div>
+              )}
+              {task?.phase === 'awaiting_approval' && (
+                <div className="kx-approval-action">
+                  <button className="kx-primary" type="button" onClick={() => void approveAndExecute()} disabled={!executionReady}>
+                    <LockKeyhole size={17} />
+                    {injective.status?.mode === 'testnet' ? '批准并提交 Testnet' : '批准并生成 Mock Receipt'}
+                  </button>
+                  <p>{executionReady ? '这是整条流程唯一需要人工确认的动作。' : 'Injective 执行适配器尚未准备好。'}</p>
+                </div>
+              )}
+            </StoryStep>
+
+            <StoryStep
+              number="06"
+              label="执行回执"
+              owner="PactLedger Adapter"
+              state={receiptState(task)}
+              title={task?.execution.state === 'executed' ? '执行结果已写入统一账本' : '等待执行适配器返回 Receipt'}
+              summary={task?.execution.state === 'executed'
+                ? `${task.execution.network} · ${task.execution.transactionHash}`
+                : '当前默认输出 Mock Receipt；队友接入 Injective 后只需替换 Adapter，前面的产品流程保持不变。'}
+            >
+              {task?.execution.state === 'executed' && (
+                <div className="kx-receipt">
+                  <BadgeCheck size={22} />
+                  <div><span>{task.execution.network === 'Mock' ? 'DEMO RECEIPT' : 'ON-CHAIN RECEIPT'}</span><strong>{task.execution.transactionHash}</strong></div>
+                  <a href="#base-proof">查看基座复用说明 <ArrowRight size={14} /></a>
+                </div>
+              )}
+            </StoryStep>
+          </div>
+
+          <aside className="kx-base-proof" id="base-proof">
+            <p className="kx-kicker">WHY THE BASE MATTERS</p>
+            <h2>换一个业务，<br />不再重做资金系统。</h2>
+            <p>量化案例只实现数据与策略。PactLedger 接管所有高风险、可复用的部分。</p>
+            <ol>
+              <li><span>01</span><div><strong>业务 Agent 输出建议</strong><small>股票策略、拼单付款都映射为 Intent</small></div></li>
+              <li><span>02</span><div><strong>基座统一执行控制</strong><small>账户、预算、白名单、人工批准</small></div></li>
+              <li><span>03</span><div><strong>Adapter 对接任意结算层</strong><small>Mock → Injective Testnet → Mainnet</small></div></li>
+            </ol>
+            <a className="kx-secondary-link" href="/poolmate.html">看第二个业务如何复用 <ArrowRight size={15} /></a>
+
+            <details className="kx-system-details">
+              <summary>当前接入状态 <ChevronDown size={14} /></summary>
+              <div>
+                <SystemRow label="PandaAI" value={panda.status?.provider === 'panda-data' ? 'Live' : 'Replay'} />
+                <SystemRow label="Panda SDK" value={panda.status?.sdkVersion ?? '0.0.12'} />
+                <SystemRow label="Quant Skill" value="pandadata-api" />
+                <SystemRow label="Execution" value={injective.status?.adapter ?? 'loading'} />
+                <SystemRow label="Chain" value={injective.status?.chainId ?? 'injective-888'} />
+              </div>
+            </details>
+          </aside>
+        </section>
+      </main>
+
+      <footer className="kx-footer">
+        <span><strong>KaleidoX</strong> on PactLedger</span>
+        <span>股票量化产品实例 · 数据证据 → Policy → Intent → Receipt</span>
+      </footer>
     </div>
   )
+}
+
+function StatusPill({ label, tone }: { label: string; tone: 'ok' | 'review' }) {
+  return <span className={`kx-status-pill ${tone}`}><i />{label}</span>
+}
+
+function Primitive({ icon: Icon, label, detail }: { icon: typeof Database; label: string; detail: string }) {
+  return <div className="kx-primitive"><Icon size={16} /><span><strong>{label}</strong><small>{detail}</small></span></div>
+}
+
+interface StoryStepProps {
+  number: string
+  label: string
+  owner: string
+  state: StepState
+  title: string
+  summary: string
+  children?: React.ReactNode
+}
+
+function StoryStep({ number, label, owner, state, title, summary, children }: StoryStepProps) {
+  return (
+    <article className={`kx-step ${state}`}>
+      <div className="kx-step-marker" aria-hidden="true">
+        {state === 'complete' ? <Check size={15} /> : state === 'active' ? <LoaderCircle size={15} className="spin" /> : <Circle size={11} />}
+      </div>
+      <div className="kx-step-content">
+        <div className="kx-step-meta"><span>{number} · {label}</span><em>{owner}</em></div>
+        <h3>{title}</h3>
+        <p>{summary}</p>
+        {children && <div className="kx-step-body">{children}</div>}
+      </div>
+    </article>
+  )
+}
+
+function EvidenceDetails({ label, open = false, children }: { label: string; open?: boolean; children: React.ReactNode }) {
+  return (
+    <details className="kx-evidence" open={open}>
+      <summary>{label}<ChevronDown size={14} /></summary>
+      <div className="kx-evidence-content">{children}</div>
+    </details>
+  )
+}
+
+function EvidenceGrid({ rows }: { rows: Array<[string, string]> }) {
+  return <dl className="kx-evidence-grid">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+}
+
+function AgentLine({ agents }: { agents: AgentRun[] }) {
+  return (
+    <div className="kx-agent-line" aria-label="Agent 任务状态">
+      {agents.map((agent) => (
+        <div className={agent.status} key={agent.id} title={agent.detail}>
+          <span>{agent.status === 'complete' ? <Check size={11} /> : agent.status === 'working' ? <LoaderCircle size={11} className="spin" /> : <Bot size={11} />}</span>
+          <strong>{agent.name}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function StrategyTable({ task }: { task: TaskSnapshot }) {
+  return (
+    <div className="kx-strategy-table">
+      <div className="kx-strategy-row header"><span>版本</span><span>收益</span><span>回撤</span><span>Sharpe</span><span>样本外</span></div>
+      {task.candidates.map((candidate) => (
+        <div className={`kx-strategy-row ${candidate.status}`} key={candidate.id}>
+          <span><strong>{candidate.name}</strong><small>{candidate.signal}</small></span>
+          <span>{candidate.returnPct.toFixed(2)}%</span>
+          <span>{candidate.drawdownPct.toFixed(2)}%</span>
+          <span>{candidate.sharpe.toFixed(2)}</span>
+          <span>{candidate.oosReturn.toFixed(2)}%</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PolicyList({ task }: { task: TaskSnapshot }) {
+  return (
+    <div className="kx-policy-list">
+      {task.firewallRules.map((rule) => (
+        <div key={rule.label}>
+          <ShieldCheck size={14} />
+          <span><strong>{rule.label}</strong><small>上限 {rule.limit}</small></span>
+          <em>{rule.current}</em>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SystemRow({ label, value }: { label: string; value: string }) {
+  return <p><span>{label}</span><strong>{value}</strong></p>
+}
+
+function taskIndex(task?: TaskSnapshot): number {
+  if (!task) return -1
+  return phaseOrder.indexOf(task.phase)
+}
+
+function stateFor(task: TaskSnapshot | undefined, activePhases: TaskPhase[], completeAt: TaskPhase): StepState {
+  if (!task) return 'pending'
+  if (task.phase === 'failed') return 'failed'
+  if (activePhases.includes(task.phase)) return 'active'
+  return taskIndex(task) >= phaseOrder.indexOf(completeAt) ? 'complete' : 'pending'
+}
+
+function dataState(task?: TaskSnapshot): StepState {
+  if (task?.quantEvidence) return 'complete'
+  return stateFor(task, ['created', 'researching'], 'strategizing')
+}
+
+function analysisState(task?: TaskSnapshot): StepState {
+  if (task?.candidates.length) return 'complete'
+  return stateFor(task, ['strategizing', 'backtesting'], 'risk_review')
+}
+
+function policyState(task?: TaskSnapshot): StepState {
+  return stateFor(task, ['risk_review'], 'awaiting_approval')
+}
+
+function approvalState(task?: TaskSnapshot): StepState {
+  return stateFor(task, ['awaiting_approval'], 'approved')
+}
+
+function receiptState(task?: TaskSnapshot): StepState {
+  return stateFor(task, ['approved', 'executing'], 'executed')
+}
+
+function winner(task?: TaskSnapshot) {
+  return task?.candidates.find((candidate) => candidate.status === 'approved')
+}
+
+function providerName(task: TaskSnapshot): string {
+  return task.quantEvidence?.provider === 'panda-data' ? 'PandaData Live' : 'Panda Replay'
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
 
 export default App

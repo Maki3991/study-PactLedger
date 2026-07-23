@@ -1,5 +1,15 @@
 import { useState, type FormEvent } from 'react'
-import { BrainCircuit, Command, Loader2, LockKeyhole, ShieldCheck, UserRound, Workflow } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Database,
+  FileCheck2,
+  Loader2,
+  LockKeyhole,
+  ShieldCheck,
+  UserRound,
+  Workflow,
+} from 'lucide-react'
 
 interface AuthScreenProps {
   onLogin: (username: string, password: string) => Promise<void>
@@ -50,78 +60,64 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
   }
 
   return (
-    <div className="auth-screen">
-      <section className="auth-hero">
-        <div className="brand-block">
-          <div className="brand-mark" aria-hidden="true"><Command size={18} /></div>
-          <div><strong>KaleidoX</strong><span>Strategy OS</span></div>
+    <div className="kx-auth">
+      <a className="kx-auth-back" href="/"><ArrowLeft size={14} /> 返回 PactLedger</a>
+      <section className="kx-auth-story">
+        <div className="kx-auth-brand">
+          <span className="kx-brand-glyph"><Workflow size={17} /></span>
+          <span><strong>KaleidoX</strong><small>on PactLedger</small></span>
         </div>
-        <h1>可自主进化的<br />Multi-Agent 交易操作系统</h1>
-        <p>研究、策略、回测、风控、执行、进化 —— 六个 Agent 在不可变的 Capital Firewall 约束下协作，让策略在竞争中持续进化。</p>
-        <ul className="auth-features">
-          <li><Workflow size={16} /><span>A2A 编排管线，每一步透明可审计</span></li>
-          <li><ShieldCheck size={16} /><span>Capital Firewall 风险边界，越界即熔断</span></li>
-          <li><BrainCircuit size={16} /><span>Champion–Challenger 策略进化闭环</span></li>
-        </ul>
+        <p className="kx-kicker">PRODUCT INSTANCE · 01</p>
+        <h1>股票 Agent，<br />有能力，也有边界。</h1>
+        <p className="kx-auth-lead">
+          PandaAI 负责数据，量化 Agent 负责研究，PactLedger 负责每一笔钱能不能动。
+        </p>
+        <div className="kx-auth-proof">
+          <div><Database size={17} /><span><strong>真实数据证据</strong><small>PandaData / Replay 明确标识</small></span></div>
+          <div><ShieldCheck size={17} /><span><strong>统一资金策略</strong><small>越界建议先纠正，再批准</small></span></div>
+          <div><FileCheck2 size={17} /><span><strong>可审计回执</strong><small>Mock 与 Injective 状态不混淆</small></span></div>
+        </div>
       </section>
 
-      <section className="auth-panel">
-        <form className="auth-card" onSubmit={handleSubmit}>
-          <div className="auth-tabs" role="tablist">
-            <button type="button" role="tab" aria-selected={mode === 'login'}
-              className={mode === 'login' ? 'auth-tab active' : 'auth-tab'}
-              onClick={() => switchMode('login')}>登录</button>
-            <button type="button" role="tab" aria-selected={mode === 'register'}
-              className={mode === 'register' ? 'auth-tab active' : 'auth-tab'}
-              onClick={() => switchMode('register')}>注册</button>
+      <section className="kx-auth-panel">
+        <form className="kx-auth-form" onSubmit={handleSubmit}>
+          <div className="kx-auth-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>登录</button>
+            <button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'active' : ''} onClick={() => switchMode('register')}>注册</button>
           </div>
 
-          <h2>{mode === 'login' ? '欢迎回来' : '创建账户'}</h2>
-          <p className="auth-subtitle">{mode === 'login' ? '登录以进入你的策略工作台' : '注册演示账户，数据保存在 PostgreSQL'}</p>
+          <div className="kx-auth-title">
+            <span>KALEIDOX WORKSPACE</span>
+            <h2>{mode === 'login' ? '继续你的研究任务' : '创建一个演示账户'}</h2>
+            <p>{mode === 'login' ? '登录后进入股票量化产品实例。' : '账户、任务和审计证据将持久化到 PostgreSQL。'}</p>
+          </div>
 
-          <label className="auth-field">
+          <label className="kx-auth-field">
             <span><UserRound size={14} /> 用户名</span>
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="3-24 位字母、数字或下划线"
-              autoComplete="username"
-              autoFocus
-            />
+            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="3-24 位字母、数字或下划线" autoComplete="username" autoFocus />
           </label>
 
-          <label className="auth-field">
+          <label className="kx-auth-field">
             <span><LockKeyhole size={14} /> 密码</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="至少 6 位"
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 6 位" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
           </label>
 
           {mode === 'register' && (
-            <label className="auth-field">
+            <label className="kx-auth-field">
               <span><LockKeyhole size={14} /> 确认密码</span>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="再次输入密码"
-                autoComplete="new-password"
-              />
+              <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="再次输入密码" autoComplete="new-password" />
             </label>
           )}
 
-          {error && <p className="auth-error" role="alert">{error}</p>}
+          {error && <p className="kx-auth-error" role="alert">{error}</p>}
 
-          <button className="auth-submit" type="submit" disabled={pending}>
-            {pending && <Loader2 size={16} className="spin" />}
-            {pending ? '正在处理…' : mode === 'login' ? '登录' : '注册并登录'}
+          <button className="kx-auth-submit" type="submit" disabled={pending}>
+            {pending ? <Loader2 size={16} className="spin" /> : null}
+            {pending ? '正在处理…' : mode === 'login' ? '进入 KaleidoX' : '注册并进入'}
+            {!pending && <ArrowRight size={16} />}
           </button>
 
-          <p className="auth-footnote">演示环境 · 密码经 scrypt 加盐哈希后存储于 PostgreSQL</p>
+          <p className="kx-auth-footnote">密码经 scrypt 加盐哈希 · 会话与任务存储于 PostgreSQL</p>
         </form>
       </section>
     </div>
