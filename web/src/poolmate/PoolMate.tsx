@@ -3,16 +3,16 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
-  Check,
   ChevronRight,
+  Database,
   FileCheck2,
+  Fingerprint,
   MessagesSquare,
   RotateCcw,
   Send,
   ShieldCheck,
   Timer,
   Wallet,
-  X,
 } from 'lucide-react'
 
 const TELEGRAM_GROUP_URL = import.meta.env.VITE_POOLMATE_TELEGRAM_URL?.trim()
@@ -200,46 +200,52 @@ function ChatDemo() {
 const trustPoints = [
   {
     icon: ShieldCheck,
-    title: '权限被 Treasury 策略锁死',
-    body: '商户白名单、单笔上限、预算总额全部进入统一策略检查。它能花的每一分钱，都在规则之内——包括它自己，谁也无法例外。',
+    title: '不是相信 Agent，而是限制 Agent',
+    body: '商户白名单、单笔上限和预算总额由 PactLedger Policy 执行。PoolMate 自己也无法绕过。',
   },
   {
     icon: Timer,
-    title: '超时未凑满，自动全额退回',
-    body: '拼单失败不需要任何人出面善后。截止时间一到，份额原路退回，账目当场结清。',
+    title: '每一个条件都能进入 Intent',
+    body: '份额、截止时间、商户和退款规则不再散落在群消息里，而是成为可验证的结构化动作。',
   },
   {
     icon: RotateCcw,
-    title: '中途退出，自动重算摊派',
-    body: '有人临时跳车？摊派金额实时重算、差价自动补退，不再需要群里的「热心人」人肉对账。',
+    title: '所有结果都返回统一 Receipt',
+    body: '付款、退款、退差和拒绝事件使用同一种证据格式，后续可由 Injective Adapter 上链结算。',
   },
 ]
 
-const compare = [
+const baseMappings = [
   {
-    icon: X,
-    name: '群收款工具',
-    verdict: '只是一张表格',
-    body: '只完成「收钱」上半程。向商户下单、分账、退差的下半程，依然靠人。',
+    icon: Database,
+    primitive: 'Agent Account',
+    base: '隔离预算与账户流水',
+    product: '每个拼单池成为一个受控资金域',
   },
   {
-    icon: X,
-    name: '电商 Chatbot',
-    verdict: '只推荐，不付款',
-    body: '没有真实钱包，更谈不上权限约束。聊得再好，最后一步还是你自己。',
+    icon: ShieldCheck,
+    primitive: 'Policy Engine',
+    base: '白名单、限额、用途与超时规则',
+    product: '只向指定商户付款，陌生收款人直接拒绝',
   },
   {
-    icon: Check,
-    name: 'PoolMate',
-    verdict: '结算代理，全闭环模型',
-    body: '有独立 Treasury 账户与策略边界：收份额 → 商户付款 → 分账退差，每笔都有可审计 Receipt。',
+    icon: Fingerprint,
+    primitive: 'Action Intent',
+    base: '统一表达高风险资金动作',
+    product: 'group_purchase、merchant_pay、refund',
+  },
+  {
+    icon: FileCheck2,
+    primitive: 'Receipt Ledger',
+    base: '统一存储执行结果与失败原因',
+    product: '付款、退差和策略拒绝全部可审计',
   },
 ]
 
 const steps = [
   { num: '01', title: '拉它进群，@ 一下', body: '「@PoolMate 拼三箱杨梅，一箱 89」——拼单卡片即刻弹出。' },
   { num: '02', title: '群友各自确认份额', body: '每人一笔委托：金额上限、用途、截止时间，当场锁死。' },
-  { num: '03', title: '凑满即向商户付款', body: 'PoolMate 在商户端生成 checkout，Treasury 校验后输出 Action Intent 与 Receipt。' },
+  { num: '03', title: '凑满即生成付款 Intent', body: 'PoolMate 只负责业务映射；PactLedger 校验商户、金额和用途后再交给执行适配器。' },
   { num: '04', title: '自动分账退差', body: '批量优惠按份额退回、运费自动摊销，账单卡推送到群。' },
   { num: '05', title: '每笔都有审计凭证', body: '所有资金流写入统一审计账本；当前为 Mock Receipt，Injective 适配器接口已预留。' },
 ]
@@ -252,18 +258,18 @@ export function PoolMate() {
         <a className="pm-nav-back" href="/">
           <ArrowLeft size={15} /> PactLedger
         </a>
-        <span className="pm-nav-tag">TENANT 02 · MESSAGE-NATIVE</span>
+        <span className="pm-nav-tag">PRODUCT 02 · MESSAGE-NATIVE</span>
       </header>
 
       {/* -------------------------------- hero ------------------------------- */}
       <section className="pm-hero">
         <Reveal className="pm-hero-copy">
-          <p className="pm-eyebrow">PACTLEDGER TENANT 02 — 群聊拼单结算 AGENT</p>
+          <p className="pm-eyebrow">PACTLEDGER PRODUCT INSTANCE · 02</p>
           <h1 className="pm-h1">PoolMate<span className="pm-h1-dot">.</span></h1>
-          <p className="pm-hero-tag">把它拉进群，<span>它替全群管钱。</span></p>
+          <p className="pm-hero-tag">同一套资金基座，<br /><span>换成群聊里的拼单 Agent。</span></p>
           <p className="pm-hero-sub">
-            发起拼单、收齐份额、向商户下单付款、自动分账退差——每一笔都有可审计 Receipt。
-            而它自己，一分钱都花不出规则之外。
+            PoolMate 只新增消息理解、拼单状态和商户 checkout。
+            账户、资金策略、审批、执行与回执全部复用 PactLedger。
           </p>
           <div className="pm-hero-cta">
             <TelegramCta className="pm-btn pm-btn-primary">
@@ -280,12 +286,20 @@ export function PoolMate() {
         </Reveal>
       </section>
 
+      <section className="pm-base-ribbon" aria-label="PactLedger 复用能力">
+        <div>
+          <span>Powered by PactLedger</span>
+          <strong>这个样例只新增群聊 Skill，资金系统无需重做。</strong>
+        </div>
+        <p>Account <i /> Policy <i /> Intent <i /> Receipt</p>
+      </section>
+
       {/* ------------------------------ trust quote ------------------------------ */}
       <section className="pm-section pm-trust">
         <Reveal>
           <blockquote className="pm-quote">
-            群友对它的信任，不来自「它是好人」，<br />
-            来自 <em>「它做不了坏事」</em>。
+            基座的价值，不是让 Agent 更会花钱。<br />
+            是让 <em>任何 Agent 都只能在规则里花钱。</em>
           </blockquote>
         </Reveal>
         <div className="pm-trust-grid">
@@ -301,20 +315,21 @@ export function PoolMate() {
         </div>
       </section>
 
-      {/* -------------------------------- compare -------------------------------- */}
-      <section className="pm-section">
+      {/* ------------------------------ base mapping ----------------------------- */}
+      <section className="pm-section pm-mapping">
         <Reveal className="pm-section-head">
-          <p className="pm-eyebrow pm-eyebrow-center">WHY POOLMATE</p>
-          <h2 className="pm-h2">不是表格，不是聊天机器人。<br />是有独立 Treasury 账户的结算主体。</h2>
+          <p className="pm-eyebrow pm-eyebrow-center">BASE → PRODUCT</p>
+          <h2 className="pm-h2">四个基座原语，<br />翻译成一个全新的业务。</h2>
         </Reveal>
-        <div className="pm-compare-grid">
-          {compare.map((c, i) => (
-            <Reveal key={c.name} delay={i * 100}>
-              <article className={`pm-compare-card ${i === compare.length - 1 ? 'is-winner' : ''}`}>
-                <span className="pm-compare-mark">{c.icon === Check ? <Check size={15} /> : <X size={15} />}</span>
-                <h3>{c.name}</h3>
-                <span className="pm-compare-verdict">{c.verdict}</span>
-                <p>{c.body}</p>
+        <div className="pm-mapping-list">
+          {baseMappings.map((mapping, i) => (
+            <Reveal key={mapping.primitive} delay={i * 80}>
+              <article className="pm-mapping-row">
+                <span className="pm-mapping-icon"><mapping.icon size={18} /></span>
+                <div><small>PACTLEDGER PRIMITIVE</small><strong>{mapping.primitive}</strong></div>
+                <p>{mapping.base}</p>
+                <ChevronRight size={16} />
+                <p className="pm-mapping-product">{mapping.product}</p>
               </article>
             </Reveal>
           ))}
@@ -347,8 +362,8 @@ export function PoolMate() {
         <Reveal>
           <div className="pm-final-card">
             <BadgeCheck size={26} className="pm-final-icon" />
-            <h2>现在，看它替群里管一次钱。</h2>
-            <p>{TELEGRAM_GROUP_URL ? '进群发起一单拼单，亲眼看看：收份额、向商户付款、分账退差——以及那笔被拒绝的转账。' : '当前页面演示收份额、向商户付款、分账退差和策略拒绝；配置群链接后即可开放现场入口。'}</p>
+            <h2>第二个产品，证明基座不是量化专用。</h2>
+            <p>{TELEGRAM_GROUP_URL ? '进群发起一单拼单，观察相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务。' : '当前页面演示相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务；配置群链接后即可开放现场入口。'}</p>
             <TelegramCta className="pm-btn pm-btn-primary pm-btn-lg">
               {TELEGRAM_GROUP_URL ? '加入 Telegram 群 · 现场拼一单' : 'Telegram 群入口待配置'} <ArrowRight size={17} />
             </TelegramCta>
