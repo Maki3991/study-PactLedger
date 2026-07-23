@@ -22,11 +22,17 @@ export const createFirewallRules = (input: CreateTaskInput): FirewallRule[] => [
   { label: '标的白名单', limit: input.asset, current: input.asset, state: 'locked' },
 ]
 
-export const createTaskSnapshot = (id: string, missionId: string, input: CreateTaskInput): TaskSnapshot => {
+export const createTaskSnapshot = (
+  id: string,
+  missionId: string,
+  input: CreateTaskInput,
+  ownerId?: string,
+): TaskSnapshot => {
   const now = new Date().toISOString()
   return {
     id,
     missionId,
+    ownerId,
     objective: input.objective,
     phase: 'created',
     agents: createAgents(),

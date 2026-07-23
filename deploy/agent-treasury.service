@@ -1,0 +1,24 @@
+[Unit]
+Description=PactLedger Agent Treasury
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/agent-treasury/web
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/agent-treasury/web/.env
+ExecStart=/usr/bin/npm run start:api
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

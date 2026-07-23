@@ -15,6 +15,13 @@ npm run dev
 - Web：`http://127.0.0.1:5173`
 - API：`http://127.0.0.1:8787`
 
+生产构建由 Fastify 同端口托管四个入口：
+
+- `/`：PactLedger 基座落地页；
+- `/landing.html`：落地页兼容入口；
+- `/kaleidox.html`：保留登录的股票量化产品实例；
+- `/poolmate.html`：PoolMate 接入映射演示。
+
 ## PandaAI 股票数据配置
 
 Python 需为 3.10 或更高版本。先安装官方数据 SDK：
@@ -112,31 +119,46 @@ created → researching → strategizing → backtesting → risk_review
 
 当前不会买卖股票，也不会发起真实链上交易。回测、风险退回、用户批准和执行回执会进入统一任务快照与审计界面。
 
-## Ubuntu / Zeabur 生产部署
+## Ubuntu 宿主机直接部署
 
-仓库根目录提供单容器 `Dockerfile`。容器会：
-
-- 构建 React 前端，并由 Fastify 在同一端口托管；
-- 启动股票量化 API、SSE 和 Treasury API；
-- 在 `/opt/panda-venv` 安装 `panda_data==0.0.12`；
-- 将任务快照、Agent 账户和资金流水保存到 PostgreSQL；
-- 监听 `0.0.0.0:8787`，并通过 `/api/health` 健康检查。
-
-在服务器或 Zeabur 的项目变量中填写 `.env.production.example` 对应字段。不要提交 `.env.production`，也不要把 PandaAI 密码、Ark Key 或 Injective 私钥写入镜像。
-
-普通 Ubuntu Docker 部署：
+生产应用不依赖 Zeabur 构建，也不需要 Docker。服务器直接拉取 Git 分支，在宿主机完成依赖安装和前端构建，再由 systemd 运行 Fastify：
 
 ```bash
-cp web/.env.production.example web/.env.production
-# 在服务器上编辑 web/.env.production
-docker compose up -d --build
-docker compose logs -f agent-treasury
+sudo install -d -o ubuntu -g ubuntu /opt/agent-treasury
+git clone --branch codex/postgres-server-deploy <仓库地址> /opt/agent-treasury
+cd /opt/agent-treasury
+
+python3 -m venv .venv
+.venv/bin/python -m pip install -r web/requirements-panda.txt
+
+cd web
+cp .env.production.example .env
+# 编辑 .env，填写 PostgreSQL 与 PandaAI；不要提交密钥
+npm ci
+npm run build
+
+sudo install -m 0644 ../deploy/agent-treasury.service /etc/systemd/system/agent-treasury.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now agent-treasury.service
 ```
 
-访问 `http://服务器地址:8787/`。如果使用域名，建议由 Zeabur 或 Nginx/Caddy 提供 HTTPS，并将流量反向代理到容器的 `8787` 端口。
+服务监听 `0.0.0.0:8787`，健康检查为 `GET /api/health`。已有的 80/443 服务不需要改动；若以后绑定域名，再由现有网关反向代理到 `127.0.0.1:8787`。
 
-同机 PostgreSQL 默认不映射公网端口，数据保存在 Docker 卷 `postgres-data`。备份示例：
+更新版本：
 
 ```bash
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > agent-treasury-$(date +%F).sql
+cd /opt/agent-treasury
+git fetch origin
+git checkout codex/postgres-server-deploy
+git pull --ff-only
+cd web
+npm ci
+npm run build
+sudo systemctl restart agent-treasury.service
+```
+
+PostgreSQL 备份示例（密码通过受保护的环境或 `.pgpass` 提供，不要写入命令历史）：
+
+```bash
+pg_dump -h 127.0.0.1 -p 5432 -U agent_treasury agent_treasury > agent-treasury-$(date +%F).sql
 ```

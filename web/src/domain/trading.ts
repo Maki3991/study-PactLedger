@@ -96,6 +96,7 @@ export interface ActionIntent {
 export interface TaskSnapshot {
   id: string
   missionId: string
+  ownerId?: string
   objective: string
   phase: TaskPhase
   agents: AgentRun[]
