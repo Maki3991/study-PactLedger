@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: ""
+title: KaleidoX 项目方案与思路设计文档
+scope:
+    - KaleidoX_赛道1与18优化版.md
+    - 思路设计.md
+source_files: []
+depends_on: []
+related_to: []

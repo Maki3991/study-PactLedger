@@ -1,0 +1,40 @@
+{
+  "name": "kaleidox-command-center",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c yellow,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:web": "vite --host 127.0.0.1 --port 5173",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "tsc -b && tsc -p server/tsconfig.json && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "start:api": "tsx server/index.ts",
+    "test:api": "tsx --test server/**/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "latest",
+    "@vitejs/plugin-react": "latest",
+    "dotenv": "17.4.2",
+    "fastify": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/node": "latest",
+    "concurrently": "9.2.4",
+    "eslint": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "eslint-plugin-react-refresh": "latest",
+    "globals": "latest",
+    "tsx": "latest",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "latest"
+  }
+}

@@ -1,0 +1,17 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: Q0DeR-MaG1C-BrAnCh-Fo2-NoN-GiT-Or-No-C0MmIt
+nodes_managed: true
+exported_at: "2026-07-23T05:56:53Z"
+modules:
+    "":
+        dir_name: KaleidoX 项目方案与思路设计文档
+        title: KaleidoX 项目方案与思路设计文档
+        scope:
+            - KaleidoX_赛道1与18优化版.md
+            - 思路设计.md
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
