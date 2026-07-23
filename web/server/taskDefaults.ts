@@ -22,11 +22,12 @@ export const createFirewallRules = (): FirewallRule[] => [
   { label: '资产白名单', limit: 'ETH', current: 'ETH / USDT', state: 'locked' },
 ]
 
-export const createTaskSnapshot = (id: string, missionId: string, objective: string): TaskSnapshot => {
+export const createTaskSnapshot = (id: string, missionId: string, objective: string, ownerId?: string): TaskSnapshot => {
   const now = new Date().toISOString()
   return {
     id,
     missionId,
+    ownerId,
     objective,
     phase: 'created',
     agents: createAgents(),

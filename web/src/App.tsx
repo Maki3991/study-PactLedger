@@ -11,17 +11,20 @@ import {
   GitBranch,
   History,
   LayoutDashboard,
+  LogOut,
   Menu,
   Network,
   PanelLeftClose,
   Search,
-  Settings2,
   ShieldCheck,
   Vault,
   WalletCards,
   X,
 } from 'lucide-react'
 import { AgentRail } from './components/AgentRail'
+import { AuthScreen } from './components/AuthScreen'
+import { useAuth } from './services/useAuth'
+import type { AuthUser } from './services/authClient'
 import { EvolutionPanel } from './components/EvolutionPanel'
 import { FirewallPanel } from './components/FirewallPanel'
 import { InjectiveConfigDrawer } from './components/InjectiveConfigDrawer'
@@ -53,6 +56,27 @@ const viewMeta: Record<string, { title: string; subtitle: string }> = {
 }
 
 function App() {
+  const { session, validating, login, register, logout } = useAuth()
+
+  if (validating) {
+    return (
+      <div className="app-boot">
+        <Command size={28} />
+        <p>正在恢复会话…</p>
+      </div>
+    )
+  }
+
+  if (!session) return <AuthScreen onLogin={login} onRegister={register} />
+  return <Workspace user={session.user} onLogout={logout} />
+}
+
+interface WorkspaceProps {
+  user: AuthUser
+  onLogout: () => Promise<void>
+}
+
+function Workspace({ user, onLogout }: WorkspaceProps) {
   const [selectedStrategy, setSelectedStrategy] = useState('v2b')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
@@ -101,11 +125,11 @@ function App() {
           <div className="health-track"><span /></div>
           <p>6 Agents · 24 Skills</p>
         </div>
-        <button className="profile-row">
-          <span className="avatar">HX</span>
-          <span><strong>Heping</strong><small>Operator</small></span>
-          <Settings2 size={16} />
-        </button>
+        <div className="profile-row">
+          <span className="avatar">{user.username.slice(0, 2).toUpperCase()}</span>
+          <span><strong>{user.username}</strong><small>Operator</small></span>
+          <button className="icon-button" title="退出登录" onClick={() => void onLogout()}><LogOut size={16} /></button>
+        </div>
       </aside>
 
       {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}

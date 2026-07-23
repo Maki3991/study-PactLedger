@@ -56,6 +56,7 @@ export interface TaskExecution {
 export interface TaskSnapshot {
   id: string
   missionId: string
+  ownerId?: string
   objective: string
   phase: TaskPhase
   agents: AgentRun[]

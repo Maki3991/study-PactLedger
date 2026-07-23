@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { authHeaders } from './authClient'
 
 export interface TreasuryAccount {
   id: string
@@ -54,8 +55,8 @@ export function useTreasury(taskId: string | undefined): TreasuryState {
       setLoading(true)
       try {
         const [accRes, logRes] = await Promise.all([
-          fetch(`/api/treasury/${taskId}/accounts`),
-          fetch(`/api/treasury/${taskId}/audit-log`),
+          fetch(`/api/treasury/${taskId}/accounts`, { headers: authHeaders() }),
+          fetch(`/api/treasury/${taskId}/audit-log`, { headers: authHeaders() }),
         ])
         if (!active) return
         if (shouldReset) {

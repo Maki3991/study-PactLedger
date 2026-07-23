@@ -1,8 +1,10 @@
 import type { CreateTaskInput, InjectiveConfigStatus, TaskSnapshot, TaskStreamEvent } from '../domain/trading'
+import { authHeaders, getAuthToken } from './authClient'
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set('Content-Type', 'application/json')
+  for (const [key, value] of Object.entries(authHeaders())) headers.set(key, value)
   const response = await fetch(url, {
     ...init,
     headers,
@@ -30,7 +32,9 @@ export const subscribeToTask = (
   onSnapshot: (snapshot: TaskSnapshot) => void,
   onError: () => void,
 ): (() => void) => {
-  const source = new EventSource(`/api/tasks/${taskId}/events`)
+  const token = getAuthToken()
+  const url = `/api/tasks/${taskId}/events${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  const source = new EventSource(url)
   source.addEventListener('task.snapshot', (event) => {
     const payload = JSON.parse((event as MessageEvent<string>).data) as TaskStreamEvent
     onSnapshot(payload.snapshot)
