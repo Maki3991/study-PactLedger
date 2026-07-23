@@ -142,6 +142,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now agent-treasury.service
 ```
 
+私有仓库应先为服务器配置只读 GitHub Deploy Key；首次部署也可以传输 `git bundle`，避免把个人 GitHub 私钥复制到服务器。
+
 服务监听 `0.0.0.0:8787`，健康检查为 `GET /api/health`。已有的 80/443 服务不需要改动；若以后绑定域名，再由现有网关反向代理到 `127.0.0.1:8787`。
 
 更新版本：
