@@ -1,0 +1,12 @@
+{
+  "name": "kaleidox",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,green \"npm run dev --prefix server\" \"npm run dev --prefix web\"",
+    "migrate": "npm run migrate --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,15 +1,24 @@
+import 'dotenv/config'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { pool } from './pool'
 
 async function migrate() {
-  const sql = readFileSync(join(__dirname, 'schema.sql'), 'utf8')
+  const schemas = [
+    join(__dirname, 'schema.sql'),
+    join(__dirname, '../treasury/schema.sql'),
+  ]
+
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    await client.query(sql)
+    for (const file of schemas) {
+      const sql = readFileSync(file, 'utf8')
+      await client.query(sql)
+      console.log(`[migrate] applied: ${file}`)
+    }
     await client.query('COMMIT')
-    console.log('[migrate] schema applied successfully')
+    console.log('[migrate] all schemas applied successfully')
   } catch (err) {
     await client.query('ROLLBACK')
     console.error('[migrate] failed:', err)

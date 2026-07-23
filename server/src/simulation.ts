@@ -1,8 +1,11 @@
 /**
  * Background task simulation – progresses a task through all phases,
  * persisting state to PostgreSQL and broadcasting SSE updates.
+ * Uses DeepSeek V4 Pro when API key is configured; falls back to demo data.
  */
 import type { Response } from 'express'
+import { runResearch, runStrategy, runRiskCheck } from './ai/agents'
+import * as treasury from './treasury/service'
 import type { AgentRun, FirewallRule, StrategyCandidate, TimelineEvent } from './types'
 import {
   appendTimeline,
@@ -36,31 +39,25 @@ async function broadcast(taskId: string): Promise<void> {
   })
 }
 
-// ── static demo state ────────────────────────────────────────────────────────
+// ── static fallback data ──────────────────────────────────────────────────────
 
 const INITIAL_AGENTS: AgentRun[] = [
-  { id: 'research',  name: 'Research',  role: 'Market research',        status: 'waiting', detail: '等待启动',         elapsed: '--:--' },
-  { id: 'strategy',  name: 'Strategy',  role: 'Signal design',          status: 'waiting', detail: '等待研究结果',     elapsed: '--:--' },
-  { id: 'backtest',  name: 'Backtest',  role: 'Out-of-sample',          status: 'waiting', detail: '等待策略生成',     elapsed: '--:--' },
-  { id: 'risk',      name: 'Risk',      role: 'Independent veto',       status: 'waiting', detail: '等待回测数据',     elapsed: '--:--' },
-  { id: 'evolution', name: 'Evolution', role: 'Champion challenger',    status: 'waiting', detail: '等待风险评审',     elapsed: '--:--' },
-  { id: 'execution', name: 'Execution', role: 'Injective testnet',      status: 'waiting', detail: '等待风险签发',     elapsed: '--:--' },
+  { id: 'research',  name: 'Research',  role: 'Market research',      status: 'waiting', detail: '等待启动',      elapsed: '--:--' },
+  { id: 'strategy',  name: 'Strategy',  role: 'Signal design',        status: 'waiting', detail: '等待研究结果',  elapsed: '--:--' },
+  { id: 'backtest',  name: 'Backtest',  role: 'Out-of-sample',        status: 'waiting', detail: '等待策略生成',  elapsed: '--:--' },
+  { id: 'risk',      name: 'Risk',      role: 'Independent veto',     status: 'waiting', detail: '等待回测数据',  elapsed: '--:--' },
+  { id: 'evolution', name: 'Evolution', role: 'Champion challenger',  status: 'waiting', detail: '等待风险评审',  elapsed: '--:--' },
+  { id: 'execution', name: 'Execution', role: 'Injective testnet',    status: 'waiting', detail: '等待风险签发',  elapsed: '--:--' },
 ]
 
 const FIREWALL_RULES: FirewallRule[] = [
-  { label: '总交易预算',      limit: '1,000 USDT', current: '250 USDT',    state: 'pass'   },
-  { label: 'ETH 最大仓位',   limit: '30%',         current: '25%',         state: 'pass'   },
-  { label: '单策略最大亏损', limit: '5%',           current: '4.2%',        state: 'pass'   },
-  { label: '资产白名单',     limit: 'ETH',          current: 'ETH / USDT',  state: 'locked' },
+  { label: '总交易预算',      limit: '1,000 USDT', current: '250 USDT',   state: 'pass'   },
+  { label: 'ETH 最大仓位',   limit: '30%',         current: '25%',        state: 'pass'   },
+  { label: '单策略最大亏损', limit: '5%',           current: '4.2%',       state: 'pass'   },
+  { label: '资产白名单',     limit: 'ETH',          current: 'ETH / USDT', state: 'locked' },
 ]
 
-const CANDIDATES: StrategyCandidate[] = [
-  { id: 'v1',  name: 'V1',   status: 'rejected', note: '短周期趋势过拟合',    returnPct: 3.2, drawdownPct: 8.1, sharpe: 0.74, signal: '趋势跟随' },
-  { id: 'v2a', name: 'V2-A', status: 'testing',  note: '增加波动率过滤',      returnPct: 4.0, drawdownPct: 5.7, sharpe: 1.06, signal: '过滤趋势' },
-  { id: 'v2b', name: 'V2-B', status: 'rejected', note: '初始 40% 仓位超限',  returnPct: 4.6, drawdownPct: 4.2, sharpe: 1.28, signal: '状态识别' },
-]
-
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -71,93 +68,195 @@ function elapsed(startMs: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
-// ── simulation ───────────────────────────────────────────────────────────────
+// ── main simulation ───────────────────────────────────────────────────────────
 
 export async function runSimulation(taskId: string): Promise<void> {
-  const simStart = Date.now()
-
   try {
-    // ── seed initial state ──
+    // seed
     await upsertAgents(taskId, INITIAL_AGENTS)
-    await upsertFirewallRules(taskId, FIREWALL_RULES)
 
-    // ── phase: researching ──────────────────────────────────────────────────
-    await sleep(1_500)
+    // read task metadata for AI calls
+    const initial = await getTaskSnapshot(taskId)
+    const asset       = 'ETH'
+    const objective   = initial?.objective ?? ''
+    const budgetUsdt  = 1000
+    const maxAssetPct = 30
+    const maxLossPct  = 5
+
+    // ── Treasury: allocate budget to all agents ───────────────────────────────
+    // tenantId = taskId so each task gets isolated accounts
+    await treasury.allocate(taskId, [
+      { agentId: 'orchestrator', agentName: 'Orchestrator', amount: 500,
+        policy: { maxSingle: 500, dailyLimit: 1000, whitelist: [], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'research',     agentName: 'Research',     amount: 50,
+        policy: { maxSingle: 30, dailyLimit: 100, whitelist: [], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'strategy',     agentName: 'Strategy',     amount: 70,
+        policy: { maxSingle: 30, dailyLimit: 150, whitelist: ['research', 'backtest'], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'backtest',     agentName: 'Backtest',     amount: 40,
+        policy: { maxSingle: 40, dailyLimit: 100, whitelist: [], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'risk',         agentName: 'Risk',         amount: 30,
+        policy: { maxSingle: 30, dailyLimit: 60,  whitelist: [], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'evolution',    agentName: 'Evolution',    amount: 20,
+        policy: { maxSingle: 20, dailyLimit: 40,  whitelist: [], assetWhitelist: ['ETH', 'USDT'] } },
+      { agentId: 'execution',    agentName: 'Execution',    amount: 250,
+        policy: { maxSingle: 250, dailyLimit: 250, whitelist: [], assetWhitelist: ['ETH'] } },
+    ])
+
+    // ── researching ───────────────────────────────────────────────────────────
+    await sleep(1_200)
     const researchStart = Date.now()
     await updateTaskPhase(taskId, 'researching')
+    await upsertFirewallRules(taskId, FIREWALL_RULES)
     await upsertAgents(taskId, [
-      { id: 'research', name: 'Research', role: 'Market research', status: 'working', detail: '调用 PandaAI 行情数据…', elapsed: '00:00' },
+      { id: 'research', name: 'Research', role: 'Market research', status: 'working', detail: '调用 DeepSeek V4 分析市场…', elapsed: '00:00' },
     ])
     await broadcast(taskId)
 
-    await sleep(8_000)
-    const tResearch: TimelineEvent = { time: nowLabel(), title: 'Research Agent 完成', detail: '趋势与流动性已归因', tone: 'success' }
-    await appendTimeline(taskId, tResearch)
+    const research = await runResearch(asset, objective, budgetUsdt)
+
+    await appendTimeline(taskId, {
+      time: nowLabel(), title: 'Research Agent 完成',
+      detail: research.summary.slice(0, 80), tone: 'success',
+    })
+
+    // ── Treasury: Strategy 向 Research 购买研究报告 (x402) ────────────────────
+    const researchPayment = await treasury.transfer({
+      tenantId: taskId, fromAgent: 'strategy', toAgent: 'research',
+      amount: 20, purpose: '购买市场研究报告', protocol: 'x402',
+    })
+    await appendTimeline(taskId, {
+      time: nowLabel(),
+      title: researchPayment.ok ? 'Strategy → Research 支付 20 USDT' : '支付被拒：余额不足',
+      detail: researchPayment.ok
+        ? `x402 · 研究报告采购 · TxID: ${researchPayment.txId.slice(0, 8)}…`
+        : researchPayment.rejectReason ?? '',
+      tone: researchPayment.ok ? 'success' : 'warning',
+    })
+
     await updateTaskPhase(taskId, 'strategizing')
     await upsertAgents(taskId, [
-      { id: 'research', name: 'Research', role: 'Market research', status: 'complete', detail: '趋势与流动性已归因', elapsed: elapsed(researchStart) },
-      { id: 'strategy', name: 'Strategy', role: 'Signal design',   status: 'working',  detail: '生成候选策略…',     elapsed: '00:00' },
+      { id: 'research', name: 'Research', role: 'Market research', status: 'complete', detail: research.summary.slice(0, 60), elapsed: elapsed(researchStart) },
+      { id: 'strategy', name: 'Strategy', role: 'Signal design',   status: 'working',  detail: '生成候选策略…', elapsed: '00:00' },
     ])
     await broadcast(taskId)
 
-    // ── phase: backtesting ──────────────────────────────────────────────────
+    // ── strategizing ──────────────────────────────────────────────────────────
     const strategyStart = Date.now()
-    await sleep(6_000)
+    const [candA, candB] = await runStrategy(asset, research, maxAssetPct, maxLossPct)
+
     await updateTaskPhase(taskId, 'backtesting')
     await upsertAgents(taskId, [
-      { id: 'strategy', name: 'Strategy', role: 'Signal design',  status: 'complete', detail: '生成 2 个候选版本', elapsed: elapsed(strategyStart) },
-      { id: 'backtest', name: 'Backtest', role: 'Out-of-sample',  status: 'working',  detail: '126 日滚动回测中…', elapsed: '00:00' },
+      { id: 'strategy', name: 'Strategy', role: 'Signal design',  status: 'complete', detail: `生成 ${candA.name} / ${candB.name}`, elapsed: elapsed(strategyStart) },
+      { id: 'backtest', name: 'Backtest', role: 'Out-of-sample',  status: 'working',  detail: '126 日滚动回测中…',                   elapsed: '00:00' },
     ])
-    await upsertCandidates(taskId, CANDIDATES)
+
+    const mapCandidate = (c: typeof candA, status: StrategyCandidate['status']): StrategyCandidate => ({
+      id: c.name.toLowerCase().replace('-', ''),
+      name: c.name,
+      status,
+      note: c.note,
+      returnPct: c.expectedReturnPct,
+      drawdownPct: c.maxDrawdownPct,
+      sharpe: c.sharpe,
+      signal: c.signal,
+    })
+
+    await upsertCandidates(taskId, [
+      mapCandidate(candA, 'testing'),
+      mapCandidate(candB, 'testing'),
+    ])
+
+    // ── Treasury: Strategy 向 Backtest 购买验证服务 (x402) ──────────────────
+    const backtestPayment = await treasury.transfer({
+      tenantId: taskId, fromAgent: 'strategy', toAgent: 'backtest',
+      amount: 25, purpose: 'Champion-Challenger 回测服务', protocol: 'x402',
+    })
+    await appendTimeline(taskId, {
+      time: nowLabel(),
+      title: `Strategy → Backtest 支付 25 USDT`,
+      detail: `x402 · 回测验证服务 · 余额: Strategy ${(backtestPayment.fromBalance ?? 0).toFixed(2)} USDT`,
+      tone: 'neutral',
+    })
     await broadcast(taskId)
 
-    // ── phase: risk_review ──────────────────────────────────────────────────
+    // simulate backtest delay
+    await sleep(6_000)
     const backtestStart = Date.now()
-    await sleep(10_000)
-    const tBacktest: TimelineEvent = { time: nowLabel(), title: 'Backtest 完成', detail: 'V2-B Sharpe 1.28，成为性能冠军', tone: 'success' }
-    await appendTimeline(taskId, tBacktest)
+    const winner = candB.sharpe >= candA.sharpe ? candB : candA
+    await appendTimeline(taskId, {
+      time: nowLabel(), title: 'Backtest 完成',
+      detail: `${winner.name} Sharpe ${winner.sharpe.toFixed(2)} 胜出`,  tone: 'success',
+    })
+
+    // ── risk_review ───────────────────────────────────────────────────────────
     await updateTaskPhase(taskId, 'risk_review')
     await upsertAgents(taskId, [
-      { id: 'backtest',  name: 'Backtest',  role: 'Out-of-sample',       status: 'complete', detail: '126 日滚动验证完成',     elapsed: elapsed(backtestStart) },
-      { id: 'risk',      name: 'Risk',      role: 'Independent veto',    status: 'working',  detail: '审核 V2-B 仓位规则…',   elapsed: '00:00' },
-      { id: 'evolution', name: 'Evolution', role: 'Champion challenger', status: 'working',  detail: 'V2-B 候选冠军验证中…', elapsed: '00:00' },
+      { id: 'backtest',  name: 'Backtest',  role: 'Out-of-sample',      status: 'complete', detail: '126 日滚动验证完成',     elapsed: elapsed(backtestStart) },
+      { id: 'risk',      name: 'Risk',      role: 'Independent veto',   status: 'working',  detail: `审核 ${winner.name}…`,  elapsed: '00:00' },
+      { id: 'evolution', name: 'Evolution', role: 'Champion challenger', status: 'working',  detail: '竞争验证中…',           elapsed: '00:00' },
     ])
     await broadcast(taskId)
 
-    // ── risk veto → revision ──────────────────────────────────────────────
     const riskStart = Date.now()
-    await sleep(5_000)
-    const tVeto: TimelineEvent = { time: nowLabel(), title: 'Risk Agent 退回初版', detail: '建议仓位 40%，超过用户上限 30%', tone: 'warning' }
-    await appendTimeline(taskId, tVeto)
-    await upsertCandidates(taskId, [
-      { ...CANDIDATES[2], note: '初始 40% 仓位超限 → 修订为 25%' },
-    ])
-    await broadcast(taskId)
 
-    await sleep(3_500)
-    const tRevision: TimelineEvent = { time: nowLabel(), title: 'V2-B 提交修订计划', detail: '执行仓位调整为 25%，重新提交', tone: 'neutral' }
-    await appendTimeline(taskId, tRevision)
-    await broadcast(taskId)
+    // ── Treasury: Strategy 向 Risk 支付审核费（拒绝不退款）────────────────────
+    const riskFee = await treasury.transfer({
+      tenantId: taskId, fromAgent: 'strategy', toAgent: 'risk',
+      amount: 15, purpose: `${winner.name} 独立风控审核`, protocol: 'internal',
+    })
+    await appendTimeline(taskId, {
+      time: nowLabel(),
+      title: `Strategy → Risk 支付 15 USDT（审核费，不退款）`,
+      detail: `internal · 风控审核费用 · TxID: ${riskFee.txId.slice(0, 8)}…`,
+      tone: 'neutral',
+    })
 
-    // ── risk passes ──────────────────────────────────────────────────────
+    const riskResult = await runRiskCheck(winner, maxAssetPct, maxLossPct)
+
+    if (!riskResult.approved) {
+      await appendTimeline(taskId, {
+        time: nowLabel(), title: `Risk Agent 退回 ${winner.name}`,
+        detail: riskResult.reason, tone: 'warning',
+      })
+      await broadcast(taskId)
+
+      // revision
+      await sleep(2_500)
+      const revised = riskResult.revisedPositionPct ?? Math.floor(maxAssetPct * 0.85)
+      winner.positionPct = revised
+      const revisedNote = `仓位修订为 ${revised}%`
+      await upsertCandidates(taskId, [
+        mapCandidate(winner, 'testing'),
+      ])
+      await appendTimeline(taskId, {
+        time: nowLabel(), title: `${winner.name} 提交修订`,
+        detail: revisedNote, tone: 'neutral',
+      })
+      await broadcast(taskId)
+      await sleep(2_000)
+    }
+
+    // final approval
+    await appendTimeline(taskId, {
+      time: nowLabel(), title: 'V1 实盘偏差已归档',
+      detail: '历史失败策略归因完成，进化路径锁定', tone: 'warning',
+    })
+    await appendTimeline(taskId, {
+      time: nowLabel(), title: `${winner.name} 成为性能冠军`,
+      detail: `风险调整后 Sharpe ${winner.sharpe.toFixed(2)}，仓位 ${winner.positionPct}%`, tone: 'success',
+    })
+
     const evoStart = Date.now()
-    await sleep(4_000)
-    const tRiskPass: TimelineEvent = { time: nowLabel(), title: 'V1 实盘偏差已归档', detail: '震荡状态下连续 4 次错误趋势信号', tone: 'warning' }
-    const tEvo: TimelineEvent = { time: nowLabel(), title: 'V2-B 成为性能冠军', detail: '风险调整后 Sharpe 1.28，仓位 25%', tone: 'success' }
-    await appendTimeline(taskId, tRiskPass)
-    await appendTimeline(taskId, tEvo)
     await updateTaskPhase(taskId, 'awaiting_approval')
     await upsertAgents(taskId, [
-      { id: 'risk',      name: 'Risk',      role: 'Independent veto',    status: 'complete', detail: '审核通过，仓位合规', elapsed: elapsed(riskStart) },
-      { id: 'evolution', name: 'Evolution', role: 'Champion challenger', status: 'complete', detail: 'V2-B 通过性能晋级',  elapsed: elapsed(evoStart) },
-      { id: 'execution', name: 'Execution', role: 'Injective testnet',   status: 'waiting',  detail: '等待用户批准',      elapsed: '--:--' },
+      { id: 'risk',      name: 'Risk',      role: 'Independent veto',    status: 'complete', detail: '审核通过，仓位合规',         elapsed: elapsed(riskStart) },
+      { id: 'evolution', name: 'Evolution', role: 'Champion challenger', status: 'complete', detail: `${winner.name} 通过性能晋级`, elapsed: elapsed(evoStart) },
+      { id: 'execution', name: 'Execution', role: 'Injective testnet',   status: 'waiting',  detail: '等待用户批准',              elapsed: '--:--' },
     ])
     await upsertCandidates(taskId, [
-      { ...CANDIDATES[2], status: 'approved', note: '仓位修订为 25%，审核通过' },
+      mapCandidate(winner, 'approved'),
     ])
     await broadcast(taskId)
-
-    void simStart // suppress unused warning
 
   } catch (err) {
     console.error(`[simulation] task ${taskId} error:`, err)
@@ -166,7 +265,7 @@ export async function runSimulation(taskId: string): Promise<void> {
   }
 }
 
-// ── execution (called by approve+execute routes) ──────────────────────────────
+// ── execution ─────────────────────────────────────────────────────────────────
 
 export async function runExecution(taskId: string): Promise<void> {
   try {
@@ -178,10 +277,11 @@ export async function runExecution(taskId: string): Promise<void> {
 
     await sleep(3_500)
 
-    // generate a mock testnet tx hash
     const txHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
-    const tExec: TimelineEvent = { time: nowLabel(), title: '链上交易已广播', detail: `Injective Testnet · V2 · 25% ETH`, tone: 'success' }
-    await appendTimeline(taskId, tExec)
+    await appendTimeline(taskId, {
+      time: nowLabel(), title: '链上交易已广播',
+      detail: `Injective Testnet · V2 · 25% ETH`, tone: 'success',
+    })
     await updateTaskPhase(taskId, 'executed', 'executed', txHash)
     await upsertAgents(taskId, [
       { id: 'execution', name: 'Execution', role: 'Injective testnet', status: 'complete', detail: `Tx 已确认`, elapsed: '00:03' },
