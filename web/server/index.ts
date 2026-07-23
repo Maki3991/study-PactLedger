@@ -2,13 +2,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { buildApp } from './app.js'
 import { loadEnvironment } from './config/environment.js'
+import { allocateTreasury } from './treasury.js'
 
 loadEnvironment()
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const databasePath = process.env.KALEIDOX_DB_PATH ?? join(currentDirectory, 'data', 'kaleidox.db')
 const port = Number(process.env.KALEIDOX_API_PORT ?? 8787)
-const app = await buildApp({ databasePath })
+const app = await buildApp({ databasePath, onTaskCreated: allocateTreasury })
 
 const shutdown = async () => {
   await app.close()

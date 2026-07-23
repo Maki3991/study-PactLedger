@@ -9,12 +9,14 @@ import { InvalidTaskTransitionError, MockTaskOrchestrator } from './orchestrator
 import { TaskRepository } from './repository.js'
 import { TaskEvents } from './taskEvents.js'
 import { createTaskSnapshot } from './taskDefaults.js'
+import { getAccounts, getAuditLog } from './treasury.js'
 
 interface BuildAppOptions {
   databasePath: string
   stepDelay?: number
   executionAdapter?: ExecutionAdapter
   injectiveConfig?: InjectiveConfig
+  onTaskCreated?: (taskId: string) => void
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -60,6 +62,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const date = new Date().toISOString().slice(2, 10).replaceAll('-', '')
     const missionId = `KX-${date}-${id.slice(0, 4).toUpperCase()}`
     const snapshot = repository.save(createTaskSnapshot(id, missionId, request.body.objective))
+    options.onTaskCreated?.(id)
     reply.code(201)
     orchestrator.start(id)
     return snapshot
@@ -117,6 +120,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     } catch (error) {
       return handleTransitionError(error, reply)
     }
+  })
+
+  app.get<{ Params: { tenantId: string } }>('/api/treasury/:tenantId/accounts', async (request) => {
+    return getAccounts(request.params.tenantId)
+  })
+
+  app.get<{ Params: { tenantId: string } }>('/api/treasury/:tenantId/audit-log', async (request) => {
+    return getAuditLog(request.params.tenantId)
   })
 
   app.addHook('onClose', async () => {

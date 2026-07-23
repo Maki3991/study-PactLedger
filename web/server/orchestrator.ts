@@ -1,5 +1,6 @@
 import type { AgentRun, TaskPhase, TaskSnapshot, TimelineEvent } from '../src/domain/trading.js'
 import type { ExecutionAdapter } from './adapters/execution.js'
+import { recordBacktestPayment, recordExecutionCost, recordResearchPayment, recordRiskFee } from './treasury.js'
 import { candidateStrategies } from './taskDefaults.js'
 import { TaskEvents } from './taskEvents.js'
 import { TaskRepository } from './repository.js'
@@ -24,6 +25,7 @@ export class MockTaskOrchestrator {
     })
 
     this.schedule(1, () => this.update(taskId, 'strategizing', (snapshot) => {
+      recordResearchPayment(taskId)
       setAgent(snapshot, 'research', 'complete', '趋势与流动性已归因', '02:14')
       setAgent(snapshot, 'strategy', 'working', '生成策略候选版本', '00:01')
     }))
@@ -36,6 +38,7 @@ export class MockTaskOrchestrator {
     }))
 
     this.schedule(3, () => this.update(taskId, 'backtesting', (snapshot) => {
+      recordBacktestPayment(taskId)
       setAgent(snapshot, 'backtest', 'complete', '126 日滚动验证完成', '04:52')
       setAgent(snapshot, 'evolution', 'working', '执行 Champion-Challenger 竞争', '00:01')
     }))
@@ -47,6 +50,7 @@ export class MockTaskOrchestrator {
     }))
 
     this.schedule(5, () => this.update(taskId, 'risk_review', (snapshot) => {
+      recordRiskFee(taskId)
       setAgent(snapshot, 'risk', 'blocked', '40% 仓位超过用户上限，已退回', '00:24')
       snapshot.firewallRules[1].current = '40% / 拒绝'
       appendTimeline(snapshot, 'Risk Agent 退回初版', '建议仓位 40%，超过用户上限 30%', 'warning')
@@ -78,6 +82,7 @@ export class MockTaskOrchestrator {
     }
 
     this.update(taskId, 'executing', (snapshot) => {
+      recordExecutionCost(taskId)
       snapshot.execution.state = 'signing'
       setAgent(snapshot, 'execution', 'working', '广播 Injective 测试网交易', '00:01')
     })

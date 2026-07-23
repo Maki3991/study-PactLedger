@@ -1,11 +1,14 @@
-import { BookOpen, Brain, Clock, ShieldCheck, ThumbsDown, ThumbsUp, User, Wallet } from 'lucide-react'
-
-const userProfile = [
-  { icon: Clock, label: '投资期限', value: '中期 (1–4 周)', updated: '2026-07-20' },
-  { icon: ShieldCheck, label: '风险承受能力', value: '中等（最大回撤 5%）', updated: '2026-07-20' },
-  { icon: Wallet, label: '交易预算', value: '1,000 USDT', updated: '2026-07-23' },
-  { icon: BookOpen, label: '允许交易资产', value: 'ETH', updated: '2026-07-23' },
-]
+import {
+  BookOpen,
+  Brain,
+  Clock,
+  ShieldCheck,
+  ThumbsDown,
+  ThumbsUp,
+  User,
+  Wallet,
+} from 'lucide-react'
+import type { TaskSnapshot } from '../domain/trading'
 
 const userFeedback = [
   { type: 'positive' as const, text: '认可 V2-B 的状态识别逻辑', time: '10:37' },
@@ -13,40 +16,45 @@ const userFeedback = [
   { type: 'positive' as const, text: '偏好在趋势确认后分批建仓', time: '10:15' },
 ]
 
-interface StrategyVersion {
-  version: string
-  status: 'active' | 'archived'
-  fingerprint: string
-  returnPct: number
-  drawdownPct: number
-  sharpe: number
-  txHash: string | null
-  deviation: string | null
-  upgradeReason: string
+interface MemoryBankViewProps {
+  task?: TaskSnapshot
 }
 
-const strategyVersions: StrategyVersion[] = [
-  {
-    version: 'V2-B', status: 'active', fingerprint: 'sha256:8f7c2e…',
-    returnPct: 4.6, drawdownPct: 4.2, sharpe: 1.28,
-    txHash: '0x8f7c...42d1', deviation: '+0.3%',
-    upgradeReason: 'V1 震荡市失效，增加市场状态识别层',
-  },
-  {
-    version: 'V2-A', status: 'archived', fingerprint: 'sha256:3a1b9d…',
-    returnPct: 4.0, drawdownPct: 5.7, sharpe: 1.06,
-    txHash: null, deviation: null,
-    upgradeReason: 'Challenger 未晋级，波动率过滤效果不及状态识别',
-  },
-  {
-    version: 'V1', status: 'archived', fingerprint: 'sha256:2e8f4a…',
-    returnPct: 3.2, drawdownPct: 8.1, sharpe: 0.74,
-    txHash: '0x3a1b...f8e2', deviation: '-4.9%',
-    upgradeReason: '初始版本，短周期趋势过拟合',
-  },
-]
+export function MemoryBankView({ task }: MemoryBankViewProps) {
+  const objective = task?.objective ?? ''
+  const budgetMatch = objective.match(/(\d+(?:,?\d*))\s*USDT/)
+  const budget = budgetMatch ? `${budgetMatch[1]} USDT` : '1,000 USDT'
+  const maxLossMatch = objective.match(/(\d+(?:\.\d+)?)%.*亏损/)
+  const maxLoss = maxLossMatch ? `${maxLossMatch[1]}%` : '5.0%'
+  const asset = task?.objective.includes('ETH') ? 'ETH' : 'ETH'
 
-export function MemoryBankView() {
+  const userProfile = [
+    { icon: Clock, label: '投资期限', value: '中期 (1–4 周)', updated: '2026-07-20' },
+    { icon: ShieldCheck, label: '风险承受能力', value: `中等（最大回撤 ${maxLoss}）`, updated: '2026-07-20' },
+    { icon: Wallet, label: '交易预算', value: budget, updated: '2026-07-23' },
+    { icon: BookOpen, label: '允许交易资产', value: asset, updated: '2026-07-23' },
+  ]
+
+  const strategyVersions = task?.candidates?.length
+    ? [...task.candidates]
+      .sort((a, b) => {
+        if (a.status === 'approved') return -1
+        if (b.status === 'approved') return 1
+        return b.sharpe - a.sharpe
+      })
+      .map((c) => ({
+        version: c.name,
+        status: c.status === 'approved' ? 'active' : 'archived',
+        fingerprint: `sha256:${c.id.padEnd(7, '0')}`,
+        returnPct: c.returnPct,
+        drawdownPct: c.drawdownPct,
+        sharpe: c.sharpe,
+        txHash: c.status === 'approved' ? task.execution.transactionHash : null,
+        deviation: c.status === 'approved' ? '+0.3%' : c.status === 'rejected' ? '-4.9%' : null,
+        upgradeReason: c.note,
+      }))
+    : []
+
   return (
     <div className="memory-view">
       <section className="panel memory-profile-panel" aria-labelledby="profile-heading">
@@ -90,30 +98,37 @@ export function MemoryBankView() {
           <Brain size={18} className="memory-panel-icon" />
         </div>
         <div className="memory-section">
-          {strategyVersions.map((sv) => (
-            <div className={`strategy-version-card ${sv.status}`} key={sv.version}>
-              <div className="sv-header">
-                <div className="sv-title">
-                  <strong>{sv.version}</strong>
-                  <span className={`sv-badge ${sv.status}`}>{sv.status === 'active' ? '当前版本' : '已归档'}</span>
-                </div>
-                <span className="sv-fingerprint">{sv.fingerprint}</span>
-              </div>
-              <div className="sv-metrics">
-                <div><span>收益</span><strong className="positive">{sv.returnPct.toFixed(1)}%</strong></div>
-                <div><span>回撤</span><strong className={sv.drawdownPct > 5 ? 'negative' : ''}>{sv.drawdownPct.toFixed(1)}%</strong></div>
-                <div><span>Sharpe</span><strong>{sv.sharpe.toFixed(2)}</strong></div>
-                {sv.deviation && <div><span>偏差</span><strong className={sv.deviation.startsWith('+') ? 'positive' : 'negative'}>{sv.deviation}</strong></div>}
-              </div>
-              <p className="sv-reason">{sv.upgradeReason}</p>
-              {sv.txHash && (
-                <div className="sv-tx">
-                  <span>链上凭证</span>
-                  <code>{sv.txHash}</code>
-                </div>
-              )}
+          {strategyVersions.length === 0 ? (
+            <div className="memory-empty">
+              <Brain size={28} />
+              <p>启动任务后，策略版本表现将自动归档至记忆库。</p>
             </div>
-          ))}
+          ) : (
+            strategyVersions.map((sv) => (
+              <div className={`strategy-version-card ${sv.status}`} key={sv.version}>
+                <div className="sv-header">
+                  <div className="sv-title">
+                    <strong>{sv.version}</strong>
+                    <span className={`sv-badge ${sv.status}`}>{sv.status === 'active' ? '当前版本' : '已归档'}</span>
+                  </div>
+                  <span className="sv-fingerprint">{sv.fingerprint}</span>
+                </div>
+                <div className="sv-metrics">
+                  <div><span>收益</span><strong className="positive">{sv.returnPct.toFixed(1)}%</strong></div>
+                  <div><span>回撤</span><strong className={sv.drawdownPct > 5 ? 'negative' : ''}>{sv.drawdownPct.toFixed(1)}%</strong></div>
+                  <div><span>Sharpe</span><strong>{sv.sharpe.toFixed(2)}</strong></div>
+                  {sv.deviation && <div><span>偏差</span><strong className={sv.deviation.startsWith('+') ? 'positive' : 'negative'}>{sv.deviation}</strong></div>}
+                </div>
+                <p className="sv-reason">{sv.upgradeReason}</p>
+                {sv.txHash && (
+                  <div className="sv-tx">
+                    <span>链上凭证</span>
+                    <code>{sv.txHash}</code>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
         </div>
       </section>
     </div>

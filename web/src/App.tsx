@@ -17,6 +17,7 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  Vault,
   WalletCards,
   X,
 } from 'lucide-react'
@@ -31,6 +32,7 @@ import { TaskFlowView } from './views/TaskFlowView'
 import { StrategyLabView } from './views/StrategyLabView'
 import { MemoryBankView } from './views/MemoryBankView'
 import { ExecutionView } from './views/ExecutionView'
+import { TreasuryView } from './views/TreasuryView'
 
 const navigation = [
   { label: '总览', icon: LayoutDashboard, active: true },
@@ -38,6 +40,7 @@ const navigation = [
   { label: '策略实验', icon: FlaskConical },
   { label: '记忆库', icon: Database },
   { label: '链上执行', icon: WalletCards },
+  { label: '资金流', icon: Vault },
 ]
 
 const viewMeta: Record<string, { title: string; subtitle: string }> = {
@@ -46,6 +49,7 @@ const viewMeta: Record<string, { title: string; subtitle: string }> = {
   '策略实验': { title: '策略竞争实验室', subtitle: 'Champion–Challenger 回测对比与版本进化历史。' },
   '记忆库': { title: '双层记忆系统', subtitle: '用户偏好记忆与策略表现记忆的持久化存储。' },
   '链上执行': { title: 'Injective 测试网执行', subtitle: 'Capital Firewall 校验、交易广播与链上回执。' },
+  '资金流': { title: 'Agent Treasury', subtitle: '6 个 Agent 钱包实时余额、资金流向与不可篡改审计账本。' },
 }
 
 function App() {
@@ -174,18 +178,21 @@ function App() {
             </div>
           )}
 
-          {activeNav === '任务流' && <TaskFlowView />}
-          {activeNav === '策略实验' && <StrategyLabView />}
-          {activeNav === '记忆库' && <MemoryBankView />}
+          {activeNav === '任务流' && <TaskFlowView task={task} />}
+          {activeNav === '策略实验' && <StrategyLabView task={task} />}
+          {activeNav === '记忆库' && <MemoryBankView task={task} />}
           {activeNav === '链上执行' && (
             <ExecutionView
+              task={task}
               rules={rules}
               executionState={executionState}
               canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
               transactionHash={task?.execution.transactionHash}
+              injectiveStatus={injective.status}
               onExecute={approveAndExecute}
             />
           )}
+          {activeNav === '资金流' && <TreasuryView taskId={task?.id} />}
 
           <footer className="workspace-footer">
             <span><BrainCircuit size={14} /> DeepSeek V4 Pro</span>

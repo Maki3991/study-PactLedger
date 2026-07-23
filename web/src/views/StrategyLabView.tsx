@@ -1,23 +1,5 @@
 import { AlertTriangle, Award, GitBranch, TrendingDown, TrendingUp, X } from 'lucide-react'
-
-interface StrategyMetric {
-  version: string
-  status: 'champion' | 'challenger' | 'winner' | 'rejected'
-  signal: string
-  returnPct: number
-  drawdownPct: number
-  sharpe: number
-  winRate: number
-  volatility: number
-  oosReturn: number
-  trades: number
-}
-
-const metrics: StrategyMetric[] = [
-  { version: 'V1', status: 'rejected', signal: '趋势跟随', returnPct: 3.2, drawdownPct: 8.1, sharpe: 0.74, winRate: 42, volatility: 18.3, oosReturn: -1.2, trades: 23 },
-  { version: 'V2-A', status: 'challenger', signal: '过滤趋势', returnPct: 4.0, drawdownPct: 5.7, sharpe: 1.06, winRate: 56, volatility: 12.1, oosReturn: 3.1, trades: 15 },
-  { version: 'V2-B', status: 'winner', signal: '状态识别', returnPct: 4.6, drawdownPct: 4.2, sharpe: 1.28, winRate: 61, volatility: 9.8, oosReturn: 4.0, trades: 11 },
-]
+import type { TaskSnapshot, StrategyCandidate } from '../domain/trading'
 
 const failureAttribution = [
   'V1 过度依赖短期趋势信号，在震荡行情中连续产生错误入场',
@@ -33,7 +15,18 @@ const mechanismSteps = [
   { step: '05', text: '获胜策略升级为新版本，后续交易关联到明确的策略版本' },
 ]
 
-export function StrategyLabView() {
+interface StrategyLabViewProps {
+  task?: TaskSnapshot
+}
+
+export function StrategyLabView({ task }: StrategyLabViewProps) {
+  const candidates: StrategyCandidate[] = task?.candidates?.length
+    ? task.candidates
+    : []
+
+  const winner = candidates.find((c) => c.status === 'approved') ??
+    candidates.reduce((best, c) => (c.sharpe > best.sharpe ? c : best), candidates[0])
+
   return (
     <div className="lab-view">
       <section className="panel lab-metrics-panel" aria-labelledby="metrics-heading">
@@ -41,42 +34,54 @@ export function StrategyLabView() {
           <div><span className="eyebrow">Backtest Comparison</span><h2 id="metrics-heading">回测指标对比</h2></div>
           <span className="dataset-label">126D / OOS</span>
         </div>
-        <div className="strategy-table-wrap">
-          <table className="strategy-table lab-table">
-            <thead>
-              <tr>
-                <th>版本</th>
-                <th>信号</th>
-                <th>收益</th>
-                <th>回撤</th>
-                <th>Sharpe</th>
-                <th>胜率</th>
-                <th>波动率</th>
-                <th>OOS 收益</th>
-                <th>交易数</th>
-              </tr>
-            </thead>
-            <tbody>
-              {metrics.map((m) => (
-                <tr key={m.version} className={m.status === 'winner' ? 'selected-row' : ''}>
-                  <td><strong>{m.version}</strong></td>
-                  <td>{m.signal}</td>
-                  <td className="positive"><TrendingUp size={13} /> {m.returnPct.toFixed(1)}%</td>
-                  <td className={m.drawdownPct > 5 ? 'negative' : ''}><TrendingDown size={13} /> {m.drawdownPct.toFixed(1)}%</td>
-                  <td>{m.sharpe.toFixed(2)}</td>
-                  <td>{m.winRate}%</td>
-                  <td>{m.volatility.toFixed(1)}%</td>
-                  <td className={m.oosReturn >= 0 ? 'positive' : 'negative'}>{m.oosReturn >= 0 ? '+' : ''}{m.oosReturn.toFixed(1)}%</td>
-                  <td>{m.trades}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="selected-strategy-note">
-          <Award size={15} />
-          <span><strong>V2-B</strong> 在风险调整后表现最优（Sharpe 1.28，回撤 4.2%），成为 Champion</span>
-        </div>
+
+        {candidates.length === 0 ? (
+          <div className="lab-empty">
+            <GitBranch size={28} />
+            <p>启动任务后，候选策略将在此处进行 Champion–Challenger 对比。</p>
+          </div>
+        ) : (
+          <>
+            <div className="strategy-table-wrap">
+              <table className="strategy-table lab-table">
+                <thead>
+                  <tr>
+                    <th>版本</th>
+                    <th>信号</th>
+                    <th>收益</th>
+                    <th>回撤</th>
+                    <th>Sharpe</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidates.map((m) => (
+                    <tr key={m.id} className={m.status === 'approved' ? 'selected-row' : ''}>
+                      <td><strong>{m.name}</strong></td>
+                      <td>{m.signal}</td>
+                      <td className="positive"><TrendingUp size={13} /> {m.returnPct.toFixed(1)}%</td>
+                      <td className={m.drawdownPct > 5 ? 'negative' : ''}><TrendingDown size={13} /> {m.drawdownPct.toFixed(1)}%</td>
+                      <td>{m.sharpe.toFixed(2)}</td>
+                      <td>
+                        <span className={`lab-status status-${m.status}`}>
+                          {m.status === 'approved' ? '冠军' : m.status === 'rejected' ? '淘汰' : '验证中'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="selected-strategy-note">
+              <Award size={15} />
+              <span>
+                {winner
+                  ? <><strong>{winner.name}</strong> 在风险调整后表现最优（Sharpe {winner.sharpe.toFixed(2)}，回撤 {winner.drawdownPct.toFixed(1)}%），成为 Champion</>
+                  : <>等待候选策略生成…</>}
+              </span>
+            </div>
+          </>
+        )}
       </section>
 
       <div className="lab-side">
