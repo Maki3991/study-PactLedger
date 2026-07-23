@@ -9,6 +9,9 @@ test('stock backtest produces reproducible metrics and one approved candidate', 
   const candidates = runCandidateBacktests(result.bars, 5)
 
   assert.equal(candidates.length, 3)
+  assert.equal(result.sourceMethod, 'deterministic_replay')
+  assert.equal(result.sdkVersion, '0.0.12')
+  assert.equal(result.skill, 'QuantSkills/pandadata-api')
   assert.equal(candidates.filter((candidate) => candidate.status === 'approved').length, 1)
   assert.ok(candidates.every((candidate) => Number.isFinite(candidate.returnPct)))
   assert.ok(candidates.every((candidate) => candidate.trades >= 0))

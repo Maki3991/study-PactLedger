@@ -60,6 +60,10 @@ export interface TaskExecution {
 export interface QuantEvidence {
   provider: 'panda-data' | 'replay'
   configured: boolean
+  sourceMethod: 'get_stock_daily_pre' | 'deterministic_replay'
+  sdkVersion: '0.0.12'
+  adjustment: 'pre-adjusted' | 'synthetic'
+  skill: 'QuantSkills/pandadata-api'
   symbol: string
   startDate: string
   endDate: string
@@ -151,6 +155,9 @@ export interface PandaConfigStatus {
   credentialsConfigured: boolean
   pythonExecutable: string
   defaultSymbol: string
+  sourceMethod: 'get_stock_daily_pre'
+  sdkVersion: '0.0.12'
+  skill: 'QuantSkills/pandadata-api'
   missing: string[]
 }
 

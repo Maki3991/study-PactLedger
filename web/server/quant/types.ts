@@ -16,6 +16,10 @@ export interface MarketDataResult {
   bars: PriceBar[]
   provider: QuantEvidence['provider']
   configured: boolean
+  sourceMethod: QuantEvidence['sourceMethod']
+  sdkVersion: QuantEvidence['sdkVersion']
+  adjustment: QuantEvidence['adjustment']
+  skill: QuantEvidence['skill']
   note: string
 }
 

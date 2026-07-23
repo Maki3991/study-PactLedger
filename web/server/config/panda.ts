@@ -42,6 +42,9 @@ export function getPandaConfigStatus(config: PandaDataConfig): PandaConfigStatus
     credentialsConfigured,
     pythonExecutable: config.pythonExecutable,
     defaultSymbol: config.defaultSymbol,
+    sourceMethod: 'get_stock_daily_pre',
+    sdkVersion: '0.0.12',
+    skill: 'QuantSkills/pandadata-api',
     missing,
   }
 }

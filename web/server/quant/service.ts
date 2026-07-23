@@ -18,6 +18,10 @@ export class QuantResearchService {
     const evidence = {
       provider: result.provider,
       configured: result.configured,
+      sourceMethod: result.sourceMethod,
+      sdkVersion: result.sdkVersion,
+      adjustment: result.adjustment,
+      skill: result.skill,
       symbol: input.asset,
       startDate,
       endDate,

@@ -41,7 +41,7 @@ PANDA_PYTHON_BIN=.venv/Scripts/python.exe
 ARK_API_KEY=
 ```
 
-未配置账号时系统自动使用确定性 Replay 数据；配置后由服务端 Python bridge 调用 `panda_data`。`ARK_API_KEY` 仅用于解释回测证据，不负责生成交易决定。
+未配置账号时系统自动使用确定性 Replay 数据；配置后由服务端 Python bridge 调用 `panda_data`。数据调用按 QuantSkills 官方 `pandadata-api` Skill 的契约固定为 `panda_data==0.0.12` 与 `get_stock_daily_pre`，bridge 会拒绝不匹配的 SDK 版本。`ARK_API_KEY` 仅用于解释回测证据，不负责生成交易决定。
 
 ## Injective 测试网配置
 

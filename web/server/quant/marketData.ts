@@ -23,7 +23,11 @@ export class PandaDataProvider implements MarketDataProvider {
       bars,
       provider: 'panda-data',
       configured: true,
-      note: 'PandaData 前复权 A 股日线',
+      sourceMethod: 'get_stock_daily_pre',
+      sdkVersion: '0.0.12',
+      adjustment: 'pre-adjusted',
+      skill: 'QuantSkills/pandadata-api',
+      note: 'PandaData 前复权 A 股日线；调用契约由 QuantSkills pandadata-api 校验',
     }
   }
 }
@@ -34,6 +38,10 @@ export class ReplayMarketDataProvider implements MarketDataProvider {
       bars: createReplayBars(query),
       provider: 'replay',
       configured: false,
+      sourceMethod: 'deterministic_replay',
+      sdkVersion: '0.0.12',
+      adjustment: 'synthetic',
+      skill: 'QuantSkills/pandadata-api',
       note: '内置确定性回放数据；配置 PandaAI 账号后自动切换真实日线',
     }
   }

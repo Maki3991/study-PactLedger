@@ -9,7 +9,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
+
+
+REQUIRED_SDK_VERSION = "0.0.12"
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -29,6 +33,15 @@ def main() -> None:
     password = os.environ.get("PANDA_DATA_PASSWORD", "").strip()
     if not username or not password:
         raise RuntimeError("PANDA_DATA_USERNAME and PANDA_DATA_PASSWORD are required")
+
+    try:
+        installed_version = version("panda-data")
+    except PackageNotFoundError as error:
+        raise RuntimeError("panda_data is not installed; expected panda-data==0.0.12") from error
+    if installed_version != REQUIRED_SDK_VERSION:
+        raise RuntimeError(
+            f"Unsupported panda-data version {installed_version}; expected {REQUIRED_SDK_VERSION}"
+        )
 
     import panda_data
 

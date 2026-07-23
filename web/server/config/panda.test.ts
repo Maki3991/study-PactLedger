@@ -6,6 +6,9 @@ test('PandaData defaults to explicit replay mode when credentials are absent', (
   const status = getPandaConfigStatus(readPandaDataConfig({}))
   assert.equal(status.provider, 'replay')
   assert.equal(status.ready, true)
+  assert.equal(status.sourceMethod, 'get_stock_daily_pre')
+  assert.equal(status.sdkVersion, '0.0.12')
+  assert.equal(status.skill, 'QuantSkills/pandadata-api')
   assert.deepEqual(status.missing, ['PANDA_DATA_USERNAME', 'PANDA_DATA_PASSWORD'])
 })
 
