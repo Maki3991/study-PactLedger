@@ -15,19 +15,22 @@
   },
   "dependencies": {
     "@fastify/cors": "latest",
+    "@fastify/static": "^10.1.2",
     "@vitejs/plugin-react": "latest",
     "dotenv": "17.4.2",
     "fastify": "latest",
     "lucide-react": "latest",
+    "pg": "^8.22.0",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@types/node": "latest",
+    "@types/pg": "^8.20.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@types/node": "latest",
     "concurrently": "9.2.4",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",

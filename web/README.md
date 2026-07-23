@@ -1,11 +1,12 @@
-# KaleidoX Command Center
+# Agent Treasury / KaleidoX Demo
 
-KaleidoX 的前端演示框架，用于展示 Multi-Agent 投研、Champion-Challenger 策略进化、独立风控和 Injective 测试网执行闭环。
+通用 Agent Treasury 控制基座，以及股票量化案例。PandaAI 负责股票数据与研究解释，策略信号和回测由确定性引擎生成；Injective 仅通过执行适配器接收统一 `ActionIntent`，当前默认使用 Mock 回执。
 
 ## 本地运行
 
 ```bash
 npm install
+npm run build
 npm run dev
 ```
 
@@ -13,6 +14,27 @@ npm run dev
 
 - Web：`http://127.0.0.1:5173`
 - API：`http://127.0.0.1:8787`
+
+## PandaAI 股票数据配置
+
+Python 需为 3.10 或更高版本。先安装官方数据 SDK：
+
+```bash
+C:\path\to\python.exe -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-panda.txt
+```
+
+复制 `.env.example` 为 `.env.local` 并自行填写 PandaAI 官网账号。不要在聊天、前端变量或 Git 中提交密码：
+
+```dotenv
+PANDA_DATA_MODE=auto
+PANDA_DATA_USERNAME=86加官网注册手机号
+PANDA_DATA_PASSWORD=
+PANDA_PYTHON_BIN=.venv/Scripts/python.exe
+ARK_API_KEY=
+```
+
+未配置账号时系统自动使用确定性 Replay 数据；配置后由服务端 Python bridge 调用 `panda_data`。`ARK_API_KEY` 仅用于解释回测证据，不负责生成交易决定。
 
 ## Injective 测试网配置
 
@@ -44,14 +66,16 @@ npm run test:api
 src/
 ├── components/     # 任务链、策略实验、资金防火墙等界面模块
 ├── domain/         # Agent、策略、风控规则的领域类型
-├── services/       # 当前 Demo 数据；后续替换为 A2A/PandaAI/Injective 适配器
+├── services/       # 任务、配置状态、Treasury 前端客户端
 ├── App.tsx         # 页面编排与演示状态机
 └── styles.css      # 视觉系统和响应式布局
 server/
 ├── adapters/       # 外部执行层接口与 Injective Mock
+├── quant/          # PandaData bridge、回测和研究解释
 ├── app.ts          # Fastify 路由和 SSE 端点
-├── orchestrator.ts # 可控的 Agent 演示状态机
-└── repository.ts   # SQLite 任务快照持久化
+├── orchestrator.ts # 股票研究、回测、风控与执行编排
+├── treasury.ts     # Agent 账户和资金流水 Demo
+└── repository.ts   # PostgreSQL 任务快照持久化
 ```
 
 ## API
@@ -62,6 +86,11 @@ GET  /api/tasks/:id
 GET  /api/tasks/:id/events   # Server-Sent Events
 POST /api/tasks/:id/approve
 POST /api/tasks/:id/execute
+GET  /api/config/panda
+GET  /api/config/panda/model
+GET  /api/config/injective
+GET  /api/treasury/:taskId/accounts
+GET  /api/treasury/:taskId/audit-log
 GET  /api/health
 ```
 
@@ -72,13 +101,42 @@ created → researching → strategizing → backtesting → risk_review
 → awaiting_approval → approved → executing → executed
 ```
 
-越过审批直接执行会返回 `409 Conflict`。任务快照默认保存在 `server/data/kaleidox.db`，可通过 `KALEIDOX_DB_PATH` 修改；API 端口可通过 `KALEIDOX_API_PORT` 修改。
+越过审批直接执行会返回 `409 Conflict`。开发和生产运行都需要 PostgreSQL；可使用 `DATABASE_URL`，或配置 `POSTGRES_HOST`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`。测试套件使用进程内存仓库，不依赖 SQLite。
 
 ## 后续接入点
 
-- `services/taskClient.ts`：已实现任务提交、SSE 订阅、批准和执行；
-- `services/pandaClient.ts`：行情、研究 Skill 与回测结果；
-- `server/adapters/execution.ts`：将 `MockInjectiveAdapter` 替换为真实钱包授权、Capital Firewall 校验、测试网广播与回执；
+- `services/taskClient.ts`：任务提交、SSE 订阅、批准和执行；
+- `server/quant/marketData.ts`：PandaData / Replay Provider；
+- `server/adapters/execution.ts`：将 `MockInjectiveAdapter` 替换为团队实现的 Injective 适配器；
 - 服务返回值应转换为 `domain/trading.ts` 中的稳定领域模型，避免 API 结构渗透到组件。
 
-当前 Agent 编排和交易哈希由可控 Mock 生成，不会发起真实链上交易；任务状态、拒绝记录和执行回执会真实写入本地 SQLite。
+当前不会买卖股票，也不会发起真实链上交易。回测、风险退回、用户批准和执行回执会进入统一任务快照与审计界面。
+
+## Ubuntu / Zeabur 生产部署
+
+仓库根目录提供单容器 `Dockerfile`。容器会：
+
+- 构建 React 前端，并由 Fastify 在同一端口托管；
+- 启动股票量化 API、SSE 和 Treasury API；
+- 在 `/opt/panda-venv` 安装 `panda_data==0.0.12`；
+- 将任务快照、Agent 账户和资金流水保存到 PostgreSQL；
+- 监听 `0.0.0.0:8787`，并通过 `/api/health` 健康检查。
+
+在服务器或 Zeabur 的项目变量中填写 `.env.production.example` 对应字段。不要提交 `.env.production`，也不要把 PandaAI 密码、Ark Key 或 Injective 私钥写入镜像。
+
+普通 Ubuntu Docker 部署：
+
+```bash
+cp web/.env.production.example web/.env.production
+# 在服务器上编辑 web/.env.production
+docker compose up -d --build
+docker compose logs -f agent-treasury
+```
+
+访问 `http://服务器地址:8787/`。如果使用域名，建议由 Zeabur 或 Nginx/Caddy 提供 HTTPS，并将流量反向代理到容器的 `8787` 端口。
+
+同机 PostgreSQL 默认不映射公网端口，数据保存在 Docker 卷 `postgres-data`。备份示例：
+
+```bash
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > agent-treasury-$(date +%F).sql
+```

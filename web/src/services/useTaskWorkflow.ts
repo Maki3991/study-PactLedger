@@ -3,11 +3,11 @@ import type { CreateTaskInput, TaskSnapshot } from '../domain/trading'
 import { approveTask, createTask, executeTask, subscribeToTask } from './taskClient'
 
 const demoInput: CreateTaskInput = {
-  objective: '使用 1,000 USDT 研究 ETH 的交易机会，最大可接受亏损为 5%，单一资产仓位不能超过 30%。',
+  objective: '使用 PandaAI 数据研究 000001.SZ 的股票策略，最大可接受回撤为 5%，单一股票仓位不能超过 30%。',
   budgetUsdt: 1_000,
   maxLossPct: 5,
   maxAssetPct: 30,
-  asset: 'ETH',
+  asset: '000001.SZ',
 }
 
 export function useTaskWorkflow() {

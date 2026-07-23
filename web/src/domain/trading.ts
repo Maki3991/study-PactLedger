@@ -18,6 +18,10 @@ export interface StrategyCandidate {
   returnPct: number
   drawdownPct: number
   sharpe: number
+  winRate: number
+  volatility: number
+  oosReturn: number
+  trades: number
   signal: string
 }
 
@@ -49,8 +53,44 @@ export type TaskPhase =
 
 export interface TaskExecution {
   state: 'ready' | 'signing' | 'executed'
-  network: 'Injective Testnet'
+  network: 'Mock' | 'Injective Testnet'
   transactionHash?: string
+}
+
+export interface QuantEvidence {
+  provider: 'panda-data' | 'replay'
+  configured: boolean
+  symbol: string
+  startDate: string
+  endDate: string
+  barCount: number
+  fetchedAt: string
+  note: string
+}
+
+export type IntentStatus =
+  | 'submitted'
+  | 'policy_rejected'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'executed'
+  | 'failed'
+
+export interface ActionIntent {
+  id: string
+  appId: 'kaleidox'
+  agentId: 'execution'
+  action: 'stock_trade'
+  symbol: string
+  side: 'buy' | 'sell'
+  notional: number
+  currency: 'USDT'
+  protocolTag: 'investment'
+  strategyVersion: string
+  status: IntentStatus
+  policyReason?: string
+  createdAt: string
 }
 
 export interface TaskSnapshot {
@@ -62,6 +102,9 @@ export interface TaskSnapshot {
   candidates: StrategyCandidate[]
   firewallRules: FirewallRule[]
   timeline: TimelineEvent[]
+  quantEvidence?: QuantEvidence
+  researchSummary?: string
+  actionIntent?: ActionIntent
   execution: TaskExecution
   createdAt: string
   updatedAt: string
@@ -72,7 +115,9 @@ export interface CreateTaskInput {
   budgetUsdt: number
   maxLossPct: number
   maxAssetPct: number
-  asset: 'ETH'
+  asset: string
+  startDate?: string
+  endDate?: string
 }
 
 export interface TaskStreamEvent {
@@ -95,5 +140,23 @@ export interface InjectiveConfigStatus {
     rest: string
     grpc: string
   }
+  missing: string[]
+}
+
+export interface PandaConfigStatus {
+  mode: 'auto' | 'panda' | 'replay'
+  provider: 'panda-data' | 'replay'
+  ready: boolean
+  credentialsConfigured: boolean
+  pythonExecutable: string
+  defaultSymbol: string
+  missing: string[]
+}
+
+export interface PandaModelStatus {
+  provider: 'ark' | 'template'
+  configured: boolean
+  endpointId: string
+  baseUrl: string
   missing: string[]
 }

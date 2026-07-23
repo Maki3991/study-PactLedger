@@ -10,18 +10,18 @@ const instantExecution: ExecutionAdapter = {
 }
 
 test('task progresses through risk review and executes only after approval', async () => {
-  const app = await buildApp({ databasePath: ':memory:', stepDelay: 5, executionAdapter: instantExecution })
+  const app = await buildApp({ stepDelay: 5, executionAdapter: instantExecution })
   await app.ready()
 
   const createdResponse = await app.inject({
     method: 'POST',
     url: '/api/tasks',
     payload: {
-      objective: '使用 1,000 USDT 研究 ETH 交易机会并控制风险',
+      objective: '使用 PandaAI 数据研究 000001.SZ 股票策略并控制风险',
       budgetUsdt: 1_000,
       maxLossPct: 5,
       maxAssetPct: 30,
-      asset: 'ETH',
+      asset: '000001.SZ',
     },
   })
   assert.equal(createdResponse.statusCode, 201)
@@ -41,6 +41,9 @@ test('task progresses through risk review and executes only after approval', asy
   assert.equal(current.agents.find((agent) => agent.id === 'risk')?.status, 'complete')
   assert.equal(current.firewallRules[1].current, '25%')
   assert.ok(current.timeline.some((event) => event.title.includes('退回')))
+  assert.ok(current.quantEvidence)
+  assert.equal(current.quantEvidence?.provider, 'replay')
+  assert.equal(current.actionIntent?.status, 'awaiting_approval')
 
   const approvedResponse = await app.inject({ method: 'POST', url: `/api/tasks/${created.id}/approve` })
   assert.equal(approvedResponse.statusCode, 200)
@@ -57,7 +60,7 @@ test('task progresses through risk review and executes only after approval', asy
 })
 
 test('task event endpoint emits an initial SSE snapshot', async () => {
-  const app = await buildApp({ databasePath: ':memory:', stepDelay: 1_000, executionAdapter: instantExecution })
+  const app = await buildApp({ stepDelay: 1_000, executionAdapter: instantExecution })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
   assert.ok(address && typeof address !== 'string')
@@ -66,11 +69,11 @@ test('task event endpoint emits an initial SSE snapshot', async () => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      objective: '验证 SSE 是否会推送完整任务快照',
+      objective: '验证股票量化 SSE 是否会推送完整任务快照',
       budgetUsdt: 1_000,
       maxLossPct: 5,
       maxAssetPct: 30,
-      asset: 'ETH',
+      asset: '000001.SZ',
     }),
   })
   const created = await createdResponse.json() as TaskSnapshot
@@ -96,7 +99,7 @@ test('testnet mode exposes only masked config and blocks execution until the ada
     INJECTIVE_MARKET_ID: '0xmarket',
     INJECTIVE_SUBACCOUNT_ID: '0xsubaccount',
   })
-  const app = await buildApp({ databasePath: ':memory:', stepDelay: 1_000, injectiveConfig })
+  const app = await buildApp({ stepDelay: 1_000, injectiveConfig })
   await app.ready()
 
   const configResponse = await app.inject({ method: 'GET', url: '/api/config/injective' })
@@ -108,11 +111,11 @@ test('testnet mode exposes only masked config and blocks execution until the ada
     method: 'POST',
     url: '/api/tasks',
     payload: {
-      objective: '验证测试网配置未就绪时禁止直接执行',
+      objective: '验证股票意图在测试网配置未就绪时禁止直接执行',
       budgetUsdt: 1_000,
       maxLossPct: 5,
       maxAssetPct: 30,
-      asset: 'ETH',
+      asset: '000001.SZ',
     },
   })
   const task = createdResponse.json<TaskSnapshot>()

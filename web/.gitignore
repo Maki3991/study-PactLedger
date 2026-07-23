@@ -1,7 +1,9 @@
 node_modules
+.venv
 dist
 .vite
 *.local
+.env.production
 *.log
 tests/artifacts
 server/data

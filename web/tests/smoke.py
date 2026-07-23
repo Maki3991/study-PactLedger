@@ -12,7 +12,7 @@ with sync_playwright() as playwright:
     desktop = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
     desktop.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
     desktop.goto("http://127.0.0.1:5173", wait_until="networkidle")
-    desktop.get_by_role("heading", name="ETH 策略进化任务").wait_for()
+    desktop.get_by_role("heading", name="Agent Treasury 控制基座").wait_for()
     desktop.get_by_role("button", name="Injective Testnet").click()
     desktop.get_by_role("heading", name="Injective 测试网配置").wait_for()
     assert "web/.env.local" in desktop.get_by_role("dialog").inner_text()

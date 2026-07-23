@@ -1,0 +1,12 @@
+.git
+.qoder
+web/node_modules
+web/.venv
+web/dist
+web/server/data
+web/.env
+web/.env.local
+web/.env.production
+*.log
+*.md
+*.pdf

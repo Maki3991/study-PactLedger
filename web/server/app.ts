@@ -1,34 +1,58 @@
 import { randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import cors from '@fastify/cors'
+import type { Pool } from 'pg'
 import type { CreateTaskInput, TaskSnapshot, TaskStreamEvent } from '../src/domain/trading.js'
 import type { ExecutionAdapter } from './adapters/execution.js'
 import { createExecutionAdapter } from './adapters/createExecutionAdapter.js'
 import { getInjectiveConfigStatus, readInjectiveConfig, type InjectiveConfig } from './config/injective.js'
-import { InvalidTaskTransitionError, MockTaskOrchestrator } from './orchestrator.js'
+import type { DatabaseConfigStatus } from './config/database.js'
+import { getPandaConfigStatus, readPandaDataConfig, type PandaDataConfig } from './config/panda.js'
+import { getPandaModelStatus, readPandaModelConfig, type PandaModelConfig } from './config/pandaModel.js'
+import { InvalidTaskTransitionError, TaskOrchestrator } from './orchestrator.js'
+import { createMarketDataProvider } from './quant/marketData.js'
+import { QuantResearchService } from './quant/service.js'
+import { createResearchNarrator } from './quant/researchNarrator.js'
 import { TaskRepository } from './repository.js'
 import { TaskEvents } from './taskEvents.js'
 import { createTaskSnapshot } from './taskDefaults.js'
-import { getAccounts, getAuditLog } from './treasury.js'
+import { TreasuryService } from './treasury.js'
 
 interface BuildAppOptions {
-  databasePath: string
+  databasePool?: Pool
+  databaseStatus?: DatabaseConfigStatus
   stepDelay?: number
   executionAdapter?: ExecutionAdapter
   injectiveConfig?: InjectiveConfig
   onTaskCreated?: (taskId: string) => void
+  pandaConfig?: PandaDataConfig
+  pandaModelConfig?: PandaModelConfig
+  quantResearch?: QuantResearchService
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
-  const repository = new TaskRepository(options.databasePath)
+  const repository = new TaskRepository(options.databasePool)
+  const treasury = new TreasuryService(options.databasePool)
+  await repository.initialize()
+  await treasury.initialize()
   const events = new TaskEvents()
   const injectiveConfig = options.injectiveConfig ?? readInjectiveConfig()
   const injectiveStatus = getInjectiveConfigStatus(injectiveConfig)
-  const orchestrator = new MockTaskOrchestrator(
+  const pandaConfig = options.pandaConfig ?? readPandaDataConfig()
+  const pandaStatus = getPandaConfigStatus(pandaConfig)
+  const pandaModelConfig = options.pandaModelConfig ?? readPandaModelConfig()
+  const pandaModelStatus = getPandaModelStatus(pandaModelConfig)
+  const quantResearch = options.quantResearch ?? new QuantResearchService(
+    createMarketDataProvider(pandaConfig),
+    createResearchNarrator(pandaModelConfig),
+  )
+  const orchestrator = new TaskOrchestrator(
     repository,
     events,
     options.executionAdapter ?? createExecutionAdapter(injectiveConfig),
+    quantResearch,
+    treasury,
     options.stepDelay,
   )
 
@@ -37,10 +61,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/health', async () => ({
     status: 'ok',
     service: 'kaleidox-api',
-    dependencies: { injective: injectiveStatus.readyForExecution ? 'ready' : 'configuration_required' },
+    dependencies: {
+      panda: pandaStatus.provider === 'panda-data' ? 'live' : 'replay',
+      pandaModel: pandaModelStatus.provider === 'ark' ? 'live' : 'template',
+      injective: injectiveStatus.readyForExecution ? 'ready' : 'configuration_required',
+      database: options.databaseStatus?.provider ?? (options.databasePool ? 'postgresql' : 'memory-test'),
+    },
   }))
 
   app.get('/api/config/injective', async () => injectiveStatus)
+  app.get('/api/config/panda', async () => pandaStatus)
+  app.get('/api/config/panda/model', async () => pandaModelStatus)
 
   app.post<{ Body: CreateTaskInput }>('/api/tasks', {
     schema: {
@@ -52,7 +83,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           budgetUsdt: { type: 'number', minimum: 1 },
           maxLossPct: { type: 'number', minimum: 0.1, maximum: 100 },
           maxAssetPct: { type: 'number', minimum: 1, maximum: 100 },
-          asset: { type: 'string', enum: ['ETH'] },
+          asset: { type: 'string', minLength: 6, maxLength: 16 },
+          startDate: { type: 'string', pattern: '^\\d{8}$' },
+          endDate: { type: 'string', pattern: '^\\d{8}$' },
         },
         additionalProperties: false,
       },
@@ -61,21 +94,30 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const id = randomUUID()
     const date = new Date().toISOString().slice(2, 10).replaceAll('-', '')
     const missionId = `KX-${date}-${id.slice(0, 4).toUpperCase()}`
-    const snapshot = repository.save(createTaskSnapshot(id, missionId, request.body.objective))
+    const snapshot = await repository.save(createTaskSnapshot(id, missionId, request.body))
+    await treasury.allocate(id)
     options.onTaskCreated?.(id)
     reply.code(201)
-    orchestrator.start(id)
+    void orchestrator.start(id, request.body)
     return snapshot
   })
 
+  app.post<{ Body: CreateTaskInput }>('/api/quant/analyze', async (request, reply) => {
+    try {
+      return await quantResearch.analyze(request.body)
+    } catch (error) {
+      return reply.code(502).send({ message: error instanceof Error ? error.message : 'Quant analysis failed' })
+    }
+  })
+
   app.get<{ Params: { id: string } }>('/api/tasks/:id', async (request, reply) => {
-    const task = repository.findById(request.params.id)
+    const task = await repository.findById(request.params.id)
     if (!task) return reply.code(404).send({ message: 'Task not found' })
     return task
   })
 
   app.get<{ Params: { id: string } }>('/api/tasks/:id/events', async (request, reply) => {
-    const task = repository.findById(request.params.id)
+    const task = await repository.findById(request.params.id)
     if (!task) return reply.code(404).send({ message: 'Task not found' })
 
     reply.hijack()
@@ -123,16 +165,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   })
 
   app.get<{ Params: { tenantId: string } }>('/api/treasury/:tenantId/accounts', async (request) => {
-    return getAccounts(request.params.tenantId)
+    return treasury.getAccounts(request.params.tenantId)
   })
 
   app.get<{ Params: { tenantId: string } }>('/api/treasury/:tenantId/audit-log', async (request) => {
-    return getAuditLog(request.params.tenantId)
+    return treasury.getAuditLog(request.params.tenantId)
   })
 
   app.addHook('onClose', async () => {
     orchestrator.close()
-    repository.close()
+    await options.databasePool?.end()
   })
 
   return app

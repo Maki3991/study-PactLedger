@@ -1,19 +1,22 @@
+import { createHash } from 'node:crypto'
+import type { ActionIntent } from '../../src/domain/trading.js'
+
 export interface ExecutionResult {
   transactionHash: string
-  network: 'Injective Testnet'
+  network: 'Mock' | 'Injective Testnet'
 }
 
 export interface ExecutionAdapter {
-  execute(taskId: string): Promise<ExecutionResult>
+  execute(intent: ActionIntent): Promise<ExecutionResult>
 }
 
 export class MockInjectiveAdapter implements ExecutionAdapter {
-  async execute(taskId: string): Promise<ExecutionResult> {
+  async execute(intent: ActionIntent): Promise<ExecutionResult> {
     await new Promise((resolve) => setTimeout(resolve, 650))
-    const fingerprint = taskId.replaceAll('-', '').slice(0, 12).padEnd(12, '0')
+    const fingerprint = createHash('sha256').update(intent.id).digest('hex')
     return {
-      transactionHash: `0x8f7c${fingerprint}42d1`,
-      network: 'Injective Testnet',
+      transactionHash: `0x${fingerprint}`,
+      network: 'Mock',
     }
   }
 }

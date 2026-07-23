@@ -52,8 +52,8 @@ const STEP_META: Omit<FlowStep, 'status' | 'detail'>[] = [
   {
     id: 'research',
     label: 'Research Agent',
-    role: 'RESEARCH',
-    doing: '读取 ETH 行情，识别市场状态（趋势/震荡/高波动），输出研究报告。',
+    role: 'PANDA DATA',
+    doing: '读取股票日线，识别市场状态（趋势/震荡/高波动），输出可追溯研究证据。',
     agentId: 'research',
   },
   {
@@ -67,7 +67,7 @@ const STEP_META: Omit<FlowStep, 'status' | 'detail'>[] = [
     id: 'backtest',
     label: 'Backtest Agent',
     role: 'BACKTEST',
-    doing: '对候选策略进行 126 日滚动样本外回测，计算收益、回撤与 Sharpe。',
+    doing: '对候选策略进行含手续费和样本外区间的回测，计算收益、回撤与 Sharpe。',
     agentId: 'backtest',
   },
   {
@@ -85,9 +85,9 @@ const STEP_META: Omit<FlowStep, 'status' | 'detail'>[] = [
   },
   {
     id: 'injective',
-    label: 'Injective 测试网',
+    label: 'Injective Adapter',
     role: 'EXECUTE',
-    doing: '组装并广播现货订单，等待链上确认，返回交易哈希。',
+    doing: '接收统一 Action Intent；合约团队接入后返回授权、结算和链上回执。',
     agentId: 'execution',
   },
   {
@@ -134,7 +134,7 @@ function deriveSteps(task: TaskSnapshot | undefined): FlowStep[] {
     if (meta.id === 'input' || meta.id === 'orchestrator') {
       status = 'complete'
       detail = meta.id === 'input'
-        ? '1,000 USDT · 最大亏损 5% · 仓位 ≤30% · 标的 ETH'
+        ? `1,000 USDT · 最大亏损 5% · 仓位 ≤30% · 标的 ${task.quantEvidence?.symbol ?? '000001.SZ'}`
         : '任务拆分完成，已分发至 6 个专业 Agent'
     } else if (meta.id === 'research') {
       if (currentIdx >= phaseIndex('strategizing')) status = 'complete'
