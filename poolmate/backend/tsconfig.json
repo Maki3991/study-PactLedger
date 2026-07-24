@@ -10,12 +10,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": [
-    "src/**/*",
-    "tests/**/*",
-    "scripts/**/*",
-    "eslint.config.js",
-    "ecosystem.config.cjs"
-  ],
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*", "eslint.config.ts"],
   "exclude": ["node_modules"]
 }

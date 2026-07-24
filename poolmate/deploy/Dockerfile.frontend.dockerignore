@@ -1,0 +1,13 @@
+**
+!frontend/**
+!shared/**
+!deploy/Dockerfile.frontend
+!deploy/nginx.conf
+frontend/.env
+frontend/.env.*
+frontend/coverage
+frontend/dist
+frontend/node_modules
+shared/dist
+shared/node_modules
+**/.git

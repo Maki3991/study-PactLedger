@@ -1,0 +1,14 @@
+**
+!backend/**
+!shared/**
+!migrations/**
+!deploy/Dockerfile.backend
+backend/.env
+backend/.env.*
+backend/coverage
+backend/data
+backend/dist
+backend/node_modules
+shared/dist
+shared/node_modules
+**/.git

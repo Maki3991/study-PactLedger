@@ -1,28 +1,30 @@
-import process from "node:process";
+import type { BotStatus } from "@poolmate/shared";
+import { createServer } from "../src/api/server.js";
 import { loadConfig } from "../src/config.js";
-import { runHealthcheck } from "../src/ops/healthcheck.js";
+import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
 
-const strict = process.argv.includes("--strict");
-const telegramLiveCheck = process.argv.includes("--telegram-live");
-const codexLiveCheck = process.argv.includes("--codex-live");
+const config = loadConfig();
+const database = new PoolMateDatabase(
+  config.database.path,
+  config.database.migrationsDir
+);
+database.migrate();
 
-let config: ReturnType<typeof loadConfig>;
-try {
-  config = loadConfig();
-} catch (error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[FAIL] config: ${message}`);
-  process.exit(1);
-}
-
-const result = await runHealthcheck(config, {
-  strict,
-  telegramLiveCheck,
-  codexLiveCheck
+const botStatus: BotStatus = config.telegram.token ? "configured" : "disabled";
+const app = await createServer({
+  config,
+  database,
+  getBotStatus: () => botStatus
 });
+const response = await app.inject({ method: "GET", url: "/health" });
+const body = response.json();
 
-for (const check of result.checks) {
-  console.log(`[${check.status.toUpperCase()}] ${check.name}: ${check.detail}`);
+await app.close();
+database.close();
+
+if (response.statusCode !== 200 || body.status !== "ok") {
+  console.error(JSON.stringify(body));
+  process.exitCode = 1;
+} else {
+  console.log(JSON.stringify(body));
 }
-
-process.exit(result.ok ? 0 : 1);
