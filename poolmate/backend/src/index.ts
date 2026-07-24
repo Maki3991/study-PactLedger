@@ -3,6 +3,11 @@ import { createServer } from "./api/server.js";
 import { createBotRuntime } from "./bot/grammy/createBot.js";
 import { loadConfig } from "./config.js";
 import { PoolMateDatabase } from "./infrastructure/db/database.js";
+import { OrderRepository } from "./infrastructure/db/orderRepository.js";
+import { MockMerchantAdapter } from "./infrastructure/merchant/index.js";
+import { OrderService } from "./application/orderService.js";
+import { OrderServiceBotUseCases } from "./bot/orderServiceBotUseCases.js";
+import { TelegramWebAppIdentityVerifier } from "./api/telegramWebAppIdentityVerifier.js";
 
 const config = loadConfig();
 const database = new PoolMateDatabase(
@@ -11,15 +16,28 @@ const database = new PoolMateDatabase(
 );
 database.migrate();
 
+const orderService = new OrderService({
+  repository: new OrderRepository(database),
+  merchantQuoteProvider: new MockMerchantAdapter(),
+  publicBaseUrl: config.app.publicBaseUrl,
+  payerRef: config.funding.payerRef
+});
+const botUseCases = new OrderServiceBotUseCases(orderService);
+
 const botRuntime = createBotRuntime({
   token: config.telegram.token,
   allowedUserIds: config.telegram.allowedUserIds,
   apiRoot: config.telegram.apiRoot,
-  proxyUrl: config.telegram.proxyUrl
+  proxyUrl: config.telegram.proxyUrl,
+  useCases: botUseCases
 });
 const app = await createServer({
   config,
   database,
+  orderService,
+  identityVerifier: new TelegramWebAppIdentityVerifier({
+    botToken: config.telegram.token
+  }),
   getBotStatus: () => botRuntime.getStatus()
 });
 

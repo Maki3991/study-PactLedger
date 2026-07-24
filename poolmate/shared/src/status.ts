@@ -10,10 +10,7 @@ export type SettlementMode = "disabled" | "mock" | "testnet" | "live";
 
 export type BotStatus = "disabled" | "configured" | "running" | "error";
 
-export type PaymentBaseStatus =
-  | "not_configured"
-  | "configured"
-  | "unavailable";
+export type PaymentBaseStatus = "not_configured" | "configured" | "unavailable";
 
 export type ApiErrorCode =
   | "INVALID_REQUEST"
@@ -21,6 +18,23 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "ROUTE_NOT_FOUND"
   | "NOT_READY"
+  | "GROUP_NOT_FOUND"
+  | "ORDER_NOT_FOUND"
+  | "PARTICIPANT_NOT_FOUND"
+  | "INVALID_ORDER_STATE"
+  | "CAPACITY_EXCEEDED"
+  | "MERCHANT_NOT_VERIFIED"
+  | "INVALID_CHECKOUT"
+  | "CHECKOUT_EXPIRED"
+  | "CONFIRMATION_TOKEN_REQUIRED"
+  | "CONFIRMATION_NOT_FOUND"
+  | "CONFIRMATION_SUPERSEDED"
+  | "CONFIRMATION_IDENTITY_REQUIRED"
+  | "CONFIRMATION_IDENTITY_INVALID"
+  | "CONFIRMATION_ACTOR_MISMATCH"
+  | "INVALID_CONFIRMATION_STATE"
+  | "IDEMPOTENCY_CONFLICT"
+  | "PAYMENT_BASE_UNAVAILABLE"
   | "INTERNAL_ERROR";
 
 export interface LivenessResponse {

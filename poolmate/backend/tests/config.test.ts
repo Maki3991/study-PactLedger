@@ -24,6 +24,41 @@ test("loadConfig rejects credentials in the public URL", () => {
   );
 });
 
+test("Telegram requires an external HTTPS frontend origin", () => {
+  assert.throws(
+    () =>
+      loadConfig(
+        {
+          TELEGRAM_BOT_TOKEN: "telegram-secret",
+          POOLMATE_PUBLIC_BASE_URL: "http://localhost:8788"
+        },
+        "/tmp/poolmate-config-test"
+      ),
+    /external HTTPS frontend origin/
+  );
+  assert.throws(
+    () =>
+      loadConfig(
+        {
+          TELEGRAM_BOT_TOKEN: "telegram-secret",
+          POOLMATE_PUBLIC_BASE_URL: "https://poolmate.example.invalid"
+        },
+        "/tmp/poolmate-config-test"
+      ),
+    /external HTTPS frontend origin/
+  );
+  assert.equal(
+    loadConfig(
+      {
+        TELEGRAM_BOT_TOKEN: "telegram-secret",
+        POOLMATE_PUBLIC_BASE_URL: "https://poolmate.example.com"
+      },
+      "/tmp/poolmate-config-test"
+    ).app.publicBaseUrl,
+    "https://poolmate.example.com"
+  );
+});
+
 test("loadConfig normalizes non-secret runtime settings", () => {
   const config = loadConfig(
     {

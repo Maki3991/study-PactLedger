@@ -25,6 +25,10 @@ export interface PoolMateConfig {
   admin: {
     apiKey?: string;
   };
+  funding: {
+    mode: "sponsored_demo";
+    payerRef: string;
+  };
   paymentBase: {
     url?: string;
     apiKey?: string;
@@ -86,16 +90,27 @@ export function loadConfig(
 ): PoolMateConfig {
   const host = optional(env.POOLMATE_HOST) ?? "127.0.0.1";
   const port = parsePort(env.POOLMATE_PORT, 8788);
+  const telegramToken = optional(env.TELEGRAM_BOT_TOKEN);
+  const publicBaseUrl = normalizePublicBaseUrl(
+    env.POOLMATE_PUBLIC_BASE_URL,
+    `http://${host}:${port}`
+  );
+  const publicUrl = new URL(publicBaseUrl);
+  if (
+    telegramToken &&
+    (publicUrl.protocol !== "https:" || publicUrl.hostname.endsWith(".invalid"))
+  ) {
+    throw new Error(
+      "Telegram requires POOLMATE_PUBLIC_BASE_URL to be an external HTTPS frontend origin."
+    );
+  }
 
   return {
     app: {
       version: "0.1.0",
       host,
       port,
-      publicBaseUrl: normalizePublicBaseUrl(
-        env.POOLMATE_PUBLIC_BASE_URL,
-        `http://${host}:${port}`
-      )
+      publicBaseUrl
     },
     database: {
       path: path.resolve(
@@ -108,13 +123,18 @@ export function loadConfig(
       )
     },
     telegram: {
-      token: optional(env.TELEGRAM_BOT_TOKEN),
+      token: telegramToken,
       allowedUserIds: parseCsv(env.TELEGRAM_ALLOWED_USER_IDS),
       apiRoot: optional(env.TELEGRAM_API_ROOT) ?? "https://api.telegram.org",
       proxyUrl: optional(env.TELEGRAM_PROXY_URL)
     },
     admin: {
       apiKey: optional(env.POOLMATE_ADMIN_API_KEY)
+    },
+    funding: {
+      mode: "sponsored_demo",
+      payerRef:
+        optional(env.POOLMATE_SPONSORED_PAYER_REF) ?? "poolmate-sponsored-demo"
     },
     paymentBase: {
       url: optional(env.PAYMENT_BASE_URL),

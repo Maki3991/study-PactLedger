@@ -7,3 +7,11 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+interface Window {
+  Telegram?: {
+    WebApp?: {
+      initData?: string;
+    };
+  };
+}

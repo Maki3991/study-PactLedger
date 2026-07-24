@@ -4,9 +4,9 @@ import {
   Database,
   RefreshCw,
   Server,
-  ShieldCheck,
   TriangleAlert
 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   BotStatus,
   ConfigStatusResponse,
@@ -15,14 +15,29 @@ import type {
   SettlementMode
 } from "@poolmate/shared";
 import { configuredApiBaseUrl, type StatusApi } from "./api/statusApi";
+import type { OrdersApi } from "./api/ordersApi";
+import {
+  ConsoleHeader,
+  type ConsoleView
+} from "./components/ConsoleHeader";
 import { StatusCard, type Severity } from "./components/StatusCard";
 import {
   type ResourceState,
   useStatusDashboard
 } from "./hooks/useStatusDashboard";
+import { ConfirmationSurface } from "./orders/ConfirmationSurface";
+import { OrdersView } from "./orders/OrdersView";
+import { consumeConfirmationTokenFromLocation } from "./orders/confirmationToken";
 
 interface AppProps {
   api?: StatusApi;
+  ordersApi?: OrdersApi;
+  confirmationToken?: string;
+}
+
+interface RuntimeViewProps {
+  api?: StatusApi;
+  onNavigate(view: ConsoleView): void;
 }
 
 interface DisplayState {
@@ -267,7 +282,7 @@ function formatTimestamp(value?: string): string {
   }).format(new Date(value));
 }
 
-export default function App({ api }: AppProps) {
+function RuntimeView({ api, onNavigate }: RuntimeViewProps) {
   const { health, config, refresh, isRefreshing } = useStatusDashboard(api);
   const service = serviceDisplay(health);
   const database = databaseDisplay(health, config);
@@ -294,17 +309,11 @@ export default function App({ api }: AppProps) {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-block">
-          <span className="brand-mark" aria-hidden="true">
-            <ShieldCheck size={21} strokeWidth={1.8} />
-          </span>
-          <div>
-            <h1>PoolMate</h1>
-            <p>Operations console</p>
-          </div>
-        </div>
-        <div className="topbar__actions">
+      <ConsoleHeader
+        activeView="runtime"
+        onNavigate={onNavigate}
+        actions={
+          <>
           <span className={`overall overall--${overall.severity}`} role="status">
             <span aria-hidden="true" />
             {overall.label}
@@ -317,8 +326,9 @@ export default function App({ api }: AppProps) {
             />
             Refresh status
           </button>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <div className="content">
         {errors.length > 0 ? (
@@ -398,5 +408,50 @@ export default function App({ api }: AppProps) {
         </footer>
       </div>
     </main>
+  );
+}
+
+function readConsoleView(): ConsoleView {
+  return new URLSearchParams(window.location.search).get("view") === "orders"
+    ? "orders"
+    : "runtime";
+}
+
+export default function App({
+  api,
+  ordersApi,
+  confirmationToken
+}: AppProps) {
+  const isConfirmationRoute = /^\/confirm\/?$/.test(window.location.pathname);
+  const [routeToken] = useState(() => {
+    const locationToken = consumeConfirmationTokenFromLocation();
+    return confirmationToken ?? locationToken;
+  });
+  const [view, setView] = useState<ConsoleView>(readConsoleView);
+
+  useEffect(() => {
+    const handlePopState = () => setView(readConsoleView());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const navigate = useCallback((nextView: ConsoleView) => {
+    const url = new URL(window.location.href);
+    if (nextView === "runtime") {
+      url.searchParams.delete("view");
+    } else {
+      url.searchParams.set("view", nextView);
+    }
+    window.history.pushState({}, "", url);
+    setView(nextView);
+  }, []);
+
+  if (isConfirmationRoute) {
+    return <ConfirmationSurface token={routeToken} api={ordersApi} />;
+  }
+  return view === "orders" ? (
+    <OrdersView api={ordersApi} onNavigate={navigate} />
+  ) : (
+    <RuntimeView api={api} onNavigate={navigate} />
   );
 }

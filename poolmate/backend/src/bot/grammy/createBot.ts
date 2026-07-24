@@ -2,9 +2,11 @@ import { Bot, type BotConfig, type PollingOptions } from "grammy";
 import type { BotStatus } from "@poolmate/shared";
 import type { AgentRuntimeStatus } from "../../agent/agentRuntime.js";
 import type { BotAdapter } from "../botAdapter.js";
+import type { PoolMateBotUseCases } from "../poolMateBotUseCases.js";
 import { message, resolveLocale } from "../i18n.js";
 import type { PoolMateContext } from "./context.js";
 import { registerSystemHandlers } from "./handlers/systemHandlers.js";
+import { registerPoolHandlers } from "./handlers/poolHandlers.js";
 import { createAccessMiddleware } from "./middleware.js";
 import { createProxyFetch } from "./proxyFetch.js";
 
@@ -18,6 +20,7 @@ export interface CreateGrammyBotConfig {
   fetch?: NonNullable<BotConfig<PoolMateContext>["client"]>["fetch"];
   getBotStatus(): BotStatus;
   getAgentStatus?(): AgentRuntimeStatus;
+  useCases?: PoolMateBotUseCases;
 }
 
 export interface BotRuntimeConfig {
@@ -26,6 +29,7 @@ export interface BotRuntimeConfig {
   apiRoot?: string;
   proxyUrl?: string;
   getAgentStatus?(): AgentRuntimeStatus;
+  useCases?: PoolMateBotUseCases;
 }
 
 interface GrammyBotController {
@@ -59,6 +63,9 @@ export function createPoolMateBot(
     getBotStatus: config.getBotStatus,
     getAgentStatus: config.getAgentStatus
   });
+  if (config.useCases) {
+    registerPoolHandlers(bot, { useCases: config.useCases });
+  }
 
   bot.catch(async ({ error, ctx }) => {
     console.error(
@@ -95,7 +102,8 @@ export function createBotRuntime(
           apiRoot: config.apiRoot,
           fetch: createProxyFetch(config.proxyUrl),
           getBotStatus: () => status,
-          getAgentStatus: config.getAgentStatus
+          getAgentStatus: config.getAgentStatus,
+          useCases: config.useCases
         })
       : null;
 

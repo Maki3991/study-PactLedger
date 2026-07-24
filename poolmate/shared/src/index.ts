@@ -8,5 +8,30 @@ export type {
   LivenessResponse,
   PaymentBaseStatus,
   SettlementMode,
-  ServiceHealth
+  ServiceHealth,
 } from "./status.js";
+
+export type {
+  AllocationConfirmationStatus,
+  AllocationView,
+  AtomicMoney,
+  CheckoutView,
+  CheckoutHashView,
+  CheckoutItemView,
+  ClaimOrderRequest,
+  ConfirmationResult,
+  ConfirmationView,
+  CreateGroupRequest,
+  CreateOrderRequest,
+  FinalizeCheckoutRequest,
+  FinalizeCheckoutResult,
+  FundingMode,
+  GroupView,
+  MerchantView,
+  OrderDetailView,
+  OrderState,
+  OrderSummaryView,
+  ParticipantView,
+  PoolMatePaymentRequest,
+  UpdateClaimRequest,
+} from "./orders.js";

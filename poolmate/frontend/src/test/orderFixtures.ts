@@ -1,0 +1,153 @@
+import type {
+  ConfirmationResult,
+  ConfirmationView,
+  OrderDetailView,
+  OrderSummaryView
+} from "@poolmate/shared";
+
+const group = {
+  id: "group-1",
+  title: "Friday lunch",
+  createdAt: "2026-07-25T01:00:00.000Z"
+} as const;
+
+export const orderSummary: OrderSummaryView = {
+  id: "order-1",
+  title: "Team dumplings",
+  group,
+  state: "READY_FOR_PAYMENT",
+  fundingMode: "sponsored_demo",
+  targetUnits: 3,
+  claimedUnits: 3,
+  participantCount: 2,
+  checkoutVersion: 1,
+  expiresAt: "2099-07-25T04:00:00.000Z",
+  createdAt: "2026-07-25T01:10:00.000Z",
+  updatedAt: "2026-07-25T02:00:00.000Z"
+};
+
+export const orderDetail: OrderDetailView = {
+  ...orderSummary,
+  participants: [
+    {
+      id: "participant-1",
+      displayName: "Alex",
+      units: 1,
+      joinedAt: "2026-07-25T01:20:00.000Z"
+    },
+    {
+      id: "participant-2",
+      displayName: "Bo",
+      units: 2,
+      joinedAt: "2026-07-25T01:25:00.000Z"
+    }
+  ],
+  checkout: {
+    id: "checkout-1",
+    version: 1,
+    hash: {
+      algorithm: "SHA-256",
+      canonicalizationVersion: "poolmate-checkout-json-v1",
+      value: "sha256:checkout-v1"
+    },
+    merchant: {
+      id: "merchant-1",
+      displayName: "Verified Kitchen",
+      payeeId: "merchant-demo",
+      verified: true
+    },
+    items: [
+      {
+        sku: "DUMPLING-BOX",
+        name: "Dumpling box",
+        quantity: "3",
+        unitAmountAtomic: "500"
+      }
+    ],
+    goods: { assetId: "inj", amountAtomic: "1500" },
+    shipping: { assetId: "inj", amountAtomic: "100" },
+    discount: { assetId: "inj", amountAtomic: "100" },
+    fee: { assetId: "inj", amountAtomic: "0" },
+    total: { assetId: "inj", amountAtomic: "1500" },
+    expiresAt: "2099-07-25T04:00:00.000Z",
+    createdAt: "2026-07-25T01:50:00.000Z",
+    allocations: [
+      {
+        participantId: "participant-1",
+        displayName: "Alex",
+        units: 1,
+        money: { assetId: "inj", amountAtomic: "500" },
+        confirmationStatus: "confirmed",
+        confirmedAt: "2026-07-25T01:55:00.000Z"
+      },
+      {
+        participantId: "participant-2",
+        displayName: "Bo",
+        units: 2,
+        money: { assetId: "inj", amountAtomic: "1000" },
+        confirmationStatus: "confirmed",
+        confirmedAt: "2026-07-25T01:58:00.000Z"
+      }
+    ]
+  },
+  paymentRequest: {
+    id: "payment-request-1",
+    orderId: "order-1",
+    checkoutId: "checkout-1",
+    checkoutVersion: 1,
+    checkoutHash: "sha256:checkout-v1",
+    confirmationSetId: "confirmation-set-1",
+    idempotencyKey: "poolmate:order-1:checkout-1:v1",
+    payerRef: "demo-treasury",
+    payeeId: "merchant-demo",
+    money: { assetId: "inj", amountAtomic: "1500" },
+    expiresAt: "2099-07-25T04:00:00.000Z",
+    status: "ready",
+    createdAt: "2026-07-25T02:00:00.000Z"
+  }
+};
+
+export const confirmation: ConfirmationView = {
+  orderId: "order-1",
+  orderTitle: "Team dumplings",
+  participantDisplayName: "Alex",
+  checkoutVersion: 1,
+  checkoutHash: {
+    algorithm: "SHA-256",
+    canonicalizationVersion: "poolmate-checkout-json-v1",
+    value: "sha256:checkout-v1"
+  },
+  merchant: {
+    id: "merchant-1",
+    displayName: "Verified Kitchen",
+    payeeId: "merchant-demo",
+    verified: true
+  },
+  items: [
+    {
+      sku: "DUMPLING-BOX",
+      name: "Dumpling box",
+      quantity: "3",
+      unitAmountAtomic: "500"
+    }
+  ],
+  participantUnits: 1,
+  goods: { assetId: "inj", amountAtomic: "1500" },
+  shipping: { assetId: "inj", amountAtomic: "100" },
+  discount: { assetId: "inj", amountAtomic: "100" },
+  fee: { assetId: "inj", amountAtomic: "0" },
+  orderTotal: { assetId: "inj", amountAtomic: "1500" },
+  money: { assetId: "inj", amountAtomic: "500" },
+  expiresAt: "2099-07-25T04:00:00.000Z",
+  status: "pending"
+};
+
+export const confirmationResult: ConfirmationResult = {
+  confirmation: {
+    ...confirmation,
+    status: "confirmed",
+    confirmedAt: "2026-07-25T02:00:00.000Z"
+  },
+  orderState: "READY_FOR_PAYMENT",
+  paymentRequestCreated: true
+};

@@ -132,6 +132,14 @@ export class PoolMateDatabase {
     }
   }
 
+  read<T>(operation: (connection: Database.Database) => T): T {
+    return operation(this.sqlite);
+  }
+
+  immediate<T>(operation: (connection: Database.Database) => T): T {
+    return this.sqlite.transaction(operation).immediate(this.sqlite);
+  }
+
   close(): void {
     this.sqlite.close();
   }
