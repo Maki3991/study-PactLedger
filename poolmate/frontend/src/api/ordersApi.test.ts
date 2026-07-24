@@ -123,6 +123,39 @@ describe("orders API", () => {
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
+  it("accepts isolated mock evidence without treating it as chain settlement", async () => {
+    const demoOrder = {
+      ...orderDetail,
+      state: "DEMO_CONFIRMED" as const,
+      paymentRequest: {
+        ...orderDetail.paymentRequest!,
+        status: "demo_confirmed" as const
+      },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "DEMO_CONFIRMED" as const,
+        settlementMode: "mock" as const,
+        receipt: {
+          receiptId: "mock-receipt-1",
+          transactionHash: "mock-hash",
+          explorerUrl: "http://mock.invalid/receipt/mock-hash",
+          confirmedAt: "2026-07-25T02:01:00.000Z"
+        }
+      },
+      paymentOutbox: {
+        ...orderDetail.paymentOutbox!,
+        status: "completed" as const
+      }
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(demoOrder))
+    );
+
+    await expect(
+      createOrdersApi().getOrder("order-1", "admin-secret")
+    ).resolves.toEqual(demoOrder);
+  });
+
   it.each([
     [
       "legacy string hash",

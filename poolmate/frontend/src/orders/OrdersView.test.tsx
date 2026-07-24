@@ -130,6 +130,41 @@ describe("orders console", () => {
     expect(api.recoverPayment).toHaveBeenCalledWith("order-1", "admin-secret");
   });
 
+  it("keeps mock evidence visibly separate from verified settlement", async () => {
+    window.history.replaceState({}, "", "/?view=orders");
+    authenticateAdmin();
+    const demoOrder: typeof orderDetail = {
+      ...orderDetail,
+      state: "DEMO_CONFIRMED",
+      paymentRequest: {
+        ...orderDetail.paymentRequest!,
+        status: "demo_confirmed"
+      },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "DEMO_CONFIRMED",
+        settlementMode: "mock",
+        receipt: {
+          receiptId: "mock-receipt-1",
+          transactionHash: "mock-hash",
+          explorerUrl: "http://mock.invalid/receipt/mock-hash",
+          confirmedAt: "2026-07-25T02:01:00.000Z"
+        }
+      },
+      paymentOutbox: {
+        ...orderDetail.paymentOutbox!,
+        status: "completed"
+      }
+    };
+
+    render(<App ordersApi={ordersApi({ getOrder: vi.fn(async () => demoOrder) })} />);
+
+    expect(await screen.findByText("Demo confirmed")).toBeVisible();
+    expect(screen.getByText(/No chain payment occurred/)).toBeVisible();
+    expect(screen.queryByText("Paid / verified")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open receipt" })).not.toBeInTheDocument();
+  });
+
   it("keeps stale list data visible while a refresh is pending", async () => {
     window.history.replaceState({}, "", "/?view=orders");
     authenticateAdmin();

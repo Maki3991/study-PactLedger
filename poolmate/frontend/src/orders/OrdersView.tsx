@@ -26,7 +26,8 @@ import {
   confirmationStateMeta,
   formatAtomicMoney,
   formatDateTime,
-  orderStateMeta
+  orderStateMeta,
+  verifiableSettlementReceipt
 } from "./orderDisplay";
 import { StateBadge } from "./StateBadge";
 import { AdminAccessGate } from "./AdminAccessGate";
@@ -231,7 +232,7 @@ function OrderDetail({
   const state = orderStateMeta[order.state];
   const projection = order.paymentProjection;
   const outbox = order.paymentOutbox;
-  const receipt = projection?.receipt;
+  const receipt = verifiableSettlementReceipt(projection);
   const fundingLabel =
     order.fundingMode === "sponsored_demo"
       ? "Sponsored demo / participants not funded"

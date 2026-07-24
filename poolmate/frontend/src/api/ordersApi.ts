@@ -262,14 +262,25 @@ function isPaymentProjection(value: unknown): value is PaymentProjectionView {
   ) {
     return false;
   }
-  if (value.receipt === undefined) return value.status !== "CONFIRMED";
+  if (value.receipt === undefined) {
+    return value.status !== "CONFIRMED" && value.status !== "DEMO_CONFIRMED";
+  }
+  if (
+    !isRecord(value.receipt) ||
+    !isNonEmptyString(value.receipt.receiptId) ||
+    typeof value.receipt.transactionHash !== "string" ||
+    typeof value.receipt.explorerUrl !== "string" ||
+    !isIsoDate(value.receipt.confirmedAt)
+  ) {
+    return false;
+  }
+  if (value.status === "DEMO_CONFIRMED") {
+    return value.settlementMode === "mock";
+  }
   return (
-    isRecord(value.receipt) &&
-    isNonEmptyString(value.receipt.receiptId) &&
     isNonEmptyString(value.receipt.transactionHash) &&
     isNonEmptyString(value.receipt.explorerUrl) &&
     value.receipt.explorerUrl.startsWith("https://") &&
-    isIsoDate(value.receipt.confirmedAt) &&
     value.status === "CONFIRMED" &&
     (value.settlementMode === "testnet" || value.settlementMode === "live")
   );

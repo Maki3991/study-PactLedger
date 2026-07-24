@@ -1,7 +1,8 @@
 import type {
   AllocationConfirmationStatus,
   AtomicMoney,
-  OrderState
+  OrderState,
+  PaymentProjectionView
 } from "@poolmate/shared";
 import type { Severity } from "../components/StatusCard";
 
@@ -52,4 +53,28 @@ export function formatDateTime(value: string): string {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+export function verifiableSettlementReceipt(
+  projection: PaymentProjectionView | undefined
+): PaymentProjectionView["receipt"] | undefined {
+  const receipt = projection?.receipt;
+  if (
+    projection?.status !== "CONFIRMED" ||
+    (projection.settlementMode !== "testnet" &&
+      projection.settlementMode !== "live") ||
+    !receipt?.receiptId.trim() ||
+    !receipt.transactionHash.trim() ||
+    !Number.isFinite(new Date(receipt.confirmedAt).getTime())
+  ) {
+    return undefined;
+  }
+  try {
+    const explorer = new URL(receipt.explorerUrl);
+    return explorer.protocol === "https:" && explorer.hostname
+      ? receipt
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
