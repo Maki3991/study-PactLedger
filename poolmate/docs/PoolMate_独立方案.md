@@ -75,6 +75,43 @@ Gate 0 验收：
 
 GitHub 元数据当前未声明该上游的开源许可证。执行导入前，项目负责人必须确认团队拥有使用和分发该代码的权利。
 
+### 2.2 Telegram Framework 基线
+
+CodexClaw 上游使用 Telegraf，新 PoolMate 不继续使用 Telegraf。P0 必须完成到 [grammY](https://grammy.dev/) 的一次性迁移，之后才能开始写 PoolMate Telegram 业务 Handler。
+
+目标目录：
+
+```text
+poolmate/backend/src/bot/
+  botAdapter.ts             应用内部 Telegram 端口
+  grammy/
+    createBot.ts            grammY Bot 创建和启停
+    context.ts              PoolMate Context 扩展
+    middleware.ts           访问控制、幂等和错误处理
+    keyboards.ts            InlineKeyboard 构造
+    handlers/               grammY command/message/callback handlers
+  formatter.ts              无框架的文本格式化
+  i18n.ts                   无框架的文案选择
+```
+
+迁移范围：
+
+1. 将 `telegraf` 直接依赖替换为 `grammy`，版本由 lockfile 固定。
+2. `new Telegraf()` 替换为 grammY `Bot`，保留 Token 缺失时不启动的行为。
+3. Telegraf `Markup` 替换为 grammY `InlineKeyboard`，callback data 继续使用后端定义的稳定格式。
+4. Telegraf `Context` / `MiddlewareFn` 替换为 grammY 类型，但 grammY 类型只能出现在 `src/bot/grammy/` 内。
+5. 保留 allowed user/chat 访问控制、代理配置、超时、限流、脱敏日志和统一错误处理。
+6. `AgentRuntime`、Domain 和 Application Service 只依赖 `BotAdapter`，不接收 grammY `Context` 或 Telegram Update 作为业务输入。
+7. 旧 Telegraf 测试迁移为 grammY update fixture 测试，覆盖 command、message、callback query、重复 update 和 Bot API 失败。
+
+grammY 迁移验收：
+
+- `backend/package.json` 不再直接依赖 `telegraf`；
+- `backend/src/` 不存在来自 `telegraf` 的 production import；
+- grammY 类型不进入 Domain、Application、shared DTO 或数据库 schema；
+- Bot 在 Token 缺失、Token 存在和 Telegram API 不可用三种状态下都可被健康检查如实表达；
+- grammY 的 command、message、callback query 和访问控制测试通过。
+
 ## 3. PoolMate 自有领域
 
 最少保存：
@@ -217,7 +254,7 @@ P0 不接 A2A、AP2、Testnet，也不调用现有 Demo 支付端点。P0 不是
 | 工程师 | 负责范围 | 主要输出 | 禁止越界 |
 |---|---|---|---|
 | A：Backend / Contract | `backend/src/api/`、`backend/src/domain/`、`backend/src/application/`、`backend/src/infrastructure/db/`、`shared/`、`migrations/` | Fastify 组装、health/config status、独立 DB、首个 migration、API 测试 | 不修改 Bot 文案和 Frontend |
-| B：Runtime / Bot | `backend/src/agent/`、`backend/src/bot/`、`backend/src/runtime/` 及对应测试 | CodexClaw 删改、AgentRuntime、Telegraf 初始化、Bot disabled/configured 状态 | 不修改 shared 契约、DB schema 和 API 路由 |
+| B：Runtime / Bot | `backend/src/agent/`、`backend/src/bot/`、`backend/src/runtime/` 及对应测试 | CodexClaw 删改、AgentRuntime、Telegraf 到 grammY 迁移、`BotAdapter`、Bot disabled/configured 状态 | 不修改 shared 契约、DB schema 和 API 路由 |
 | C：Frontend / Delivery | `frontend/`、`deploy/`、前端与 E2E 测试 | 真实状态面板、错误/加载/空状态、Docker/service/env 模板 | 不制作演示付款数据，不直连基座或 DB |
 
 Window 1 期间可以同时开工，因为三路只通过 Gate 1 冻结的 DTO 交互，不共同修改同一业务文件。
@@ -241,6 +278,7 @@ Gate 2 必须同时通过：
 4. Backend、Frontend 分别通过 lint、typecheck、test 和 build。
 5. migration 可在空数据库执行，重复执行不损坏现有状态。
 6. Docker 验收通过，且无 `web/` import、无嵌套 `.git`、无前端秘密。
+7. Telegram 运行时只使用 grammY，生产代码无 Telegraf import，业务代码无 grammY 类型泄漏。
 
 ## 8. P1-P2 三工程师并行方案
 
@@ -249,7 +287,7 @@ Gate 2 必须同时通过：
 P0 之后继续使用相同所有权：
 
 - A 是 Domain、Application Service、API contract、DB schema、migration 编号和 `shared/` 的唯一所有者。
-- B 是 Agent Runtime、Telegram Adapter、Merchant/Payment 外部 Adapter 和 Bot 文案的唯一所有者。
+- B 是 Agent Runtime、grammY Telegram Adapter、Merchant/Payment 外部 Adapter 和 Bot 文案的唯一所有者。
 - C 是 Frontend、浏览器 E2E、容器与部署模板的唯一所有者。
 - `backend/package.json` 和后端锁文件只由 A 修改；B 如需依赖，提交明确的依赖需求由 A 统一落地。
 - `frontend/package.json` 和前端锁文件只由 C 修改。
@@ -261,7 +299,7 @@ P0 之后继续使用相同所有权：
 | 工程师 | 并行任务 | 交付证据 |
 |---|---|---|
 | A | Order/Participant 状态机、份额锁定、不可变 Checkout、canonical hash、atomic Allocation、Confirmation Round/Set、事务与并发测试 | 从 `DRAFT` 稳定到 `READY_FOR_PAYMENT`；少一人确认时 payment request 为 0 |
-| B | Telegram 创建/发布/认领/修改/退出，Structured Output 只生成 Draft Patch，固定 Mock Merchant Adapter，确认链接私聊发送 | 重复 update/callback 幂等；LLM 无法修改金额、payee 或状态 |
+| B | 基于 grammY 实现 Telegram 创建/发布/认领/修改/退出，Structured Output 只生成 Draft Patch，固定 Mock Merchant Adapter，确认链接私聊发送 | 重复 update/callback 幂等；LLM 无法修改金额、payee 或状态；grammY `Context` 不越过 Bot Adapter |
 | C | Trusted Confirmation Surface、订单/Checkout/确认管理页、倒计时、过期/失效/拒绝状态 | 页面不接受金额和 payee 输入；服务端 canonical 数据是唯一事实源 |
 
 P1 汇合 Gate：三名参与人可完成认领和逐人确认，最后一人并发确认只生成一个 `ConfirmationSet` 和一个稳定 payment request，订单停在 `READY_FOR_PAYMENT`。
@@ -283,7 +321,7 @@ P2 汇合 Gate：基座不可用时，订单保持 `READY_FOR_PAYMENT` 或受控
 功能合并后再次三路并行，此时三人不再增加功能：
 
 - A：状态机、事务、幂等、故障注入、migration 和重启恢复。
-- B：三名 Telegram 测试用户、重复 callback、过期 Checkout、非白名单收款方和 Bot 文案真实性。
+- B：grammY update fixture、三名 Telegram 测试用户、重复 callback、过期 Checkout、非白名单收款方和 Bot 文案真实性。
 - C：桌面/移动端浏览器 E2E、可访问性、容器冷启动、秘密扫描和无 `web/` 依赖检查。
 
 任一路失败都不得对外宣称完成 P2。
