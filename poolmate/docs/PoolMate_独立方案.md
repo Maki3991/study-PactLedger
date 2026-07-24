@@ -1,8 +1,9 @@
 # PoolMate 独立方案
 
-> 状态：待执行（三工程师并行版）
+> 状态：G0 / P0 / P1 / P2 / P4 已实现并完成本地验收；P3 等待支付基座发布稳定远端契约
 > 边界：新 PoolMate 是独立后端、独立 Telegram Bot、独立管理面板和独立数据库，全部放在顶层 `poolmate/`。
 > 约束：不修改 `web/` 中现有支付基座的代码和接口，不导入其内部 Service，不共享数据库。
+> 验收时间：2026-07-25
 
 ## 1. 结论
 
@@ -206,26 +207,37 @@ amount       = 只在可无损转换时填入旧 number 字段
 
 | 阶段 | 交付 | 验收 | 并行方式 |
 |---|---|---|---|
-| G0 导入基线 | CodexClaw 固定版本、无嵌套 `.git`、原始质量门 | 可追踪且不是子仓库 | 串行，仅 A |
-| P0 独立骨架 | Backend、Frontend、Bot、DB、独立构建与部署 | 不启动 `web/` 也可运行 PoolMate | A/B/C 三路并行 |
-| P1 业务链 | Order、Checkout、Allocation、ConfirmationSet | 稳定进入 `READY_FOR_PAYMENT`，不触发付款 | A/B/C 三路并行 |
-| P2 支付边界 | `PaymentBaseClient`、outbox、幂等键、失败投影 | 基座不可用时不丢单、不伪造结果 | A/B/C 三路并行 |
-| P3 基座联调 | 只调用基座已有的可远程接口 | 同一请求重放返回原 Trace，confirmed Receipt 才转 `PAID` | 等待外部条件后再排期 |
-| P4 管理面板 | 群、订单、确认、异常、付款证据 | 所有状态来自 PoolMate Backend，前端不推测资金结果 | 页面随 P0-P2 增量交付 |
+| G0 导入基线 | 已完成 | 固定 CodexClaw commit、删除嵌套 `.git`、`upstream.json` 记录来源和原始质量门 | `1924790` |
+| P0 独立骨架 | 已完成 | 独立 Fastify / SQLite / React / grammY，可在不启动 `web/` 时构建和运行 | `ad0659e` |
+| P1 业务链 | 已完成 | Order、Checkout、Allocation、ConfirmationSet 稳定进入 `READY_FOR_PAYMENT` | `effc2ec` |
+| P2 契约冻结 | 已完成 | 共享支付请求、projection、outbox、settlement mode 和错误契约 | `f8b9314` |
+| P2 持久化编排 | 已完成 | 稳定 operation ID、单次 claim、lease、UNKNOWN 隔离、只读恢复和持久化 Receipt 门 | `e21ddf9` |
+| P2 外部边界 | 已完成 | HTTPS PaymentBaseClient、服务端鉴权、超时/错误归一化、真实 Bot 文案和恢复定时器 | `82f9385` |
+| P3 基座联调 | 外部阻塞 | 仍无可从独立进程调用的稳定支付接口；未调用 Demo 端点、未修改 `web/`、未宣称真实付款 | 待基座发布契约 |
+| P4 管理面板 | 已完成 | 展示订单、确认、payment projection、outbox、恢复入口和 Receipt 证据；Mock 证据边界由 `1b8f132` 加固 | `82f9385`、`1b8f132` |
 
 P3 的进入条件是支付基座已经存在可从独立进程调用的稳定接口。本方案不通过修改 `web/`、共享数据库、导入基座源码或调用 Demo 端点创造该条件。
 
 ## 6. 验收门
 
-- [ ] 代码和运行配置全部位于 `poolmate/`。
-- [ ] PoolMate 不 import `web/` 内部模块，不读写其数据库表。
-- [ ] Backend（含 Bot）与 Frontend 可分别构建与部署。
-- [ ] Checkout 不完整、Allocation 不平或少一人确认时，PaymentBaseClient 调用数为 0。
-- [ ] 支付基座不可用时，订单保持 `READY_FOR_PAYMENT/PAYMENT_UNKNOWN`，不自动重复付款。
-- [ ] 相同 order/checkout version 只生成一个本地 Payment Request 和一个稳定幂等键。
-- [ ] 没有可接受的 Testnet/Live confirmed Receipt 时，Bot、API 和管理面板都不显示“已付款”。
-- [ ] Mock、Testnet 和真实成员出资在数据和 UI 中不混淆。
-- [ ] 首期不声明已使用 A2A 或 AP2。
+- [x] 代码和运行配置全部位于 `poolmate/`。
+- [x] PoolMate 不 import `web/` 内部模块，不读写其数据库表。
+- [x] Backend（含 Bot）与 Frontend 可分别构建与部署。
+- [x] Checkout 不完整、Allocation 不平或少一人确认时，PaymentBaseClient 调用数为 0。
+- [x] 支付基座不可用时，订单保持 `READY_FOR_PAYMENT/PAYMENT_UNKNOWN`，不自动重复付款。
+- [x] 相同 order/checkout version 只生成一个本地 Payment Request 和一个稳定幂等键。
+- [x] 没有可接受的 Testnet/Live confirmed Receipt 时，Bot、API 和管理面板都不显示“已付款”。
+- [x] Mock、Testnet 和真实成员出资在数据和 UI 中不混淆。
+- [x] 首期不声明已使用 A2A 或 AP2。
+
+### 6.1 2026-07-25 验收证据
+
+- Backend CI：typecheck、lint、format、`86/86` tests、build、空库 healthcheck、生产依赖 audit 全部通过。
+- Frontend：lint、typecheck、`28/28` tests 和 build 全部通过；shared typecheck/build 通过。
+- Docker 从独立空 volume 冷启动成功，`/health` 与 `/health/ready` 报告 5 个 migration，Bot 和 Payment Base 未配置时如实显示 `disabled`。
+- 响应式 CSS、DOM 状态、管理员 gate 和 jsdom 交互测试已检查。当前 Codex 桌面会话没有提供可控制的浏览器实例，因此未生成桌面/移动真实浏览器截图，也未将浏览器 E2E 标记为通过。
+- 静态边界检查无嵌套 `.git`、无 submodule、无 Telegraf production import、无 `web/` import；grammY 类型未进入 Domain、Application、shared DTO 或数据库 schema。
+- 未执行真实 Telegram 群聊、外部 HTTPS Mini App 或 Injective Testnet/Live 付款，这些不属于已完成证据。
 
 ## 7. 首个实现包：P0 三工程师版
 
