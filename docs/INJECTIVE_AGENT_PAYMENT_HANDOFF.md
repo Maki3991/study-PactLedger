@@ -1,144 +1,119 @@
 # PactLedger × Injective Agent 支付接入交接
 
-> 面向链上开发队友。目标不是把股票搬到链上交易，而是让 Agent 的预算、服务采购、拼单结算与执行证据通过 Injective 完成可信结算。
+> 目标：让 PactLedger 已批准的 `AgentPaymentIntent` 在 Injective Testnet 完成真实结算，并产生可验证、可恢复、不可重复支付的 `SettlementReceipt`。
+> 产品口径以 [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) 为准。
 
-## 1. 当前 MVP 到了哪里
+## 1. 先统一正确边界
 
-当前生产服务：`http://129.226.91.246:8787`
+Injective 在本项目中负责：
 
-- `/`：PactLedger 通用基座落地页。
-- `/kaleidox.html`：股票量化产品实例，已跑通登录、Panda 数据 Provider、策略回测、Policy 纠偏、人工批准与 Mock Receipt。
-- `/poolmate.html`：群聊拼单产品实例，展示同一组 Account / Policy / Intent / Receipt 原语如何映射到第二种业务。
-- PostgreSQL 已持久化用户、会话、任务、Agent 账户和审计流水。
-- Injective 当前为 `MockInjectiveAdapter`；配置、状态查询和 Adapter 接口已经预留。
+- Agent 间服务采购，例如 Strategy 向 Risk 支付审核费。
+- Agent 向白名单外部服务或商户付款。
+- 退款、退差等后续结算。
+- 提供交易哈希、区块高度和 Explorer 证据。
 
-现有边界：
+Injective 不负责：
 
-```text
-业务 Agent
-  → Action Intent
-  → PactLedger Policy
-  → 人工批准
-  → ExecutionAdapter.execute(intent)
-  → Receipt
-```
+- 提供 A 股行情；数据来自 PandaAI。
+- 在 Injective 上买卖或托管真实 A 股。
+- 替代未来证券 Broker。
+- 接收 KaleidoX 的 `stock_trade ActionIntent` 直接下链上现货订单。
 
-关键代码：
+演示统一说法：
 
-- `web/src/domain/trading.ts`：`ActionIntent`、状态机和前后端稳定领域模型。
-- `web/server/orchestrator.ts`：Policy 纠偏、批准和执行编排。
-- `web/server/adapters/execution.ts`：当前 Adapter 接口与 Mock 实现。
-- `web/server/adapters/createExecutionAdapter.ts`：按环境选择 Adapter。
-- `web/server/config/injective.ts`：服务端配置与脱敏状态。
-- `web/server/treasury.ts`：Agent 账户和内部服务费流水。
+> PandaAI 提供股票数据，KaleidoX 生成研究与业务动作，PactLedger 控制 Agent 能否花钱，Injective 结算 Agent 支付并留下 Receipt。
 
-## 2. 必须统一的产品口径
+## 2. 当前代码状态
 
-KaleidoX 只做股票量化，不做 ETH 或加密资产策略。
+已具备：
 
-Injective 在本项目中的职责是：
+- 通用 `AgentPaymentIntent`、`PolicyDecision`、`SettlementReceipt` 领域模型。
+- `SettlementAdapter` 接口。
+- 可复现的 `MockInjectiveAdapter`。
+- `testnet` 配置读取、私钥脱敏和未就绪阻断。
+- PostgreSQL Intent / Decision / Receipt 三表持久化、幂等读取与最近 Testnet Receipt 查询。
+- KaleidoX Risk 服务费与 PoolMate 商户付款均复用通用 `PactLedgerService` / `SettlementAdapter` 边界。
+- `InjectiveTestnetSettlementAdapter` 已使用官方 SDK `MsgSend` 实现直接转账，包含白名单、denom/精度、原子金额、地址/签名一致性、区块确认 Receipt 与稳定错误码。
+- 并发相同 Intent 只调用一次 Adapter；已确认或失败 Receipt 在重启后可恢复。
+- lint、生产构建与 API tests `37/37` 已通过，其中包含 Injective Adapter、配置、幂等与中断状态测试。
 
-1. Agent 间服务采购结算，例如 Strategy Agent 向 Research / Backtest / Risk Agent 付款。
-2. 用户向 Agent 授权预算后的资金拨付与支出记录。
-3. PoolMate 向商户付款、退款、退差等结算动作。
-4. 为每次付款生成可验证的链上 Receipt。
+尚未具备：
 
-Injective 暂不负责：
+- 已确认的真实 Testnet Receipt。
+- 可验证的 Treasury 合约部署 Manifest。
+- 广播超时后的链上查询与恢复。
+- 真实钱包、白名单收款地址、支付 denom/精度与测试币配置。
 
-- 提供 A 股行情；行情来自 PandaAI。
-- 在链上撮合或托管真实 A 股。
-- 替代未来的证券 Broker Adapter。
+当前中断保护：如果服务重启后发现 Intent 停在 `settling`，系统会生成 `SETTLEMENT_RECOVERY_REQUIRED` 失败 Receipt 并停止自动重播，以优先避免双花。这是安全隔离，不是链上恢复；后续仍需通过交易哈希或 `PactLedger:<intentId>` memo 查询链上结果。
 
-演示时应说：
-
-> PandaAI 给股票 Agent 提供研究数据，PactLedger 控制 Agent 能否花钱，Injective 结算 Agent 支付并留下 Receipt。
-
-不要说“我们在 Injective 上买卖 A 股”。
-
-## 3. 建议拆分：业务动作与链上支付
-
-当前 `ActionIntent` 表达的是股票业务动作。不要直接把 `stock_trade` 当作链上转账参数。建议新增独立的支付模型：
+当前关键接口：
 
 ```ts
-export interface AgentPaymentIntent {
-  id: string
-  tenantId: string
-  appId: 'kaleidox' | 'poolmate'
-  payerAgentId: string
-  payeeAddress: string
-  amountAtomic: string
-  denom: string
-  purpose: 'research' | 'backtest' | 'risk_review' | 'execution' | 'merchant_pay' | 'refund'
-  protocol: 'internal' | 'x402' | 'acp' | 'ap2'
-  policyDecisionId: string
-  expiresAt: string
-  metadataHash: string
-}
-
-export interface SettlementReceipt {
-  intentId: string
-  network: 'Injective Testnet'
-  chainId: string
-  txHash: string
-  height: string
-  blockTime: string
-  status: 'confirmed' | 'failed'
-  feeAmount?: string
-  feeDenom?: string
-  contractAddress?: string
-  explorerUrl: string
+export interface SettlementAdapter {
+  settle(intent: AgentPaymentIntent): Promise<SettlementReceipt>
 }
 ```
 
-关联关系：
+位置：
 
 ```text
-股票 ActionIntent
-  └─ 触发 Execution Agent 服务费 PaymentIntent
-      └─ Injective SettlementReceipt
-
-PoolMate group_purchase Intent
-  └─ 触发 merchant_pay PaymentIntent
-      └─ Injective SettlementReceipt
+web/src/domain/pactledger.ts
+web/server/adapters/execution.ts
+web/server/adapters/createExecutionAdapter.ts
+web/server/pactledger/
+web/server/config/injective.ts
 ```
 
-这样可以确保业务层未来接证券 Broker 时，不需要重写 Agent 支付层。
+## 3. 第一笔真实交易
 
-## 4. 链上队友需要交付的 Deployment Manifest
+P0 只做一笔非常小的测试网付款：
 
-请链上队友不要只发一个合约地址。交付以下完整信息：
-
-```dotenv
-INJECTIVE_EXECUTION_MODE=testnet
-INJECTIVE_NETWORK=testnet
-INJECTIVE_CHAIN_ID=injective-888
-INJECTIVE_RPC_ENDPOINT=
-INJECTIVE_REST_ENDPOINT=
-INJECTIVE_GRPC_ENDPOINT=
-INJECTIVE_WALLET_ADDRESS=
-INJECTIVE_PRIVATE_KEY=
-INJECTIVE_CONTRACT_ADDRESS=
-INJECTIVE_FEE_DENOM=inj
-INJECTIVE_GAS_PRICE=500000000
-INJECTIVE_PAYMENT_DENOM=
-INJECTIVE_EXPLORER_TX_BASE_URL=
+```text
+appId       = kaleidox
+payer       = strategy
+payee       = risk
+purpose     = risk_review
+protocol    = internal
+amount      = 小额测试资产
 ```
 
-还需要一份文字或 JSON 清单：
+理由：
 
-- 合约网络、部署高度、部署交易哈希。
-- 合约地址和代码版本 / Git commit。
-- 支付资产 denom、精度和测试币领取方式。
-- execute 消息 schema。
-- 成功事件 schema 与失败错误码。
-- 重放 / 幂等策略。
-- Explorer 交易链接格式。
+- 业务语义最容易解释。
+- 金额小，风险低。
+- 正好位于风控否决的 Demo 转折。
+- 可以证明“股票不用上链，Agent 服务费可以上链”。
 
-私钥只能放在服务器 `web/.env`，权限保持 `600`；不能使用 `VITE_` 前缀，不能提交 Git。
+第二笔再做：
 
-## 5. 推荐的最小链上合约能力
+```text
+appId       = poolmate
+payer       = poolmate-treasury
+payee       = merchant-demo
+purpose     = merchant_pay
+```
 
-如果时间紧，测试网 MVP 只做一个 Treasury 支付入口：
+两笔必须复用同一个 Adapter。
+
+## 4. 推荐实现路线
+
+### 路线 A：直接 Testnet 转账（当前已实现）
+
+当前 `web/server/adapters/injectiveTestnet.ts` 已使用 Injective 官方 SDK 在服务端发送 `MsgSend`：
+
+1. 从服务端环境读取私钥。
+2. 校验 Intent 已由 PactLedger Policy 批准。
+3. 将业务 `currency` 映射为链上 denom 与原子单位。
+4. 构造转账消息。
+5. 签名并广播。
+6. 要求 SDK 返回 `code=0`、交易哈希与有效区块高度。
+7. 生成并持久化 Receipt。
+
+代码与单元测试已完成；尚未提供真实钱包/资产/测试币，因此没有真实广播与 Explorer Receipt。此时策略由 PactLedger 服务端强制，链负责结算与证据。不要宣称“Policy 已被合约锁死”。
+
+### 路线 B：Treasury 合约（更强）
+
+如果链上队友能及时交付，可调用支付合约：
 
 ```json
 {
@@ -149,20 +124,20 @@ INJECTIVE_EXPLORER_TX_BASE_URL=
     "denom": "...",
     "amount": "2500000",
     "purpose_hash": "sha256:...",
-    "policy_decision_id": "POL-...",
+    "policy_decision_id": "PDEC-...",
     "expires_at": 1780000000
   }
 }
 ```
 
-推荐在链上至少再次检查：
+合约至少检查：
 
-- `intent_id` 未执行过，避免重放。
+- `intent_id` 未执行过。
 - payee 在白名单。
-- denom 在允许列表。
+- denom 被允许。
 - amount 不超过单笔上限。
 - Intent 未过期。
-- 调用者具有 Treasury 执行权限。
+- 调用者有 Treasury 执行权限。
 
 推荐事件：
 
@@ -178,191 +153,231 @@ purpose_hash
 policy_decision_id
 ```
 
-不要把用户名、股票研究全文、手机号或群聊内容明文上链；只写 ID 和哈希。
+## 5. 领域映射
 
-## 6. 服务端 Adapter 的实施位置
-
-新增：
-
-```text
-web/server/adapters/injectiveTestnet.ts
-```
-
-Adapter 应完成：
-
-1. 接收已批准的 `AgentPaymentIntent`。
-2. 再次校验网络、地址、denom、amount 和 expiry。
-3. 使用服务端 signer 构造交易。
-4. 广播到 Injective Testnet。
-5. 等待确认，不要只拿到广播响应就返回成功。
-6. 从交易事件生成 `SettlementReceipt`。
-7. 同一个 `intentId` 重试时返回原 Receipt，不重复付款。
-
-建议接口：
+业务模型使用易读金额，链上 Adapter 必须做显式映射：
 
 ```ts
-export interface SettlementAdapter {
-  settle(intent: AgentPaymentIntent): Promise<SettlementReceipt>
+interface PaymentAssetMapping {
+  currency: string
+  denom: string
+  decimals: number
 }
 ```
 
-随后修改 `createExecutionAdapter.ts`：
+要求：
 
-```text
-mock     → MockSettlementAdapter
-testnet  → InjectiveTestnetAdapter
+- 禁止使用浮点数直接计算原子单位。
+- 链上 amount 使用字符串或 BigInt。
+- 映射表必须由服务端配置维护。
+- 未知币种直接拒绝，不能猜 denom。
+- Intent 的 `payeeId` 先通过 Policy，再映射到受信地址；如果传入 `payeeAddress`，仍需校验与白名单一致。
+
+## 6. 配置调整
+
+目标环境变量：
+
+```dotenv
+INJECTIVE_EXECUTION_MODE=mock
+INJECTIVE_NETWORK=testnet
+INJECTIVE_CHAIN_ID=injective-888
+INJECTIVE_RPC_ENDPOINT=https://testnet.sentry.tm.injective.network:443
+INJECTIVE_REST_ENDPOINT=https://testnet.sentry.lcd.injective.network:443
+INJECTIVE_GRPC_ENDPOINT=https://testnet.sentry.chain.grpc-web.injective.network:443
+INJECTIVE_INDEXER_ENDPOINT=https://testnet.sentry.exchange.grpc-web.injective.network
+
+INJECTIVE_WALLET_ADDRESS=
+INJECTIVE_PRIVATE_KEY=
+INJECTIVE_PAYMENT_DENOM=
+INJECTIVE_PAYMENT_DECIMALS=
+INJECTIVE_EXPLORER_TX_BASE_URL=https://testnet.explorer.injective.network/transaction/
+
+INJECTIVE_RISK_PAYEE_ADDRESS=
+INJECTIVE_EXECUTION_PAYEE_ADDRESS=
+INJECTIVE_POOLMATE_MERCHANT_ADDRESS=
+
+INJECTIVE_CONTRACT_ADDRESS=
+INJECTIVE_FEE_DENOM=inj
+INJECTIVE_GAS_PRICE=500000000
 ```
 
-不要删除 Mock。比赛现场网络不稳定时必须能降级，并在 UI 上清楚标为 Mock。
+`INJECTIVE_MARKET_ID` 与 `INJECTIVE_SUBACCOUNT_ID` 面向早期现货交易草稿，当前 Agent 支付 Adapter 不读取它们，环境变量示例也已移除。当前规则：
 
-## 7. PostgreSQL 需要新增的 Receipt 表
+```text
+mock 模式：不要求 signer
+testnet 直接转账：要求 wallet/private key/payment denom/decimals 和收款白名单地址
+testnet 合约：额外要求 contract address
+```
 
-当前任务快照会保存交易哈希，但链上接入后建议增加独立表，避免 Receipt 只存在 JSON 快照中：
+私钥规则：
+
+- 只放服务器 `.env` / `.env.local`。
+- 文件权限在 Linux 保持 `600`。
+- 禁止 `VITE_` 前缀。
+- 禁止写入日志、API、错误对象或 Git。
+- `/api/config/injective` 只能返回脱敏地址和布尔状态。
+
+## 7. Adapter 与 Service 的实际行为
+
+当前实现位置：
+
+```text
+web/server/adapters/injectiveTestnet.ts   SDK MsgSend、输入校验、Receipt 映射
+web/server/pactledger/service.ts          Policy 后结算、并发去重、重试与中断隔离
+web/server/pactledger/repository.ts       Intent / Decision / Receipt PostgreSQL 持久化
+```
+
+已经做到：
+
+1. 只接收通过 Policy、进入 `settling` 且未过期的 Payment Intent。
+2. 再次校验 Testnet chain ID、payee 白名单、Injective 地址、denom、decimals、amount 与原子金额。
+3. 校验私钥派生地址与配置钱包一致，signer 只存在于服务端实例。
+4. 只有 SDK 返回 `code=0`、交易哈希和正区块高度时才生成 confirmed Receipt。
+5. SDK/RPC 错误映射为稳定错误码，原始敏感错误与私钥不会外泄。
+6. 进程内并发相同 Intent 只调用一次 Adapter；已有 confirmed/failed Receipt 的重试直接返回原 Trace。
+7. Intent、Decision、Receipt 立即写入 PostgreSQL。
+
+仍需补齐：
+
+1. 用真实 Testnet 钱包完成第一次广播并打开 Explorer 验证。
+2. 广播结果不确定或进程中断时，按已知 tx hash / memo 查询 Indexer，而不是只隔离状态。
+3. 如需更强的跨实例并发保证，增加数据库锁或唯一执行租约。
+
+保留 Mock Adapter。比赛现场网络异常时允许降级，但 UI 必须明确标为 Mock。
+
+## 8. Receipt 与数据库
+
+最低字段：
 
 ```sql
-CREATE TABLE settlement_receipts (
+CREATE TABLE IF NOT EXISTS settlement_receipts (
   intent_id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL,
-  app_id TEXT NOT NULL,
   network TEXT NOT NULL,
-  chain_id TEXT NOT NULL,
-  tx_hash TEXT NOT NULL UNIQUE,
-  height TEXT,
-  block_time TIMESTAMPTZ,
   status TEXT NOT NULL,
-  fee_amount NUMERIC(30, 0),
-  fee_denom TEXT,
-  contract_address TEXT,
-  explorer_url TEXT NOT NULL,
-  raw_events JSONB NOT NULL DEFAULT '[]'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  tx_hash TEXT UNIQUE,
+  explorer_url TEXT,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
 );
-
-CREATE INDEX settlement_receipts_tenant_created_idx
-  ON settlement_receipts (tenant_id, created_at DESC);
 ```
 
-写库和状态更新应遵循：
+建议逐步补全：
 
 ```text
-approved → broadcasting → confirmed
-                       └→ failed
+chain_id
+block_height
+block_time
+fee_amount
+fee_denom
+contract_address
+raw_events
+last_checked_at
 ```
 
-如果广播超时但链上可能已成功，必须先按 `intent_id` / tx hash 查询，再决定是否重试。
-
-## 8. 两个产品的首批真实支付
-
-优先顺序如下。
-
-### P0：KaleidoX Risk 审核费
+当前写库顺序：
 
 ```text
-Strategy Agent → Risk Agent
-purpose = risk_review
-amount = 固定小额测试币
+Intent submitted
+  -> PolicyDecision persisted
+  -> Intent settling persisted
+  -> SDK broadcast + confirmation response
+  -> Intent confirmed / failed persisted
+  -> confirmed / failed Receipt persisted
+  -> Trace query returns all three objects
 ```
 
-理由：金额小、业务语义明确，而且 Policy 否决发生在 Demo 核心转折点。
+当前没有独立 `broadcasting` 状态或广播前 tx hash 持久化。如果进程在广播后、Receipt 写入前崩溃，重启会把残留 `settling` 隔离为 `SETTLEMENT_RECOVERY_REQUIRED`，不会自动重发。下一步必须增加链上查询恢复，确认原交易成功或失败后再更新 Receipt。
 
-### P0：KaleidoX Execution 服务费
+## 9. 前端真实性规则
 
-```text
-Orchestrator → Execution Agent
-purpose = execution
-```
+只有同时满足以下条件才能显示 `Injective Testnet · Confirmed`：
 
-它证明“股票不必上链，Agent 为执行服务付费可以上链”。
+- `receipt.mode === 'testnet'`
+- `receipt.status === 'confirmed'`
+- 交易哈希来自真实广播/查询结果
+- Explorer URL 可打开
+- Receipt 已写入 PostgreSQL
 
-### P1：PoolMate 商户付款
+其他状态：
 
-```text
-PoolMate Treasury → 白名单测试商户
-purpose = merchant_pay
-```
-
-它是第二个业务对同一支付 Adapter 的复用证明。
-
-### P1：PoolMate 退款 / 退差
-
-先实现单笔退款，再做批量 payout。比赛时间不足时，批量 payout 可以由多笔测试网交易组成，但 UI 必须如实显示。
-
-## 9. 前端 Receipt 展示规则
-
-只有满足以下条件才能显示“Injective Testnet”：
-
-- 交易已经确认。
-- `txHash` 来自真实广播结果。
-- Explorer URL 可打开。
-- Receipt 已写入 PostgreSQL。
-
-否则必须显示：
-
-- `Mock Receipt`：本地确定性哈希。
+- `Mock Receipt`：确定性本地哈希，不链接 Explorer。
 - `Broadcasting`：已广播、未确认。
-- `Failed`：失败原因。
+- `Failed`：显示稳定错误和可重试状态。
+- `Configuration required`：缺少 signer / denom / contract 等配置。
 
-禁止用随机哈希或 Mock 哈希链接到 Explorer。
+禁止随机生成交易哈希，禁止把 Mock 哈希拼接到 Explorer。
 
-## 10. 测试清单
+## 10. 安全与隐私
 
-单元测试：
+可以上链：
 
-- 配置缺失时 `testnet` 模式拒绝启动执行。
-- 私钥永远不出现在 `/api/config/injective`。
-- amount、denom、payee、expiry 校验。
-- 相同 `intentId` 不会重复广播。
-- 链上失败会转换为稳定错误，不泄露私钥或完整 RPC 响应。
+- Intent ID 或哈希。
+- PolicyDecision ID。
+- payer / payee 链上地址。
+- denom、amount、用途哈希。
 
-测试网联调：
+禁止上链：
 
-- 成功支付一笔 Risk 审核费。
-- Explorer 能查到事件。
-- PostgreSQL Receipt 与链上事件一致。
-- systemd 重启后 Receipt 仍能查询。
-- 人为提交超限、非白名单、重复 intent，确认均被拒绝。
+- 用户名、手机号和群聊全文。
+- 股票研究报告和模型 Prompt。
+- PandaAI 账号、API Key、数据库密码。
+- 任何不必要的个人信息。
 
-现场演示前：
+## 11. 测试清单
 
-- 预先准备一笔成功交易作为兜底。
-- 现场再发一笔小额交易证明实时性。
-- 同时保留 Mock 开关，网络失败时不影响量化主流程。
+### 单元测试
 
-## 11. 下一步团队分工
+- [x] testnet 模式缺少 signer / 资产 / payee 配置时不可执行。
+- [x] 私钥不出现在配置 API 或稳定错误中。
+- [x] 易读金额到原子金额的映射不使用浮点乘法。
+- [x] 非法地址、denom 不一致、精度错误、过期 Intent 被拒绝。
+- [x] 非白名单 payee 不进入 Adapter。
+- [x] 并发相同 Intent 只调用一次 Adapter；已有 Receipt 不再广播。
+- [x] SDK/RPC 错误不会泄露私钥或完整敏感响应。
+- [x] 残留 `settling` 状态会被隔离，不会自动重播。
 
-链上队友：
+### Testnet 联调
 
-1. 给出 Deployment Manifest。
-2. 部署最小 Treasury 支付合约。
-3. 提供 execute / event schema 和一笔 Explorer 示例。
+- [ ] 成功支付一笔 Risk 审核费。
+- [ ] Explorer 能打开并核对金额/地址。
+- [ ] Receipt 与链上结果一致。
+- [ ] API 重启后 Receipt 仍能查询。
+- [ ] 重放相同 Intent 返回相同交易哈希。
+- [ ] 断网/超时后恢复查询，不重复付款。
+- [ ] PoolMate 复用同一 Adapter 完成商户付款。
 
-后端队友：
+### 生产前
 
-1. 增加 `AgentPaymentIntent` 与 `SettlementReceipt`。
-2. 实现 `InjectiveTestnetAdapter`。
-3. 新增 Receipt 表、幂等处理和查询 API。
+- 预置一笔已确认交易作为现场兜底。
+- 现场钱包余额足够但金额极小。
+- RPC、REST、Explorer 均可访问。
+- Mock 降级开关可用，标签清楚。
+- 日志无私钥、密码和完整签名消息。
 
-前端 / Demo：
+## 12. 链上队友交付 Manifest
 
-1. 将现有 Mock Receipt 自动切换为真实 Explorer 链接。
-2. 在 KaleidoX 展示 Risk 审核费与 Execution 服务费。
-3. 在 PoolMate 展示相同 Adapter 产生的商户付款 Receipt。
+不要只交一个地址。必须提供：
 
-PandaAI：
+- 网络、chain ID、RPC/REST/gRPC。
+- 钱包或合约地址。
+- 部署高度与部署交易哈希。
+- 合约代码版本 / Git commit。
+- denom、精度、测试币领取方式。
+- execute message schema。
+- 事件 schema 与错误码。
+- 防重放和幂等策略。
+- Explorer 交易链接格式。
+- 一笔成功样例和一笔拒绝样例。
 
-1. 将比赛账号写入服务器 `web/.env`：`PANDA_DATA_USERNAME`、`PANDA_DATA_PASSWORD`。
-2. 保持 `PANDA_DATA_MODE=auto` 或改为 `panda`。
-3. 重启后确认 `/api/health` 返回 `panda: live`。
-4. 用 `000001.SZ` 跑一次真实 `get_stock_daily_pre`，核对条数、日期和页面 `PandaData Live` 标识。
+## 13. 最终验收
 
-## 12. 最终完成标准
+- [ ] 一笔 KaleidoX `risk_review` 在 Testnet 确认。
+- [ ] 一笔 PoolMate `merchant_pay` 复用同一 Adapter。
+- [ ] 两笔都有可打开的 Explorer 与 PostgreSQL Receipt。
+- [ ] 相同 Intent 重试不会重复付款。
+- [ ] 非白名单、超限、过期 Intent 不会广播。
+- [ ] Mock / Testnet / Failed 状态无歧义。
+- [ ] 私钥从未进入前端、Git、API 或日志。
+- [ ] 网络故障时可恢复查询或明确降级。
 
-- [ ] KaleidoX 使用真实 PandaData，或明确标为 Replay。
-- [ ] 至少一笔 KaleidoX Agent 间支付在 Injective Testnet 确认。
-- [ ] 至少一笔 PoolMate 商户付款复用同一 Adapter；来不及时可用预置测试网交易，但不能冒充现场交易。
-- [ ] 两笔交易都有 PostgreSQL Receipt 和 Explorer 链接。
-- [ ] 重复 intent、超限付款和非白名单收款人均被拒绝。
-- [ ] Mock / Testnet / Live 三种状态在界面上无歧义。
-- [ ] 服务器重启后登录、任务和 Receipt 都能恢复。
-
-做到这些，PactLedger 的核心论证就成立：业务 Agent 只需要生成 Intent，账户、Policy、支付与 Receipt 都由同一基座复用。
+完成这些，PactLedger 的核心论证才真正成立：业务 Agent 只负责提出 Intent，账户、Policy、批准、结算和 Receipt 由同一个基座统一接管。
