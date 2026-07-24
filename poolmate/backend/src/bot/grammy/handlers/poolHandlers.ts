@@ -19,6 +19,7 @@ import type {
   QuotePoolFromBotResult,
   RemindPoolFromBotResult
 } from "../../poolMateBotUseCases.js";
+import { formatPaymentStatus } from "../../formatter.js";
 import { collectingOrderKeyboard } from "../keyboards.js";
 import type { PoolMateContext } from "../context.js";
 
@@ -364,6 +365,29 @@ export function registerPoolHandlers(
       requestedByUserId: actor(context).userId
     });
     await deliverConfirmationLinks(context, result, "reminder");
+  });
+
+  bot.command("pool_status", async (context) => {
+    const telegramChatId = groupChatId(context);
+    if (!telegramChatId) {
+      await context.reply("Use /pool_status in the order's Telegram group.");
+      return;
+    }
+    const orderId = parseOrderCommand(
+      context.message?.text ?? "",
+      "pool_status"
+    );
+    if (!orderId) {
+      await context.reply("Usage: /pool_status <orderId>");
+      return;
+    }
+    const order = await useCases.getPool({
+      telegramChatId,
+      orderId
+    });
+    await context.reply(formatPaymentStatus(order), {
+      link_preview_options: { is_disabled: true }
+    });
   });
 
   bot.callbackQuery(/^pm:v1:/, async (context) => {

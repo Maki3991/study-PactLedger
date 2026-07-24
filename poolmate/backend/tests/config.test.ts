@@ -10,6 +10,8 @@ test("loadConfig uses safe independent defaults", () => {
   assert.deepEqual(config.telegram.allowedUserIds, []);
   assert.equal(config.paymentBase.apiKey, undefined);
   assert.equal(config.paymentBase.settlementMode, "disabled");
+  assert.equal(config.paymentBase.submitPath, undefined);
+  assert.equal(config.paymentBase.timeoutMs, 10_000);
   assert.match(config.database.path, /poolmate\.sqlite$/);
 });
 
@@ -66,7 +68,10 @@ test("loadConfig normalizes non-secret runtime settings", () => {
       POOLMATE_PORT: "9000",
       TELEGRAM_ALLOWED_USER_IDS: "42, 42, 84",
       PAYMENT_BASE_URL: "https://payments.example.test",
-      PAYMENT_BASE_API_KEY: "secret"
+      PAYMENT_BASE_API_KEY: "secret",
+      PAYMENT_BASE_SUBMIT_PATH: "/v1/payment-operations",
+      PAYMENT_BASE_RECOVER_PATH: "/v1/payment-operations/{operationId}",
+      PAYMENT_BASE_TIMEOUT_MS: "5000"
     },
     "/tmp/poolmate-config-test"
   );
@@ -74,4 +79,6 @@ test("loadConfig normalizes non-secret runtime settings", () => {
   assert.equal(config.app.port, 9000);
   assert.deepEqual(config.telegram.allowedUserIds, ["42", "84"]);
   assert.equal(config.paymentBase.url, "https://payments.example.test");
+  assert.equal(config.paymentBase.submitPath, "/v1/payment-operations");
+  assert.equal(config.paymentBase.timeoutMs, 5_000);
 });

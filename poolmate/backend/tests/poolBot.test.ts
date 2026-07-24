@@ -29,6 +29,7 @@ interface UseCaseCalls {
   leave: LeavePoolFromBotInput[];
   quote: QuotePoolFromBotInput[];
   remind: RemindPoolFromBotInput[];
+  get: Array<{ telegramChatId: string; orderId: string }>;
 }
 
 const baseOrder: OrderDetailView = {
@@ -125,7 +126,8 @@ function createUseCases(
     claim: [],
     leave: [],
     quote: [],
-    remind: []
+    remind: [],
+    get: []
   };
   return {
     calls,
@@ -149,6 +151,10 @@ function createUseCases(
       remindPool: async (input) => {
         calls.remind.push(input);
         return quoteResult;
+      },
+      getPool: async (input) => {
+        calls.get.push(input);
+        return baseOrder;
       }
     }
   };
@@ -326,6 +332,7 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
   await bot.handleUpdate(commandUpdate(102, "/pool_leave order-1"));
   await bot.handleUpdate(commandUpdate(103, "/pool_quote order-1"));
   await bot.handleUpdate(commandUpdate(104, "/pool_remind order-1"));
+  await bot.handleUpdate(commandUpdate(105, "/pool_status order-1"));
 
   assert.deepEqual(calls.create, [
     {
@@ -362,6 +369,7 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
     orderId: "order-1",
     requestedByUserId: "101"
   });
+  assert.deepEqual(calls.get, [{ telegramChatId: "-500", orderId: "order-1" }]);
 });
 
 test("callback data is stable and repeated callbacks reuse one idempotency key", async () => {

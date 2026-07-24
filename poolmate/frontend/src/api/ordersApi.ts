@@ -14,6 +14,9 @@ import type {
   OrderState,
   OrderSummaryView,
   ParticipantView,
+  PaymentOutboxView,
+  PaymentProjectionStatus,
+  PaymentProjectionView,
   PoolMatePaymentRequest
 } from "@poolmate/shared";
 import {
@@ -50,6 +53,33 @@ const confirmationStatuses: readonly AllocationConfirmationStatus[] = [
   "superseded",
   "expired"
 ];
+const paymentRequestStatuses = [
+  "ready",
+  "submitting",
+  "submitted",
+  "confirmed",
+  "demo_confirmed",
+  "failed",
+  "unknown"
+] as const;
+const paymentProjectionStatuses: readonly PaymentProjectionStatus[] = [
+  "READY",
+  "UNAVAILABLE",
+  "SUBMITTING",
+  "SUBMITTED",
+  "UNKNOWN",
+  "FAILED",
+  "CONFIRMED",
+  "DEMO_CONFIRMED"
+];
+const settlementModes = ["disabled", "mock", "testnet", "live"] as const;
+const outboxStatuses = [
+  "pending",
+  "processing",
+  "completed",
+  "blocked",
+  "unknown"
+] as const;
 
 function isAtomicMoney(value: unknown): value is AtomicMoney {
   return (
@@ -213,8 +243,50 @@ function isPaymentRequest(value: unknown): value is PoolMatePaymentRequest {
     isNonEmptyString(value.payeeId) &&
     isAtomicMoney(value.money) &&
     isIsoDate(value.expiresAt) &&
-    value.status === "ready" &&
+    isOneOf(value.status, paymentRequestStatuses) &&
     isIsoDate(value.createdAt)
+  );
+}
+
+function isPaymentProjection(value: unknown): value is PaymentProjectionView {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.paymentRequestId) ||
+    !isNonEmptyString(value.operationId) ||
+    !isOneOf(value.status, paymentProjectionStatuses) ||
+    !isOneOf(value.settlementMode, settlementModes) ||
+    (value.errorCode !== undefined && !isNonEmptyString(value.errorCode)) ||
+    (value.errorMessage !== undefined && !isNonEmptyString(value.errorMessage)) ||
+    !isNonNegativeInteger(value.attempts) ||
+    !isIsoDate(value.updatedAt)
+  ) {
+    return false;
+  }
+  if (value.receipt === undefined) return value.status !== "CONFIRMED";
+  return (
+    isRecord(value.receipt) &&
+    isNonEmptyString(value.receipt.receiptId) &&
+    isNonEmptyString(value.receipt.transactionHash) &&
+    isNonEmptyString(value.receipt.explorerUrl) &&
+    value.receipt.explorerUrl.startsWith("https://") &&
+    isIsoDate(value.receipt.confirmedAt) &&
+    value.status === "CONFIRMED" &&
+    (value.settlementMode === "testnet" || value.settlementMode === "live")
+  );
+}
+
+function isPaymentOutbox(value: unknown): value is PaymentOutboxView {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.paymentRequestId) &&
+    isNonEmptyString(value.operationId) &&
+    isOneOf(value.status, outboxStatuses) &&
+    isNonNegativeInteger(value.attempts) &&
+    (value.lastErrorCode === undefined ||
+      isNonEmptyString(value.lastErrorCode)) &&
+    isIsoDate(value.availableAt) &&
+    isIsoDate(value.updatedAt)
   );
 }
 
@@ -250,7 +322,10 @@ export function isOrderDetailView(value: unknown): value is OrderDetailView {
     !value.participants.every(isParticipantView) ||
     (value.checkout !== undefined && !isCheckoutView(value.checkout)) ||
     (value.paymentRequest !== undefined &&
-      !isPaymentRequest(value.paymentRequest))
+      !isPaymentRequest(value.paymentRequest)) ||
+    (value.paymentProjection !== undefined &&
+      !isPaymentProjection(value.paymentProjection)) ||
+    (value.paymentOutbox !== undefined && !isPaymentOutbox(value.paymentOutbox))
   ) {
     return false;
   }
@@ -292,6 +367,24 @@ export function isOrderDetailView(value: unknown): value is OrderDetailView {
     ) {
       return false;
     }
+    if (
+      !value.paymentProjection ||
+      !value.paymentOutbox ||
+      value.paymentProjection.paymentRequestId !== value.paymentRequest.id ||
+      value.paymentOutbox.paymentRequestId !== value.paymentRequest.id ||
+      value.paymentProjection.operationId !== value.paymentOutbox.operationId
+    ) {
+      return false;
+    }
+  } else if (value.paymentProjection || value.paymentOutbox) {
+    return false;
+  }
+  if (
+    value.state === "PAID" &&
+    (value.paymentProjection?.status !== "CONFIRMED" ||
+      !value.paymentProjection.receipt)
+  ) {
+    return false;
   }
   return true;
 }
@@ -364,6 +457,16 @@ export interface OrdersApi {
     adminApiKey: string,
     signal?: AbortSignal
   ): Promise<OrderDetailView>;
+  submitPayment(
+    id: string,
+    adminApiKey: string,
+    signal?: AbortSignal
+  ): Promise<OrderDetailView>;
+  recoverPayment(
+    id: string,
+    adminApiKey: string,
+    signal?: AbortSignal
+  ): Promise<OrderDetailView>;
   getConfirmation(
     token: string,
     signal?: AbortSignal
@@ -396,6 +499,30 @@ export function createOrdersApi(
         isOrderDetailView,
         {
           signal,
+          headers: { Authorization: `Bearer ${adminApiKey}` }
+        }
+      ),
+    submitPayment: (id, adminApiKey, signal) =>
+      requestJson(
+        baseUrl,
+        `/api/orders/${encodeURIComponent(id)}/payment/submit`,
+        isOrderDetailView,
+        {
+          signal,
+          method: "POST",
+          body: {},
+          headers: { Authorization: `Bearer ${adminApiKey}` }
+        }
+      ),
+    recoverPayment: (id, adminApiKey, signal) =>
+      requestJson(
+        baseUrl,
+        `/api/orders/${encodeURIComponent(id)}/payment/recover`,
+        isOrderDetailView,
+        {
+          signal,
+          method: "POST",
+          body: {},
           headers: { Authorization: `Bearer ${adminApiKey}` }
         }
       ),

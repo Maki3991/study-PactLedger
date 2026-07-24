@@ -75,6 +75,10 @@ test("config status never returns configured secrets", async () => {
   fixture.config.telegram.token = "telegram-secret";
   fixture.config.paymentBase.apiKey = "payment-secret";
   fixture.config.paymentBase.url = "https://payments.example.test";
+  fixture.config.paymentBase.settlementMode = "testnet";
+  fixture.config.paymentBase.submitPath = "/v1/payment-operations";
+  fixture.config.paymentBase.recoverPath =
+    "/v1/payment-operations/{operationId}";
   fixture.config.admin.apiKey = "admin-secret";
   const app = await createServer({
     ...fixture,

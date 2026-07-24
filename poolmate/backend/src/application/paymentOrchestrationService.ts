@@ -111,7 +111,11 @@ export class PaymentOrchestrationService {
       !this.paymentBaseClient ||
       this.paymentBaseClient.settlementMode === "disabled"
     ) {
-      this.markUnavailable(snapshot.request.id, "PAYMENT_BASE_UNAVAILABLE");
+      this.markUnavailable(
+        snapshot.request.id,
+        snapshot.projection.operationId,
+        "PAYMENT_BASE_UNAVAILABLE"
+      );
       throw new DomainError(
         "PAYMENT_BASE_UNAVAILABLE",
         "The payment base is not configured for submission.",
@@ -139,7 +143,8 @@ export class PaymentOrchestrationService {
     let outcome: PaymentBaseOutcome;
     try {
       outcome = await this.paymentBaseClient.submit(
-        paymentRequestView(snapshot.request)
+        paymentRequestView(snapshot.request),
+        snapshot.projection.operationId
       );
     } catch (error) {
       return this.applyThrownError(
@@ -237,6 +242,40 @@ export class PaymentOrchestrationService {
     );
   }
 
+  async recoverPending(): Promise<{
+    attempted: number;
+    succeeded: number;
+    failed: number;
+  }> {
+    if (
+      !this.paymentBaseClient ||
+      this.paymentBaseClient.settlementMode === "disabled"
+    ) {
+      return { attempted: 0, succeeded: 0, failed: 0 };
+    }
+    const settlementMode = this.paymentBaseClient.settlementMode as Exclude<
+      SettlementMode,
+      "disabled"
+    >;
+    const orderIds = this.repository.read((transaction) =>
+      transaction.recoverablePaymentOrderIds(
+        settlementMode,
+        this.now().toISOString()
+      )
+    );
+    const results = await Promise.allSettled(
+      orderIds.map((orderId) => this.recover(orderId))
+    );
+    const succeeded = results.filter(
+      (result) => result.status === "fulfilled"
+    ).length;
+    return {
+      attempted: results.length,
+      succeeded,
+      failed: results.length - succeeded
+    };
+  }
+
   private paymentSnapshot(orderId: string) {
     return this.repository.read((transaction) => {
       const request = transaction.paymentRequest(orderId);
@@ -270,20 +309,29 @@ export class PaymentOrchestrationService {
     );
   }
 
-  private markUnavailable(paymentRequestId: string, code: string): void {
+  private markUnavailable(
+    paymentRequestId: string,
+    operationId: string,
+    code: string
+  ): void {
     const now = this.now().toISOString();
     this.repository.immediate((transaction) =>
-      transaction.updatePaymentState(paymentRequestId, {
-        requestStatus: "ready",
-        projectionStatus: "UNAVAILABLE",
-        settlementMode: this.paymentBaseClient?.settlementMode ?? "disabled",
-        outboxStatus: "blocked",
-        orderState: "READY_FOR_PAYMENT",
-        errorCode: code,
-        errorMessage: "The payment base is unavailable.",
-        availableAt: now,
-        now
-      })
+      transaction.updatePaymentStateIfCurrent(
+        paymentRequestId,
+        operationId,
+        ["READY", "UNAVAILABLE"],
+        {
+          requestStatus: "ready",
+          projectionStatus: "UNAVAILABLE",
+          settlementMode: this.paymentBaseClient?.settlementMode ?? "disabled",
+          outboxStatus: "blocked",
+          orderState: "READY_FOR_PAYMENT",
+          errorCode: code,
+          errorMessage: "The payment base is unavailable.",
+          availableAt: now,
+          now
+        }
+      )
     );
   }
 

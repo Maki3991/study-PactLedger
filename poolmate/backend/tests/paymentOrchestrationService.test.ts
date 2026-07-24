@@ -217,9 +217,9 @@ test("duplicate concurrent processing claims one submission", async () => {
   };
   let calls = 0;
   const submit = client.submit.bind(client);
-  client.submit = async (request) => {
+  client.submit = async (request, operationId) => {
     calls += 1;
-    return submit(request);
+    return submit(request, operationId);
   };
   const service = new PaymentOrchestrationService({
     repository: current.repository,
@@ -507,6 +507,55 @@ test("restart isolates an interrupted submission and recovers without resubmitti
   reopened.database.close();
 });
 
+test("recovery scan queries eligible operations and never submits ready payments", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const operationId = ready.paymentProjection!.operationId;
+  const client = new StubPaymentClient("testnet", operationId);
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: client,
+    now: () => NOW
+  });
+
+  assert.deepEqual(await service.recoverPending(), {
+    attempted: 0,
+    succeeded: 0,
+    failed: 0
+  });
+  assert.equal(client.submitCalls, 0);
+  assert.deepEqual(client.recoverCalls, []);
+
+  current.repository.immediate((transaction) =>
+    transaction.updatePaymentState(ready.paymentRequest!.id, {
+      requestStatus: "unknown",
+      projectionStatus: "UNKNOWN",
+      settlementMode: "testnet",
+      outboxStatus: "unknown",
+      orderState: "PAYMENT_UNKNOWN",
+      errorCode: "PAYMENT_OPERATION_UNKNOWN",
+      availableAt: NOW.toISOString(),
+      now: NOW.toISOString()
+    })
+  );
+  client.recoverResult = {
+    status: "failed",
+    operationId,
+    settlementMode: "testnet",
+    errorCode: "PAYMENT_REJECTED"
+  };
+  assert.deepEqual(await service.recoverPending(), {
+    attempted: 1,
+    succeeded: 1,
+    failed: 0
+  });
+  assert.equal(client.submitCalls, 0);
+  assert.deepEqual(client.recoverCalls, [operationId]);
+  assert.equal(current.orderService.getOrder(ready.id).state, "PAYMENT_FAILED");
+  current.database.close();
+});
+
 test("expired payment requests never call the payment base", async () => {
   const current = openFixture();
   const ready = await createReadyOrder(current.orderService);
@@ -633,6 +682,109 @@ test("a late unavailable error cannot roll back a recovered paid order", async (
     final.paymentProjection?.receipt?.receiptId,
     "receipt-unavailable-race"
   );
+  current.database.close();
+});
+
+test("a stale unavailable result cannot overwrite a claimed submission", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const operationId = ready.paymentProjection!.operationId;
+  let release!: (outcome: PaymentBaseOutcome) => void;
+  const delayed = new Promise<PaymentBaseOutcome>((resolve) => {
+    release = resolve;
+  });
+  const enabled = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: {
+      settlementMode: "testnet",
+      async submit() {
+        return delayed;
+      },
+      async recover() {
+        throw new Error("not expected");
+      }
+    },
+    now: () => NOW
+  });
+  const submission = enabled.submit(ready.id);
+  assert.equal(
+    current.repository.immediate((transaction) =>
+      transaction.updatePaymentStateIfCurrent(
+        ready.paymentRequest!.id,
+        operationId,
+        ["READY", "UNAVAILABLE"],
+        {
+          requestStatus: "ready",
+          projectionStatus: "UNAVAILABLE",
+          settlementMode: "disabled",
+          outboxStatus: "blocked",
+          orderState: "READY_FOR_PAYMENT",
+          errorCode: "PAYMENT_BASE_UNAVAILABLE",
+          availableAt: NOW.toISOString(),
+          now: NOW.toISOString()
+        }
+      )
+    ),
+    false
+  );
+  assert.equal(
+    current.orderService.getOrder(ready.id).paymentProjection?.status,
+    "SUBMITTING"
+  );
+  release({ status: "submitted", operationId, settlementMode: "testnet" });
+  assert.equal((await submission).state, "PAYMENT_SUBMITTED");
+  current.database.close();
+});
+
+test("a stale recovery claim cannot reopen a completed outbox", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const operationId = ready.paymentProjection!.operationId;
+  current.repository.immediate((transaction) =>
+    transaction.updatePaymentState(ready.paymentRequest!.id, {
+      requestStatus: "unknown",
+      projectionStatus: "UNKNOWN",
+      settlementMode: "testnet",
+      outboxStatus: "completed",
+      orderState: "PAYMENT_UNKNOWN",
+      errorCode: "PAYMENT_OPERATION_UNKNOWN",
+      availableAt: NOW.toISOString(),
+      now: NOW.toISOString()
+    })
+  );
+  current.repository.immediate((transaction) =>
+    transaction.updatePaymentState(ready.paymentRequest!.id, {
+      requestStatus: "confirmed",
+      projectionStatus: "CONFIRMED",
+      settlementMode: "testnet",
+      outboxStatus: "completed",
+      orderState: "PAID",
+      receipt: {
+        receiptId: "receipt-terminal",
+        transactionHash: "0xterminal",
+        explorerUrl: "https://explorer.example/tx/0xterminal",
+        confirmedAt: "2026-07-25T12:02:00.000Z"
+      },
+      availableAt: NOW.toISOString(),
+      now: NOW.toISOString()
+    })
+  );
+
+  assert.equal(
+    current.repository.immediate((transaction) =>
+      transaction.claimPaymentRecovery(
+        ready.paymentRequest!.id,
+        new Date(NOW.getTime() + 30_000).toISOString(),
+        NOW.toISOString()
+      )
+    ),
+    false
+  );
+  const final = current.orderService.getOrder(ready.id);
+  assert.equal(final.paymentProjection?.operationId, operationId);
+  assert.equal(final.paymentProjection?.status, "CONFIRMED");
+  assert.equal(final.paymentOutbox?.status, "completed");
   current.database.close();
 });
 

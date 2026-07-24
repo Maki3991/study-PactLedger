@@ -55,7 +55,7 @@ export function parseOrderUnitsCommand(
 
 export function parseOrderCommand(
   text: string,
-  command: "pool_leave" | "pool_quote" | "pool_remind"
+  command: "pool_leave" | "pool_quote" | "pool_remind" | "pool_status"
 ): string | null {
   const payload = commandPayload(text, command);
   return validOrderId(payload) ? payload : null;

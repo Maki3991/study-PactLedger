@@ -680,6 +680,32 @@ export class OrderTransaction {
     return row ? mapPaymentOutbox(row) : undefined;
   }
 
+  recoverablePaymentOrderIds(
+    settlementMode: Exclude<SettlementMode, "disabled">,
+    now: string
+  ): string[] {
+    return (
+      this.connection
+        .prepare(
+          `SELECT r.order_id
+           FROM pm_payment_requests r
+           JOIN pm_payment_projections p ON p.payment_request_id = r.id
+           JOIN pm_outbox o ON o.payment_request_id = r.id
+           WHERE p.settlement_mode = ?
+             AND (
+               p.status IN ('SUBMITTED', 'UNKNOWN')
+               OR (
+                 p.status = 'SUBMITTING'
+                 AND o.status = 'processing'
+                 AND o.available_at <= ?
+               )
+             )
+           ORDER BY p.updated_at, r.order_id`
+        )
+        .all(settlementMode, now) as Array<{ order_id: string }>
+    ).map((row) => String(row.order_id));
+  }
+
   confirmationByTokenHash(
     tokenHash: string
   ): ConfirmationLookupRow | undefined {
@@ -1015,9 +1041,14 @@ export class OrderTransaction {
              last_error_code = NULL, available_at = ?, updated_at = ?
          WHERE payment_request_id = ?
            AND (status IN ('unknown', 'completed')
-             OR (status = 'processing' AND available_at <= ?))`
+             OR (status = 'processing' AND available_at <= ?))
+           AND EXISTS (
+             SELECT 1 FROM pm_payment_projections
+             WHERE payment_request_id = ?
+               AND status IN ('SUBMITTED', 'UNKNOWN')
+           )`
       )
-      .run(leaseUntil, now, paymentRequestId, now).changes;
+      .run(leaseUntil, now, paymentRequestId, now, paymentRequestId).changes;
     if (claimed === 0) return false;
     this.connection
       .prepare(

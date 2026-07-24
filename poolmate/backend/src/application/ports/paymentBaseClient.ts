@@ -20,6 +20,9 @@ export type PaymentBaseOutcome =
 
 export interface PaymentBaseClient {
   readonly settlementMode: SettlementMode;
-  submit(request: PoolMatePaymentRequest): Promise<PaymentBaseOutcome>;
+  submit(
+    request: PoolMatePaymentRequest,
+    operationId: string
+  ): Promise<PaymentBaseOutcome>;
   recover(operationId: string): Promise<PaymentBaseOutcome>;
 }

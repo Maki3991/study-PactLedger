@@ -64,7 +64,11 @@ export class SystemStatusService {
       },
       paymentBase: {
         status:
-          config.paymentBase.url && config.paymentBase.apiKey
+          config.paymentBase.url &&
+          config.paymentBase.apiKey &&
+          config.paymentBase.submitPath &&
+          config.paymentBase.recoverPath &&
+          config.paymentBase.settlementMode !== "disabled"
             ? "configured"
             : "not_configured",
         settlementMode: config.paymentBase.settlementMode

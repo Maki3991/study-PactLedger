@@ -33,12 +33,22 @@ export interface PoolMateConfig {
     url?: string;
     apiKey?: string;
     settlementMode: SettlementMode;
+    submitPath?: string;
+    recoverPath?: string;
+    timeoutMs: number;
   };
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535
+    ? parsed
+    : fallback;
+}
+
+function parseTimeout(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60_000
     ? parsed
     : fallback;
 }
@@ -139,7 +149,10 @@ export function loadConfig(
     paymentBase: {
       url: optional(env.PAYMENT_BASE_URL),
       apiKey: optional(env.PAYMENT_BASE_API_KEY),
-      settlementMode: parseSettlementMode(env.PAYMENT_SETTLEMENT_MODE)
+      settlementMode: parseSettlementMode(env.PAYMENT_SETTLEMENT_MODE),
+      submitPath: optional(env.PAYMENT_BASE_SUBMIT_PATH),
+      recoverPath: optional(env.PAYMENT_BASE_RECOVER_PATH),
+      timeoutMs: parseTimeout(env.PAYMENT_BASE_TIMEOUT_MS, 10_000)
     }
   };
 }

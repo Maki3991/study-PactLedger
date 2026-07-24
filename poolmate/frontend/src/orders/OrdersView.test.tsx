@@ -16,6 +16,8 @@ function ordersApi(overrides: Partial<OrdersApi> = {}): OrdersApi {
   return {
     listOrders: vi.fn(async () => [orderSummary]),
     getOrder: vi.fn(async () => orderDetail),
+    submitPayment: vi.fn(async () => orderDetail),
+    recoverPayment: vi.fn(async () => orderDetail),
     getConfirmation: vi.fn(async () => confirmation),
     confirm: vi.fn(async () => confirmationResult),
     decline: vi.fn(
@@ -82,9 +84,50 @@ describe("orders console", () => {
     expect(screen.getAllByText("500 inj atomic")).toHaveLength(2);
     expect(screen.getByText("1000 inj atomic")).toBeVisible();
     expect(screen.getByText("Sponsored demo / participants not funded")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Payment request ready" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Payment operation" })).toBeVisible();
+    expect(screen.getByText("pmop_poolmate-order-1-checkout-1-v1")).toBeVisible();
+    expect(screen.getByText("disabled")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Submit payment" })).toBeVisible();
     expect(screen.getByText("READY_FOR_PAYMENT")).toBeVisible();
     expect(screen.queryByText(/^Paid$/i)).not.toBeInTheDocument();
+  });
+
+  it("submits and recovers only through administrator payment APIs", async () => {
+    window.history.replaceState({}, "", "/?view=orders");
+    authenticateAdmin();
+    const unknownOrder: typeof orderDetail = {
+      ...orderDetail,
+      state: "PAYMENT_UNKNOWN",
+      paymentRequest: { ...orderDetail.paymentRequest!, status: "unknown" },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "UNKNOWN",
+        settlementMode: "testnet",
+        errorCode: "PAYMENT_OPERATION_UNKNOWN"
+      },
+      paymentOutbox: { ...orderDetail.paymentOutbox!, status: "unknown" }
+    };
+    const api = ordersApi({
+      getOrder: vi
+        .fn()
+        .mockResolvedValueOnce(orderDetail)
+        .mockResolvedValueOnce(unknownOrder)
+        .mockResolvedValue(unknownOrder),
+      submitPayment: vi.fn(async () => unknownOrder),
+      recoverPayment: vi.fn(async () => unknownOrder)
+    });
+    const user = userEvent.setup();
+
+    render(<App ordersApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "Submit payment" }));
+    expect(api.submitPayment).toHaveBeenCalledWith("order-1", "admin-secret");
+    expect(
+      await screen.findByRole("button", { name: "Recover original operation" })
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Recover original operation" })
+    );
+    expect(api.recoverPayment).toHaveBeenCalledWith("order-1", "admin-secret");
   });
 
   it("keeps stale list data visible while a refresh is pending", async () => {

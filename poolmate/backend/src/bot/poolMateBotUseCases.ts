@@ -60,10 +60,16 @@ export interface RemindPoolFromBotResult {
   confirmationDeliveries: ConfirmationDelivery[];
 }
 
+export interface GetPoolFromBotInput {
+  telegramChatId: string;
+  orderId: string;
+}
+
 export interface PoolMateBotUseCases {
   createPool(input: CreatePoolFromBotInput): Promise<OrderDetailView>;
   claimPool(input: ClaimPoolFromBotInput): Promise<OrderDetailView>;
   leavePool(input: LeavePoolFromBotInput): Promise<OrderDetailView>;
   quotePool(input: QuotePoolFromBotInput): Promise<QuotePoolFromBotResult>;
   remindPool(input: RemindPoolFromBotInput): Promise<RemindPoolFromBotResult>;
+  getPool(input: GetPoolFromBotInput): Promise<OrderDetailView>;
 }

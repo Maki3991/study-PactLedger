@@ -2,8 +2,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   ClipboardList,
+  ExternalLink,
   LogOut,
+  Play,
   RefreshCw,
+  SearchCheck,
   Users
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -214,8 +217,21 @@ function CheckoutSection({ checkout }: { checkout: CheckoutView }) {
   );
 }
 
-function OrderDetail({ order }: { order: OrderDetailView }) {
+function OrderDetail({
+  order,
+  action,
+  onSubmitPayment,
+  onRecoverPayment
+}: {
+  order: OrderDetailView;
+  action?: { kind: "submit" | "recover"; error?: ApiRequestError };
+  onSubmitPayment(): void;
+  onRecoverPayment(): void;
+}) {
   const state = orderStateMeta[order.state];
+  const projection = order.paymentProjection;
+  const outbox = order.paymentOutbox;
+  const receipt = projection?.receipt;
   const fundingLabel =
     order.fundingMode === "sponsored_demo"
       ? "Sponsored demo / participants not funded"
@@ -228,12 +244,15 @@ function OrderDetail({ order }: { order: OrderDetailView }) {
           <h2>{order.title}</h2>
         </div>
         <div className="order-detail__state">
-          <StateBadge label={state.label} severity={state.severity} />
+          <StateBadge
+            label={receipt ? "Paid / verified" : state.label}
+            severity={receipt ? "healthy" : state.severity}
+          />
           {order.state !== "PAID" ? <code>{order.state}</code> : null}
         </div>
       </header>
 
-      {order.state === "PAID" ? (
+      {order.state === "PAID" && !receipt ? (
         <div className="inline-warning inline-warning--error" role="alert">
           <AlertTriangle size={16} aria-hidden="true" />
           <span>
@@ -320,14 +339,27 @@ function OrderDetail({ order }: { order: OrderDetailView }) {
         <section className="detail-section payment-request">
           <div className="detail-section__heading">
             <div>
-              <p className="section-kicker">Local orchestration only</p>
-              <h3>Payment request ready</h3>
+              <p className="section-kicker">Durable payment orchestration</p>
+              <h3>Payment operation</h3>
             </div>
-            <StateBadge label="Ready" severity="warning" />
+            <StateBadge
+              label={projection?.status ?? "Evidence missing"}
+              severity={
+                projection?.status === "CONFIRMED"
+                  ? "healthy"
+                  : projection?.status === "FAILED" ||
+                      projection?.status === "UNKNOWN"
+                    ? "error"
+                    : "warning"
+              }
+            />
           </div>
           <p className="truth-note">
-            This request is ready for the external payment base. It is not a
-            settlement Receipt.
+            {receipt
+              ? "This settlement is backed by a persisted receipt and a verifiable explorer URL."
+              : projection?.status === "DEMO_CONFIRMED"
+                ? "Mock confirmation is isolated from real settlement. No chain payment occurred."
+                : "This is orchestration state, not proof of settlement. A verified Receipt is still required."}
           </p>
           <dl className="detail-facts detail-facts--payment">
             <div>
@@ -350,7 +382,98 @@ function OrderDetail({ order }: { order: OrderDetailView }) {
                 {formatAtomicMoney(order.paymentRequest.money)}
               </dd>
             </div>
+            <div>
+              <dt>Operation ID</dt>
+              <dd className="mono-value">
+                {projection?.operationId ?? "Unavailable"}
+              </dd>
+            </div>
+            <div>
+              <dt>Settlement mode</dt>
+              <dd className="mono-value">
+                {projection?.settlementMode ?? "disabled"}
+              </dd>
+            </div>
+            <div>
+              <dt>Attempts</dt>
+              <dd>{projection?.attempts ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Outbox</dt>
+              <dd className="mono-value">{outbox?.status ?? "missing"}</dd>
+            </div>
           </dl>
+          {projection?.errorCode ? (
+            <div className="inline-warning inline-warning--error" role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>
+                {projection.errorMessage ?? "Payment operation requires attention."}{" "}
+                <code>{projection.errorCode}</code>
+              </span>
+            </div>
+          ) : null}
+          {receipt ? (
+            <dl className="detail-facts detail-facts--payment receipt-facts">
+              <div>
+                <dt>Receipt ID</dt>
+                <dd className="mono-value">{receipt.receiptId}</dd>
+              </div>
+              <div>
+                <dt>Transaction hash</dt>
+                <dd className="mono-value">{receipt.transactionHash}</dd>
+              </div>
+              <div>
+                <dt>Confirmed</dt>
+                <dd>{formatDateTime(receipt.confirmedAt)}</dd>
+              </div>
+              <div>
+                <dt>Explorer</dt>
+                <dd>
+                  <a href={receipt.explorerUrl} target="_blank" rel="noreferrer">
+                    Open receipt <ExternalLink size={13} aria-hidden="true" />
+                  </a>
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          {action?.error ? (
+            <div className="inline-warning inline-warning--error" role="alert">
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>
+                {action.error.message} <code>{action.error.code}</code>
+              </span>
+            </div>
+          ) : null}
+          {projection?.status === "READY" ||
+          projection?.status === "UNAVAILABLE" ? (
+            <button
+              type="button"
+              onClick={onSubmitPayment}
+              disabled={Boolean(action)}
+            >
+              {action?.kind === "submit" ? (
+                <RefreshCw className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <Play size={16} aria-hidden="true" />
+              )}
+              Submit payment
+            </button>
+          ) : null}
+          {projection?.status === "UNKNOWN" ||
+          projection?.status === "SUBMITTED" ? (
+            <button
+              type="button"
+              onClick={onRecoverPayment}
+              disabled={Boolean(action)}
+            >
+              {action?.kind === "recover" ? (
+                <RefreshCw className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <SearchCheck size={16} aria-hidden="true" />
+              )}
+              Recover original operation
+            </button>
+          ) : null}
         </section>
       ) : order.state === "READY_FOR_PAYMENT" ? (
         <div className="inline-warning inline-warning--error" role="alert">
@@ -394,6 +517,10 @@ function AuthenticatedOrdersView({
     [list]
   );
   const [selectedId, setSelectedId] = useState<string>();
+  const [paymentAction, setPaymentAction] = useState<{
+    kind: "submit" | "recover";
+    error?: ApiRequestError;
+  }>();
 
   useEffect(() => {
     if (orders.length === 0) {
@@ -419,6 +546,28 @@ function AuthenticatedOrdersView({
   const refresh = () => {
     reloadList();
     if (selectedId) reloadDetail();
+  };
+  const runPaymentAction = async (kind: "submit" | "recover") => {
+    if (!selectedId || paymentAction) return;
+    setPaymentAction({ kind });
+    try {
+      if (kind === "submit") {
+        await ordersApi.submitPayment(selectedId, adminApiKey);
+      } else {
+        await ordersApi.recoverPayment(selectedId, adminApiKey);
+      }
+      setPaymentAction(undefined);
+      reloadDetail();
+      reloadList();
+    } catch (error) {
+      setPaymentAction({
+        kind,
+        error:
+          error instanceof ApiRequestError
+            ? error
+            : new ApiRequestError("Payment operation failed.", "UNKNOWN_ERROR")
+      });
+    }
   };
 
   useEffect(() => {
@@ -538,7 +687,12 @@ function AuthenticatedOrdersView({
                       Refreshing detail
                     </div>
                   ) : null}
-                  <OrderDetail order={detail.data} />
+                  <OrderDetail
+                    order={detail.data}
+                    action={paymentAction}
+                    onSubmitPayment={() => void runPaymentAction("submit")}
+                    onRecoverPayment={() => void runPaymentAction("recover")}
+                  />
                 </>
               ) : null}
             </div>

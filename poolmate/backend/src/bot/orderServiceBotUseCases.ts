@@ -97,6 +97,11 @@ export class OrderServiceBotUseCases implements PoolMateBotUseCases {
     );
   }
 
+  async getPool(input: Parameters<PoolMateBotUseCases["getPool"]>[0]) {
+    this.requireOrderChat(input.orderId, input.telegramChatId);
+    return this.orders.getOrder(input.orderId);
+  }
+
   private requireOrderChat(orderId: string, telegramChatId: string): void {
     if (!this.orders.isOrderInTelegramChat(orderId, telegramChatId)) {
       throw new DomainError(

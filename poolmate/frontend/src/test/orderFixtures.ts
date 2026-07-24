@@ -104,6 +104,23 @@ export const orderDetail: OrderDetailView = {
     expiresAt: "2099-07-25T04:00:00.000Z",
     status: "ready",
     createdAt: "2026-07-25T02:00:00.000Z"
+  },
+  paymentProjection: {
+    paymentRequestId: "payment-request-1",
+    operationId: "pmop_poolmate-order-1-checkout-1-v1",
+    status: "READY",
+    settlementMode: "disabled",
+    attempts: 0,
+    updatedAt: "2026-07-25T02:00:00.000Z"
+  },
+  paymentOutbox: {
+    id: "outbox-1",
+    paymentRequestId: "payment-request-1",
+    operationId: "pmop_poolmate-order-1-checkout-1-v1",
+    status: "pending",
+    attempts: 0,
+    availableAt: "2026-07-25T02:00:00.000Z",
+    updatedAt: "2026-07-25T02:00:00.000Z"
   }
 };
 
