@@ -25,8 +25,9 @@ P3 没有被人为“做通”。仓库当前没有供独立进程使用的稳�
 | P2 durable core | `e21ddf9` | operation ID、lease、单次提交 claim、UNKNOWN 隔离、持久化恢复和 Receipt 门 |
 | P2/P4 集成 | `82f9385` | HTTP Payment Base 边界、Bot 真实文案、定时恢复、支付审计管理面板 |
 | 验收修正 | `1b8f132` | Mock Receipt 可合法解析，但不会显示为 `Paid / verified` 或链上 Explorer 证据 |
+| 文档收口 | `273e443` | 同步唯一事实源、独立方案状态与本报告 |
 
-最终文档更新另有独立提交。
+本报告后续的浏览器验收勘误另有独立提交。
 
 ## 3. CodexClaw 与 grammY
 
@@ -128,16 +129,16 @@ Token 和支付凭证均无 `VITE_` 前缀。启用 Telegram 时 `POOLMATE_PUBLI
 | Frontend lint / typecheck / tests / build | 通过，`28/28` |
 | Shared typecheck / build | 通过 |
 | Docker empty-volume cold start | Backend 与 Frontend healthy |
-| 浏览器插件 | 当前 Codex 桌面会话无可控制浏览器实例，未执行真实浏览器 E2E 或截图 |
-| 响应式替代检查 | CSS/DOM 状态、管理员 gate 与 jsdom 交互测试通过；发布前仍需真实桌面/移动浏览器 QA |
+| 浏览器桌面 | `1440 x 900` 真实页面检查通过，无横向溢出、控件重叠或 console warning/error |
+| 浏览器移动 | `390 x 844` 真实页面检查通过，无横向溢出、控件重叠或 console warning/error |
 | Repository boundary | 无嵌套 `.git`、无 submodule、无 `web/` import、无 Telegraf production import |
 
-容器 Smoke Test 使用的临时地址为：
+最终验收容器保留在：
 
-- Frontend：`http://127.0.0.1:18080`
-- Backend：`http://127.0.0.1:18788`
+- Frontend：`http://127.0.0.1:8080`
+- Backend：`http://127.0.0.1:8788`
 
-验收结束后临时容器会被关闭，这两个地址不是持续部署入口。
+它们是本机 Docker 验收入口，不是公网或生产部署。
 
 ## 9. 未完成与下一步
 

@@ -235,7 +235,7 @@ P3 的进入条件是支付基座已经存在可从独立进程调用的稳定�
 - Backend CI：typecheck、lint、format、`86/86` tests、build、空库 healthcheck、生产依赖 audit 全部通过。
 - Frontend：lint、typecheck、`28/28` tests 和 build 全部通过；shared typecheck/build 通过。
 - Docker 从独立空 volume 冷启动成功，`/health` 与 `/health/ready` 报告 5 个 migration，Bot 和 Payment Base 未配置时如实显示 `disabled`。
-- 响应式 CSS、DOM 状态、管理员 gate 和 jsdom 交互测试已检查。当前 Codex 桌面会话没有提供可控制的浏览器实例，因此未生成桌面/移动真实浏览器截图，也未将浏览器 E2E 标记为通过。
+- 真实浏览器检查覆盖桌面 `1440 x 900` 与移动 `390 x 844`：运行时页和管理员 gate 无横向溢出或控件重叠，浏览器控制台无 warning/error；未生成持久化截图文件。
 - 静态边界检查无嵌套 `.git`、无 submodule、无 Telegraf production import、无 `web/` import；grammY 类型未进入 Domain、Application、shared DTO 或数据库 schema。
 - 未执行真实 Telegram 群聊、外部 HTTPS Mini App 或 Injective Testnet/Live 付款，这些不属于已完成证据。
 
