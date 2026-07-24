@@ -94,8 +94,55 @@ export interface PoolMatePaymentRequest {
   payeeId: string;
   money: AtomicMoney;
   expiresAt: string;
-  status: "ready";
+  status:
+    | "ready"
+    | "submitting"
+    | "submitted"
+    | "confirmed"
+    | "demo_confirmed"
+    | "failed"
+    | "unknown";
   createdAt: string;
+}
+
+export type PaymentProjectionStatus =
+  | "READY"
+  | "UNAVAILABLE"
+  | "SUBMITTING"
+  | "SUBMITTED"
+  | "UNKNOWN"
+  | "FAILED"
+  | "CONFIRMED"
+  | "DEMO_CONFIRMED";
+
+export interface PaymentReceiptView {
+  receiptId: string;
+  transactionHash: string;
+  explorerUrl: string;
+  confirmedAt: string;
+}
+
+export interface PaymentProjectionView {
+  paymentRequestId: string;
+  operationId: string;
+  status: PaymentProjectionStatus;
+  settlementMode: "disabled" | "mock" | "testnet" | "live";
+  errorCode?: string;
+  errorMessage?: string;
+  receipt?: PaymentReceiptView;
+  attempts: number;
+  updatedAt: string;
+}
+
+export interface PaymentOutboxView {
+  id: string;
+  paymentRequestId: string;
+  operationId: string;
+  status: "pending" | "processing" | "completed" | "blocked" | "unknown";
+  attempts: number;
+  lastErrorCode?: string;
+  availableAt: string;
+  updatedAt: string;
 }
 
 export interface OrderSummaryView {
@@ -117,6 +164,8 @@ export interface OrderDetailView extends OrderSummaryView {
   participants: ParticipantView[];
   checkout?: CheckoutView;
   paymentRequest?: PoolMatePaymentRequest;
+  paymentProjection?: PaymentProjectionView;
+  paymentOutbox?: PaymentOutboxView;
 }
 
 export interface ConfirmationView {

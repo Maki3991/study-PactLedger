@@ -32,6 +32,10 @@ export type {
   OrderState,
   OrderSummaryView,
   ParticipantView,
+  PaymentOutboxView,
+  PaymentProjectionStatus,
+  PaymentProjectionView,
+  PaymentReceiptView,
   PoolMatePaymentRequest,
   UpdateClaimRequest,
 } from "./orders.js";
