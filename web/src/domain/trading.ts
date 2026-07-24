@@ -1,3 +1,5 @@
+import type { PactLedgerTrace } from './pactledger.js'
+
 export type AgentStatus = 'complete' | 'working' | 'blocked' | 'waiting'
 export type CandidateStatus = 'rejected' | 'approved' | 'testing'
 
@@ -18,6 +20,10 @@ export interface StrategyCandidate {
   returnPct: number
   drawdownPct: number
   sharpe: number
+  winRate: number
+  volatility: number
+  oosReturn: number
+  trades: number
   signal: string
 }
 
@@ -49,8 +55,48 @@ export type TaskPhase =
 
 export interface TaskExecution {
   state: 'ready' | 'signing' | 'executed'
-  network: 'Injective Testnet'
+  network: 'Mock' | 'Injective Testnet'
   transactionHash?: string
+}
+
+export interface QuantEvidence {
+  provider: 'panda-data' | 'replay'
+  configured: boolean
+  sourceMethod: 'get_stock_daily_pre' | 'deterministic_replay'
+  sdkVersion: '0.0.12'
+  adjustment: 'pre-adjusted' | 'synthetic'
+  skill: 'QuantSkills/pandadata-api'
+  symbol: string
+  startDate: string
+  endDate: string
+  barCount: number
+  fetchedAt: string
+  note: string
+}
+
+export type IntentStatus =
+  | 'submitted'
+  | 'policy_rejected'
+  | 'awaiting_approval'
+  | 'approved'
+  | 'executing'
+  | 'executed'
+  | 'failed'
+
+export interface ActionIntent {
+  id: string
+  appId: 'kaleidox'
+  agentId: 'execution'
+  action: 'stock_trade'
+  symbol: string
+  side: 'buy' | 'sell'
+  notional: number
+  currency: 'USDT'
+  protocolTag: 'investment'
+  strategyVersion: string
+  status: IntentStatus
+  policyReason?: string
+  createdAt: string
 }
 
 export interface TaskSnapshot {
@@ -63,6 +109,10 @@ export interface TaskSnapshot {
   candidates: StrategyCandidate[]
   firewallRules: FirewallRule[]
   timeline: TimelineEvent[]
+  quantEvidence?: QuantEvidence
+  researchSummary?: string
+  actionIntent?: ActionIntent
+  paymentTraces: PactLedgerTrace[]
   execution: TaskExecution
   createdAt: string
   updatedAt: string
@@ -73,7 +123,9 @@ export interface CreateTaskInput {
   budgetUsdt: number
   maxLossPct: number
   maxAssetPct: number
-  asset: 'ETH'
+  asset: string
+  startDate?: string
+  endDate?: string
 }
 
 export interface TaskStreamEvent {
@@ -85,16 +137,47 @@ export interface InjectiveConfigStatus {
   mode: 'mock' | 'testnet'
   network: 'testnet'
   chainId: string
-  adapter: 'mock' | 'testnet-pending'
+  adapter: 'mock' | 'injective-testnet'
+  executionState: 'mock_ready' | 'testnet_configuration_required' | 'testnet_ready'
   readyForExecution: boolean
   credentialsConfigured: boolean
+  paymentAssetConfigured: boolean
+  payeesConfigured: boolean
   walletAddress?: string
-  marketIdConfigured: boolean
-  subaccountIdConfigured: boolean
+  paymentDenom?: string
+  paymentDecimals?: number
+  explorerTxBaseUrl: string
+  payees: {
+    risk: boolean
+    execution: boolean
+    poolmateMerchant: boolean
+  }
   endpoints: {
     rpc: string
     rest: string
     grpc: string
+    indexer: string
   }
+  missing: string[]
+}
+
+export interface PandaConfigStatus {
+  mode: 'auto' | 'panda' | 'replay'
+  provider: 'panda-data' | 'replay'
+  ready: boolean
+  credentialsConfigured: boolean
+  pythonExecutable: string
+  defaultSymbol: string
+  sourceMethod: 'get_stock_daily_pre'
+  sdkVersion: '0.0.12'
+  skill: 'QuantSkills/pandadata-api'
+  missing: string[]
+}
+
+export interface PandaModelStatus {
+  provider: 'deepseek' | 'ark' | 'template'
+  configured: boolean
+  endpointId: string
+  baseUrl: string
   missing: string[]
 }

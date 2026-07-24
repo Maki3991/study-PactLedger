@@ -1,17 +1,14 @@
-import type { CreateTaskInput, InjectiveConfigStatus, TaskSnapshot, TaskStreamEvent } from '../domain/trading'
+import type { CreateTaskInput, InjectiveConfigStatus, PandaConfigStatus, TaskSnapshot, TaskStreamEvent } from '../domain/trading'
 import { authHeaders, getAuthToken } from './authClient'
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set('Content-Type', 'application/json')
   for (const [key, value] of Object.entries(authHeaders())) headers.set(key, value)
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  })
+  const response = await fetch(url, { ...init, headers })
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({ message: response.statusText })) as { message?: string }
-    throw new Error(payload.message ?? `Request failed with status ${response.status}`)
+    const payload = await response.json().catch(() => ({ message: response.statusText })) as { error?: string; message?: string }
+    throw new Error(payload.message ?? payload.error ?? `Request failed with status ${response.status}`)
   }
   return response.json() as Promise<T>
 }
@@ -26,6 +23,8 @@ export const approveTask = (taskId: string): Promise<TaskSnapshot> => request(`/
 export const executeTask = (taskId: string): Promise<TaskSnapshot> => request(`/api/tasks/${taskId}/execute`, { method: 'POST' })
 
 export const getInjectiveConfig = (): Promise<InjectiveConfigStatus> => request('/api/config/injective')
+
+export const getPandaConfig = (): Promise<PandaConfigStatus> => request('/api/config/panda')
 
 export const subscribeToTask = (
   taskId: string,

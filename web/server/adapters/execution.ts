@@ -1,25 +1,46 @@
-export interface ExecutionResult {
-  transactionHash: string
-  network: 'Injective Testnet'
+import { createHash } from 'node:crypto'
+import type {
+  AgentPaymentIntent,
+  SettlementMode,
+  SettlementReceipt,
+} from '../../src/domain/pactledger.js'
+
+export interface SettlementAdapter {
+  readonly mode: SettlementMode
+  readonly network: SettlementReceipt['network']
+  settle(intent: AgentPaymentIntent): Promise<SettlementReceipt>
 }
 
-export interface ExecutionAdapter {
-  execute(taskId: string): Promise<ExecutionResult>
-}
+/** @deprecated Use SettlementAdapter. Kept as a compatibility alias for team integrations. */
+export type ExecutionAdapter = SettlementAdapter
 
-export class MockInjectiveAdapter implements ExecutionAdapter {
-  async execute(taskId: string): Promise<ExecutionResult> {
-    await new Promise((resolve) => setTimeout(resolve, 650))
-    const fingerprint = taskId.replaceAll('-', '').slice(0, 12).padEnd(12, '0')
-    return {
-      transactionHash: `0x8f7c${fingerprint}42d1`,
-      network: 'Injective Testnet',
-    }
+export class SettlementAdapterError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message)
+    this.name = 'SettlementAdapterError'
   }
 }
 
-export class PendingInjectiveTestnetAdapter implements ExecutionAdapter {
-  async execute(): Promise<ExecutionResult> {
-    throw new Error('Injective testnet signing adapter is not enabled')
+export class MockInjectiveAdapter implements SettlementAdapter {
+  readonly mode = 'mock' as const
+  readonly network = 'Mock' as const
+
+  async settle(intent: AgentPaymentIntent): Promise<SettlementReceipt> {
+    await new Promise((resolve) => setTimeout(resolve, 650))
+    const fingerprint = createHash('sha256').update(intent.id).digest('hex')
+    return {
+      intentId: intent.id,
+      mode: 'mock',
+      network: 'Mock',
+      status: 'confirmed',
+      amountAtomic: intent.amountAtomic,
+      denom: intent.denom,
+      transactionHash: `mock_${fingerprint.slice(0, 24)}`,
+      confirmedAt: new Date().toISOString(),
+    }
   }
 }

@@ -112,7 +112,7 @@ export function MemoryBankView({ task }: MemoryBankViewProps) {
   const budget = budgetMatch ? `${budgetMatch[1]} USDT` : '1,000 USDT'
   const maxLossMatch = objective.match(/(\d+(?:\.\d+)?)%.*亏损/)
   const maxLoss = maxLossMatch ? `${maxLossMatch[1]}%` : '5.0%'
-  const asset = task?.objective.includes('ETH') ? 'ETH' : 'ETH'
+  const asset = task?.quantEvidence?.symbol ?? '000001.SZ'
 
   const userProfile = [
     { icon: Clock, label: '投资期限', value: '中期 (1–4 周)', updated: '2026-07-20' },

@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { ArrowRight, Check, GitBranch, TrendingDown, TrendingUp, X } from 'lucide-react'
 import type { StrategyCandidate } from '../domain/trading'
 
@@ -8,6 +9,10 @@ interface EvolutionPanelProps {
 }
 
 export function EvolutionPanel({ candidates, selectedId, onSelect }: EvolutionPanelProps) {
+  const statusLabel = (candidate: StrategyCandidate) => candidate.status === 'approved'
+    ? 'Winner'
+    : candidate.status === 'rejected' ? 'Rejected' : 'Challenger'
+
   return (
     <section className="panel evolution-panel" aria-labelledby="evolution-heading">
       <div className="panel-heading evolution-heading-row">
@@ -19,18 +24,22 @@ export function EvolutionPanel({ candidates, selectedId, onSelect }: EvolutionPa
       </div>
 
       <div className="evolution-path" aria-label="策略版本进化路径">
-        <button className={selectedId === 'v1' ? 'version-node selected rejected' : 'version-node rejected'} onClick={() => onSelect('v1')}>
-          <span>V1</span><small>Champion</small>
-        </button>
-        <span className="path-line"><X size={12} /></span>
-        <span className="fork-node"><GitBranch size={16} /></span>
-        <span className="path-line branch"><ArrowRight size={12} /></span>
-        <button className={selectedId === 'v2a' ? 'version-node selected testing' : 'version-node testing'} onClick={() => onSelect('v2a')}>
-          <span>V2-A</span><small>Challenger</small>
-        </button>
-        <button className={selectedId === 'v2b' ? 'version-node selected winner' : 'version-node winner'} onClick={() => onSelect('v2b')}>
-          <span>V2-B</span><small>Winner</small>
-        </button>
+        {candidates.map((candidate, index) => {
+          const stateClass = candidate.status === 'approved' ? 'winner' : candidate.status
+          return (
+            <Fragment key={candidate.id}>
+              {index > 0 && (
+                <>
+                  <span className="path-line">{candidates[index - 1].status === 'rejected' ? <X size={12} /> : <ArrowRight size={12} />}</span>
+                  {index === 1 && <span className="fork-node"><GitBranch size={16} /></span>}
+                </>
+              )}
+              <button className={`version-node ${stateClass}${selectedId === candidate.id ? ' selected' : ''}`} onClick={() => onSelect(candidate.id)}>
+                <span>{candidate.name}</span><small>{statusLabel(candidate)}</small>
+              </button>
+            </Fragment>
+          )
+        })}
       </div>
 
       <div className="strategy-table-wrap">

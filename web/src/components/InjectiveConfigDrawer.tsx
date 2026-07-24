@@ -39,8 +39,12 @@ export function InjectiveConfigDrawer({ open, status, error, onClose }: Injectiv
             <div className={`config-readiness ${status.readyForExecution ? 'ready' : 'pending'}`}>
               {status.readyForExecution ? <ShieldCheck size={20} /> : <AlertTriangle size={20} />}
               <div>
-                <strong>{status.mode === 'mock' ? 'Mock 执行已启用' : '测试网执行尚未启用'}</strong>
-                <span>{status.credentialsConfigured ? '签名配置已填写' : `仍缺少 ${status.missing.length} 项签名配置`}</span>
+                <strong>{status.mode === 'mock'
+                  ? 'Mock 结算已启用'
+                  : status.readyForExecution ? 'Injective Testnet 结算已就绪' : 'Testnet 配置尚未完成'}</strong>
+                <span>{status.readyForExecution
+                  ? '当前执行路径满足服务端校验'
+                  : `仍缺少 ${status.missing.length} 项签名、资产或收款地址配置`}</span>
               </div>
               <code>{status.mode.toUpperCase()}</code>
             </div>
@@ -53,15 +57,19 @@ export function InjectiveConfigDrawer({ open, status, error, onClose }: Injectiv
                 <div><dt>RPC</dt><dd title={status.endpoints.rpc}>{status.endpoints.rpc}</dd></div>
                 <div><dt>REST</dt><dd title={status.endpoints.rest}>{status.endpoints.rest}</dd></div>
                 <div><dt>gRPC</dt><dd title={status.endpoints.grpc}>{status.endpoints.grpc}</dd></div>
+                <div><dt>Indexer</dt><dd title={status.endpoints.indexer}>{status.endpoints.indexer}</dd></div>
               </dl>
             </div>
 
             <div className="config-section">
-              <h3><WalletCards size={14} /> 签名与市场</h3>
+              <h3><WalletCards size={14} /> 签名与支付资产</h3>
               <dl className="config-list">
                 <div><dt>Wallet</dt><dd className={status.walletAddress ? 'configured' : 'missing'}>{status.walletAddress ?? '未配置'}</dd></div>
-                <div><dt>Market ID</dt><dd className={status.marketIdConfigured ? 'configured' : 'missing'}>{status.marketIdConfigured ? '已配置' : '未配置'}</dd></div>
-                <div><dt>Subaccount</dt><dd className={status.subaccountIdConfigured ? 'configured' : 'missing'}>{status.subaccountIdConfigured ? '已配置' : '未配置'}</dd></div>
+                <div><dt>Payment denom</dt><dd className={status.paymentAssetConfigured ? 'configured' : 'missing'}>{status.paymentDenom ?? '未配置'}</dd></div>
+                <div><dt>Decimals</dt><dd className={status.paymentDecimals !== undefined ? 'configured' : 'missing'}>{status.paymentDecimals ?? '未配置'}</dd></div>
+                <div><dt>Risk payee</dt><dd className={status.payees.risk ? 'configured' : 'missing'}>{status.payees.risk ? '已配置' : '未配置'}</dd></div>
+                <div><dt>Execution payee</dt><dd className={status.payees.execution ? 'configured' : 'missing'}>{status.payees.execution ? '已配置' : '未配置'}</dd></div>
+                <div><dt>PoolMate merchant</dt><dd className={status.payees.poolmateMerchant ? 'configured' : 'missing'}>{status.payees.poolmateMerchant ? '已配置' : '未配置'}</dd></div>
               </dl>
             </div>
 

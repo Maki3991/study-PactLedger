@@ -9,10 +9,18 @@ export interface InjectiveConfig {
   rpcEndpoint: string
   restEndpoint: string
   grpcEndpoint: string
+  indexerEndpoint: string
   walletAddress?: string
   privateKey?: string
-  marketId?: string
-  subaccountId?: string
+  paymentDenom?: string
+  paymentDecimals?: number
+  explorerTxBaseUrl: string
+  contractAddress?: string
+  payeeAddresses: {
+    risk?: string
+    execution?: string
+    poolmateMerchant?: string
+  }
   feeDenom: string
   gasPrice: string
 }
@@ -22,6 +30,8 @@ const defaults = {
   rpcEndpoint: 'https://testnet.sentry.tm.injective.network:443',
   restEndpoint: 'https://testnet.sentry.lcd.injective.network:443',
   grpcEndpoint: 'https://testnet.sentry.chain.grpc-web.injective.network:443',
+  indexerEndpoint: 'https://testnet.sentry.exchange.grpc-web.injective.network',
+  explorerTxBaseUrl: 'https://testnet.explorer.injective.network/transaction/',
   feeDenom: 'inj',
   gasPrice: '500000000',
 }
@@ -35,41 +45,81 @@ export function readInjectiveConfig(environment: NodeJS.ProcessEnv = process.env
     rpcEndpoint: environment.INJECTIVE_RPC_ENDPOINT || defaults.rpcEndpoint,
     restEndpoint: environment.INJECTIVE_REST_ENDPOINT || defaults.restEndpoint,
     grpcEndpoint: environment.INJECTIVE_GRPC_ENDPOINT || defaults.grpcEndpoint,
+    indexerEndpoint: environment.INJECTIVE_INDEXER_ENDPOINT || defaults.indexerEndpoint,
     walletAddress: emptyToUndefined(environment.INJECTIVE_WALLET_ADDRESS),
     privateKey: emptyToUndefined(environment.INJECTIVE_PRIVATE_KEY),
-    marketId: emptyToUndefined(environment.INJECTIVE_MARKET_ID),
-    subaccountId: emptyToUndefined(environment.INJECTIVE_SUBACCOUNT_ID),
+    paymentDenom: emptyToUndefined(environment.INJECTIVE_PAYMENT_DENOM),
+    paymentDecimals: parseDecimals(environment.INJECTIVE_PAYMENT_DECIMALS),
+    explorerTxBaseUrl: normalizeBaseUrl(
+      environment.INJECTIVE_EXPLORER_TX_BASE_URL || defaults.explorerTxBaseUrl,
+    ),
+    contractAddress: emptyToUndefined(environment.INJECTIVE_CONTRACT_ADDRESS),
+    payeeAddresses: {
+      risk: emptyToUndefined(environment.INJECTIVE_RISK_PAYEE_ADDRESS),
+      execution: emptyToUndefined(environment.INJECTIVE_EXECUTION_PAYEE_ADDRESS),
+      poolmateMerchant: emptyToUndefined(environment.INJECTIVE_POOLMATE_MERCHANT_ADDRESS),
+    },
     feeDenom: environment.INJECTIVE_FEE_DENOM || defaults.feeDenom,
     gasPrice: environment.INJECTIVE_GAS_PRICE || defaults.gasPrice,
   }
 }
 
 export function getInjectiveConfigStatus(config: InjectiveConfig): InjectiveConfigStatus {
-  const required = [
+  const signerRequired = [
     ['INJECTIVE_WALLET_ADDRESS', config.walletAddress],
     ['INJECTIVE_PRIVATE_KEY', config.privateKey],
-    ['INJECTIVE_MARKET_ID', config.marketId],
-    ['INJECTIVE_SUBACCOUNT_ID', config.subaccountId],
   ] as const
-  const missing = required.filter(([, value]) => !value).map(([name]) => name)
+  const paymentRequired = [
+    ['INJECTIVE_PAYMENT_DENOM', config.paymentDenom],
+    ['INJECTIVE_PAYMENT_DECIMALS', config.paymentDecimals],
+    ['INJECTIVE_RISK_PAYEE_ADDRESS', config.payeeAddresses.risk],
+    ['INJECTIVE_EXECUTION_PAYEE_ADDRESS', config.payeeAddresses.execution],
+    ['INJECTIVE_POOLMATE_MERCHANT_ADDRESS', config.payeeAddresses.poolmateMerchant],
+  ] as const
+  const missing = [...signerRequired, ...paymentRequired]
+    .filter(([, value]) => value === undefined || value === '')
+    .map(([name]) => name)
+  const credentialsConfigured = signerRequired.every(([, value]) => Boolean(value))
+  const paymentAssetConfigured = Boolean(config.paymentDenom) && config.paymentDecimals !== undefined
+  const payeesConfigured = Object.values(config.payeeAddresses).every(Boolean)
+  const testnetReady = credentialsConfigured && paymentAssetConfigured && payeesConfigured
 
   return {
     mode: config.mode,
     network: config.network,
     chainId: config.chainId,
-    adapter: config.mode === 'mock' ? 'mock' : 'testnet-pending',
-    readyForExecution: config.mode === 'mock',
-    credentialsConfigured: missing.length === 0,
+    adapter: config.mode === 'mock' ? 'mock' : 'injective-testnet',
+    executionState: config.mode === 'mock'
+      ? 'mock_ready'
+      : testnetReady ? 'testnet_ready' : 'testnet_configuration_required',
+    readyForExecution: config.mode === 'mock' || testnetReady,
+    credentialsConfigured,
+    paymentAssetConfigured,
+    payeesConfigured,
     walletAddress: maskWalletAddress(config.walletAddress),
-    marketIdConfigured: Boolean(config.marketId),
-    subaccountIdConfigured: Boolean(config.subaccountId),
+    paymentDenom: config.paymentDenom,
+    paymentDecimals: config.paymentDecimals,
+    explorerTxBaseUrl: config.explorerTxBaseUrl,
+    payees: {
+      risk: Boolean(config.payeeAddresses.risk),
+      execution: Boolean(config.payeeAddresses.execution),
+      poolmateMerchant: Boolean(config.payeeAddresses.poolmateMerchant),
+    },
     endpoints: {
       rpc: config.rpcEndpoint,
       rest: config.restEndpoint,
       grpc: config.grpcEndpoint,
+      indexer: config.indexerEndpoint,
     },
     missing,
   }
+}
+
+export function getInjectivePayeeAddress(config: InjectiveConfig, payeeId: string): string | undefined {
+  if (payeeId === 'risk') return config.payeeAddresses.risk
+  if (payeeId === 'execution') return config.payeeAddresses.execution
+  if (payeeId === 'merchant-demo') return config.payeeAddresses.poolmateMerchant
+  return undefined
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {
@@ -81,4 +131,15 @@ function maskWalletAddress(address?: string): string | undefined {
   if (!address) return undefined
   if (address.length <= 14) return `${address.slice(0, 4)}...${address.slice(-3)}`
   return `${address.slice(0, 10)}...${address.slice(-6)}`
+}
+
+function parseDecimals(value: string | undefined): number | undefined {
+  const normalized = emptyToUndefined(value)
+  if (!normalized) return undefined
+  const parsed = Number(normalized)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 30 ? parsed : undefined
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`
 }

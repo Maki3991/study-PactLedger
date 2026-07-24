@@ -5,16 +5,18 @@ interface FirewallPanelProps {
   rules: FirewallRule[]
   executionState: 'ready' | 'signing' | 'executed'
   canExecute: boolean
+  executionMode?: 'mock' | 'testnet'
+  strategyVersion?: string
   transactionHash?: string
   onExecute: () => void
 }
 
-export function FirewallPanel({ rules, executionState, canExecute, transactionHash, onExecute }: FirewallPanelProps) {
+export function FirewallPanel({ rules, executionState, canExecute, executionMode = 'mock', strategyVersion, transactionHash, onExecute }: FirewallPanelProps) {
   const buttonCopy = executionState === 'signing'
     ? '签发交易中…'
     : executionState === 'executed'
-      ? '测试网执行成功'
-      : canExecute ? '批准并执行 V2-B' : '等待 Agent 复核'
+      ? executionMode === 'mock' ? 'Mock 执行成功' : '测试网执行成功'
+      : canExecute ? `批准并执行 ${strategyVersion ?? 'Action Intent'}` : '等待 Agent 复核'
 
   return (
     <section className="panel firewall-panel" aria-labelledby="firewall-heading">
@@ -45,7 +47,7 @@ export function FirewallPanel({ rules, executionState, canExecute, transactionHa
       <div className={`execution-receipt ${executionState}`} aria-live="polite">
         <Radio size={15} />
         <div>
-          <span>Injective Testnet</span>
+          <span>{executionMode === 'mock' ? 'Mock Execution Adapter' : 'Injective Testnet'}</span>
           <strong>{executionState === 'executed' ? transactionHash ?? '交易已确认' : '等待风险签发'}</strong>
         </div>
         {executionState === 'executed' && <ExternalLink size={14} />}
