@@ -67,7 +67,7 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
           <span className="kx-brand-glyph"><Workflow size={17} /></span>
           <span><strong>KaleidoX</strong><small>on PactLedger</small></span>
         </div>
-        <p className="kx-kicker">PRODUCT INSTANCE · 01</p>
+        <p className="kx-kicker">REFERENCE APP · 01</p>
         <h1>股票 Agent，<br />有能力，也有边界。</h1>
         <p className="kx-auth-lead">
           PandaAI 负责数据，量化 Agent 负责研究，PactLedger 负责每一笔钱能不能动。
@@ -89,7 +89,7 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
           <div className="kx-auth-title">
             <span>KALEIDOX WORKSPACE</span>
             <h2>{mode === 'login' ? '继续你的研究任务' : '创建一个演示账户'}</h2>
-            <p>{mode === 'login' ? '登录后进入股票量化产品实例。' : '账户、任务和审计证据将持久化到 PostgreSQL。'}</p>
+            <p>{mode === 'login' ? '登录后进入 PactLedger 风险压力测试参考应用。' : '账户、任务和审计证据将持久化到 PostgreSQL。'}</p>
           </div>
 
           <label className="kx-auth-field">

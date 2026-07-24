@@ -2,12 +2,12 @@ import { useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
-  BadgeCheck,
   Bot,
   Check,
   ChevronDown,
   Circle,
   Database,
+  ExternalLink,
   FileCheck2,
   Fingerprint,
   GitBranch,
@@ -18,14 +18,18 @@ import {
   RotateCcw,
   ShieldCheck,
   Workflow,
+  Zap,
 } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import type {
   AgentRun,
   CreateTaskInput,
+  InjectiveConfigStatus,
+  PandaConfigStatus,
   TaskPhase,
   TaskSnapshot,
 } from './domain/trading'
+import type { PactLedgerTrace, SettlementReceipt } from './domain/pactledger'
 import type { AuthUser } from './services/authClient'
 import { useAuth } from './services/useAuth'
 import { useInjectiveConfig } from './services/useInjectiveConfig'
@@ -83,6 +87,10 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
   const normalizedSymbol = symbol.trim().toUpperCase()
   const canStart = !submitting && (!task || task.phase === 'executed' || task.phase === 'failed')
   const executionReady = injective.status?.readyForExecution === true
+  const executionTrace = executionPaymentTrace(task)
+  const injectivePresentation = getInjectivePresentation(injective.status, task)
+  const pandaPresentation = getPandaPresentation(panda.status, task)
+  const taskFailure = taskFailureMessage(task)
 
   const submit = () => {
     if (!/^\d{6}\.(SZ|SH|BJ)$/.test(normalizedSymbol)) {
@@ -110,16 +118,16 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
         <div className="kx-product-path" aria-label="产品层级">
           <ArrowRight size={13} />
           <span>KaleidoX</span>
-          <em>Product 01</em>
+          <em>Reference App 01</em>
         </div>
         <div className="kx-nav-actions">
           <StatusPill
-            label={panda.status?.provider === 'panda-data' ? 'PandaData Live' : 'Panda Replay'}
-            tone={panda.status?.provider === 'panda-data' ? 'ok' : 'review'}
+            label={pandaPresentation.label}
+            tone={pandaPresentation.tone}
           />
           <StatusPill
-            label={injective.status?.mode === 'testnet' ? 'Injective Testnet' : 'Mock Adapter'}
-            tone={executionReady ? 'ok' : 'review'}
+            label={injectivePresentation.label}
+            tone={injectivePresentation.tone}
           />
           <span className="kx-user-name">{user.username}</span>
           <button className="kx-icon-button" type="button" title="退出登录" onClick={() => void onLogout()}>
@@ -131,23 +139,23 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
       <main className="kx-main">
         <section className="kx-intro">
           <a className="kx-back" href="/"><ArrowLeft size={14} /> 返回基座</a>
-          <p className="kx-kicker">PACTLEDGER PRODUCT INSTANCE · 01</p>
-          <h1>把一个股票目标，变成<br />一条受控的交易意图。</h1>
+          <p className="kx-kicker">PACTLEDGER REFERENCE APP · 01</p>
+          <h1>股票 Agent 负责研究，<br />资金基座负责踩刹车。</h1>
           <p className="kx-intro-copy">
-            KaleidoX 负责股票研究，PactLedger 负责账户、策略边界、审批和回执。
-            业务 Agent 可以变化，资金控制面无需重建。
+            KaleidoX 只提出策略建议；PactLedger 控制 Agent 服务费、权限边界和审计回执。
+            A 股指令不会被冒充为 Injective 交易，链上只结算 Agent 之间的真实服务采购。
           </p>
         </section>
 
         <section className="kx-base-ribbon" aria-label="PactLedger 复用能力">
           <div className="kx-base-ribbon-title">
             <span>Powered by PactLedger</span>
-            <strong>这个样例只新增股票 Skill，其余全部复用基座。</strong>
+            <strong>业务层只新增股票 Skill；花钱、拒付与留证全部复用基座。</strong>
           </div>
           <div className="kx-primitive-list">
             <Primitive icon={Database} label="Agent Account" detail="隔离预算" />
             <Primitive icon={ShieldCheck} label="Policy Engine" detail="规则纠偏" />
-            <Primitive icon={Fingerprint} label="Action Intent" detail="统一接口" />
+            <Primitive icon={Fingerprint} label="Payment Intent" detail="统一付款语义" />
             <Primitive icon={FileCheck2} label="Receipt Ledger" detail="可审计回执" />
           </div>
         </section>
@@ -187,8 +195,8 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
           </div>
         </section>
 
-        {(error || panda.error || injective.error) && (
-          <div className="kx-api-error" role="alert">{error ?? panda.error ?? injective.error}</div>
+        {(error || panda.error || injective.error || taskFailure) && (
+          <div className="kx-api-error" role="alert">{error ?? panda.error ?? injective.error ?? taskFailure}</div>
         )}
 
         <section className="kx-story" aria-label="量化交易 MVP 流程">
@@ -254,6 +262,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
                   <strong>40% 建议仓位</strong><ArrowRight size={14} /><strong>25% 合规意图</strong>
                 </div>
               )}
+              {riskPaymentTrace(task) && <PaymentTrace trace={riskPaymentTrace(task)!} />}
             </StoryStep>
 
             <StoryStep
@@ -263,7 +272,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
               state={approvalState(task)}
               title={task?.actionIntent ? '统一 Action Intent 已生成' : '高风险动作必须由用户确认'}
               summary={task?.actionIntent
-                ? `${task.actionIntent.side.toUpperCase()} ${task.actionIntent.symbol} · ${task.actionIntent.notional} ${task.actionIntent.currency} · ${task.actionIntent.strategyVersion}`
+                ? `${task.actionIntent.symbol} · ${task.actionIntent.strategyVersion} · 合规仓位 25% · Broker-ready 指令`
                 : '研究结果不会直接越过权限边界，只有批准后的 Intent 才会进入执行适配器。'}
             >
               {task?.actionIntent && (
@@ -277,37 +286,29 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
                 <div className="kx-approval-action">
                   <button className="kx-primary" type="button" onClick={() => void approveAndExecute()} disabled={!executionReady}>
                     <LockKeyhole size={17} />
-                    {injective.status?.mode === 'testnet' ? '批准并提交 Testnet' : '批准并生成 Mock Receipt'}
+                    {injective.status?.mode === 'testnet' ? '批准策略并结算服务费' : '批准策略并生成 Mock 服务费回执'}
                   </button>
-                  <p>{executionReady ? '这是整条流程唯一需要人工确认的动作。' : 'Injective 执行适配器尚未准备好。'}</p>
+                  <p>{executionReady ? '批准的是股票策略；Receipt 证明的是 Execution Agent 服务费。' : 'Injective 服务费适配器尚未准备好。'}</p>
                 </div>
               )}
             </StoryStep>
 
             <StoryStep
               number="06"
-              label="执行回执"
+              label="结算与回执"
               owner="PactLedger Adapter"
               state={receiptState(task)}
-              title={task?.execution.state === 'executed' ? '执行结果已写入统一账本' : '等待执行适配器返回 Receipt'}
-              summary={task?.execution.state === 'executed'
-                ? `${task.execution.network} · ${task.execution.transactionHash}`
-                : '当前默认输出 Mock Receipt；队友接入 Injective 后只需替换 Adapter，前面的产品流程保持不变。'}
+              title={executionTraceTitle(executionTrace)}
+              summary={executionTraceSummary(executionTrace)}
             >
-              {task?.execution.state === 'executed' && (
-                <div className="kx-receipt">
-                  <BadgeCheck size={22} />
-                  <div><span>{task.execution.network === 'Mock' ? 'DEMO RECEIPT' : 'ON-CHAIN RECEIPT'}</span><strong>{task.execution.transactionHash}</strong></div>
-                  <a href="#base-proof">查看基座复用说明 <ArrowRight size={14} /></a>
-                </div>
-              )}
+              {executionTrace && <PaymentTrace trace={executionTrace} />}
             </StoryStep>
           </div>
 
           <aside className="kx-base-proof" id="base-proof">
             <p className="kx-kicker">WHY THE BASE MATTERS</p>
             <h2>换一个业务，<br />不再重做资金系统。</h2>
-            <p>量化案例只实现数据与策略。PactLedger 接管所有高风险、可复用的部分。</p>
+            <p>量化案例只实现数据与策略。PactLedger 接管 Agent 账户、Policy、支付和 Receipt。</p>
             <ol>
               <li><span>01</span><div><strong>业务 Agent 输出建议</strong><small>股票策略、拼单付款都映射为 Intent</small></div></li>
               <li><span>02</span><div><strong>基座统一执行控制</strong><small>账户、预算、白名单、人工批准</small></div></li>
@@ -318,10 +319,11 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
             <details className="kx-system-details">
               <summary>当前接入状态 <ChevronDown size={14} /></summary>
               <div>
-                <SystemRow label="PandaAI" value={panda.status?.provider === 'panda-data' ? 'Live' : 'Replay'} />
+                <SystemRow label="PandaAI" value={pandaPresentation.label} />
                 <SystemRow label="Panda SDK" value={panda.status?.sdkVersion ?? '0.0.12'} />
                 <SystemRow label="Quant Skill" value="pandadata-api" />
                 <SystemRow label="Execution" value={injective.status?.adapter ?? 'loading'} />
+                <SystemRow label="Settlement state" value={injectivePresentation.label} />
                 <SystemRow label="Chain" value={injective.status?.chainId ?? 'injective-888'} />
               </div>
             </details>
@@ -331,7 +333,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
 
       <footer className="kx-footer">
         <span><strong>KaleidoX</strong> on PactLedger</span>
-        <span>股票量化产品实例 · 数据证据 → Policy → Intent → Receipt</span>
+        <span>风险压力测试参考应用 · Intent → Policy → Settlement → Receipt</span>
       </footer>
     </div>
   )
@@ -428,6 +430,108 @@ function PolicyList({ task }: { task: TaskSnapshot }) {
   )
 }
 
+function PaymentTrace({ trace }: { trace: PactLedgerTrace }) {
+  const rejected = trace.decision.outcome === 'rejected'
+  const receipt = trace.receipt
+  const verifiableTestnetReceipt = isVerifiableTestnetReceipt(receipt)
+  const settlementState: TraceStageState = rejected
+    ? 'skipped'
+    : !receipt ? 'waiting' : receipt.status === 'confirmed' ? 'complete' : 'failed'
+  const receiptState: TraceStageState = rejected
+    ? 'skipped'
+    : !receipt
+      ? 'waiting'
+      : receipt.status === 'failed' || (receipt.mode === 'testnet' && !verifiableTestnetReceipt)
+        ? 'failed'
+        : 'complete'
+  const settlementLabel = rejected
+    ? 'SKIPPED'
+    : !receipt
+      ? 'WAITING'
+      : receipt.mode === 'mock' ? 'MOCK ADAPTER' : 'INJECTIVE TESTNET'
+  const receiptLabel = rejected
+    ? 'NOT CREATED'
+    : !receipt
+      ? 'WAITING'
+      : receipt.status === 'failed'
+        ? receipt.errorCode ?? 'FAILED'
+        : receipt.mode === 'mock'
+          ? 'MOCK RECEIPT'
+          : verifiableTestnetReceipt ? 'CONFIRMED' : 'EVIDENCE INCOMPLETE'
+
+  return (
+    <section className={`kx-payment-trace ${rejected ? 'is-rejected' : ''}`} aria-label="PactLedger Agent 支付轨迹">
+      <div className="kx-payment-trace-head">
+        <div>
+          <span>PACTLEDGER TRACE · {trace.intent.appId.toUpperCase()}</span>
+          <strong>{trace.intent.payerAgentId} → {trace.intent.payeeId}</strong>
+        </div>
+        <em>{trace.intent.amount} {trace.intent.currency}</em>
+      </div>
+      <div className="kx-payment-pipeline">
+        <TraceStage icon={Fingerprint} label="INTENT" value={trace.intent.purpose} state="complete" />
+        <ArrowRight size={13} />
+        <TraceStage icon={ShieldCheck} label="POLICY" value={trace.decision.code} state={rejected ? 'failed' : 'complete'} />
+        <ArrowRight size={13} />
+        <TraceStage icon={Zap} label="SETTLEMENT" value={settlementLabel} state={settlementState} />
+        <ArrowRight size={13} />
+        <TraceStage icon={FileCheck2} label="RECEIPT" value={receiptLabel} state={receiptState} />
+      </div>
+      <div className="kx-payment-verdict">
+        <div>
+          <span>{trace.decision.id}</span>
+          <strong>{trace.decision.reason}</strong>
+        </div>
+        <dl>
+          <div><dt>Intent</dt><dd>{trace.intent.id}</dd></div>
+          <div><dt>Status</dt><dd>{trace.intent.status}</dd></div>
+          <div><dt>Mode</dt><dd>{receipt?.mode ?? 'not-settled'}</dd></div>
+          <div><dt>Receipt store</dt><dd>{receipt ? 'saved before response' : 'not created'}</dd></div>
+        </dl>
+      </div>
+      {receipt?.transactionHash && <code className="kx-payment-hash">{receipt.transactionHash}</code>}
+      {verifiableTestnetReceipt && (
+        <a className="kx-payment-explorer" href={receipt.explorerUrl} target="_blank" rel="noreferrer">
+          <span>Injective Explorer · Block {receipt.blockHeight}</span>
+          <ExternalLink size={13} />
+        </a>
+      )}
+      <details>
+        <summary>查看每一项检查 <ChevronDown size={13} /></summary>
+        <div className="kx-payment-checks">
+          {trace.decision.checks.map((check) => (
+            <p className={check.passed ? 'pass' : 'fail'} key={check.code}>
+              <span>{check.passed ? <Check size={11} /> : <Circle size={9} />}{check.label}</span>
+              <strong>{check.detail}</strong>
+            </p>
+          ))}
+        </div>
+      </details>
+      <p className="kx-payment-truth">
+        {receipt?.mode === 'mock'
+          ? '这是可复现的 Mock Receipt，不会生成 Explorer 链接；它证明控制链路，不冒充链上交易。'
+          : 'Injective 只结算 Agent 服务费；只有交易哈希、区块高度与 Explorer 同时存在时才显示链上确认。'}
+      </p>
+    </section>
+  )
+}
+
+type TraceStageState = 'complete' | 'failed' | 'waiting' | 'skipped'
+
+function TraceStage({
+  icon: Icon,
+  label,
+  value,
+  state,
+}: {
+  icon: typeof Fingerprint
+  label: string
+  value: string
+  state: TraceStageState
+}) {
+  return <div className={state}><Icon size={13} /><span><small>{label}</small><strong>{value}</strong></span></div>
+}
+
 function SystemRow({ label, value }: { label: string; value: string }) {
   return <p><span>{label}</span><strong>{value}</strong></p>
 }
@@ -463,7 +567,86 @@ function approvalState(task?: TaskSnapshot): StepState {
 }
 
 function receiptState(task?: TaskSnapshot): StepState {
+  const trace = executionPaymentTrace(task)
+  if (trace?.receipt?.status === 'failed') return 'failed'
+  if (trace?.receipt?.status === 'confirmed') return 'complete'
   return stateFor(task, ['approved', 'executing'], 'executed')
+}
+
+function riskPaymentTrace(task?: TaskSnapshot): PactLedgerTrace | undefined {
+  return task?.paymentTraces.find((trace) => trace.intent.purpose === 'risk_review')
+}
+
+function executionPaymentTrace(task?: TaskSnapshot): PactLedgerTrace | undefined {
+  return task?.paymentTraces.find((trace) => trace.intent.purpose === 'execution')
+}
+
+function executionTraceTitle(trace?: PactLedgerTrace): string {
+  const receipt = trace?.receipt
+  if (!trace) return '等待结算适配器返回完整 Trace'
+  if (!receipt) return 'Payment Intent 尚未进入结算层'
+  if (receipt.status === 'failed') return '服务费结算失败，错误已写入审计轨迹'
+  if (receipt.mode === 'mock') return 'Mock 服务费回执已写入统一账本'
+  if (isVerifiableTestnetReceipt(receipt)) return 'Injective Testnet Receipt 已确认并入账'
+  return 'Testnet 回执证据不完整，未标记链上确认'
+}
+
+function executionTraceSummary(trace?: PactLedgerTrace): string {
+  const receipt = trace?.receipt
+  if (!trace) return '股票策略只生成 Broker-ready 指令；PactLedger 另外结算 Execution Agent 服务费。'
+  if (!receipt) return `${trace.intent.id} 已通过 ${trace.decision.policyId}，等待 Settlement Adapter。`
+  if (receipt.status === 'failed') {
+    return `${receipt.errorCode ?? 'SETTLEMENT_FAILED'} · ${receipt.error ?? '结算未获得可验证 Receipt。'}`
+  }
+  if (receipt.mode === 'mock') {
+    return `Mock Adapter · ${receipt.transactionHash ?? '无回执编号'} · 不链接 Explorer。`
+  }
+  return isVerifiableTestnetReceipt(receipt)
+    ? `Injective Testnet · Block ${receipt.blockHeight} · ${receipt.transactionHash}`
+    : 'Testnet 返回结果缺少交易哈希、区块高度或 Explorer，证据未通过展示门槛。'
+}
+
+function getInjectivePresentation(
+  status: InjectiveConfigStatus | undefined,
+  task?: TaskSnapshot,
+): { label: string; tone: 'ok' | 'review' } {
+  const confirmed = task?.paymentTraces.some((trace) => isVerifiableTestnetReceipt(trace.receipt))
+  if (confirmed) return { label: 'Injective Confirmed', tone: 'ok' }
+  if (!status) return { label: 'Settlement status…', tone: 'review' }
+  if (status.mode === 'mock') return { label: 'Mock Adapter · No Chain', tone: 'review' }
+  if (status.executionState === 'testnet_configuration_required') {
+    return { label: 'Testnet Config Required', tone: 'review' }
+  }
+  return { label: 'Testnet Ready · Unconfirmed', tone: 'review' }
+}
+
+function getPandaPresentation(
+  status: PandaConfigStatus | undefined,
+  task?: TaskSnapshot,
+): { label: string; tone: 'ok' | 'review' } {
+  if (task?.quantEvidence?.provider === 'panda-data') return { label: 'PandaData Live', tone: 'ok' }
+  if (task?.quantEvidence?.provider === 'replay') return { label: 'Panda Replay', tone: 'review' }
+  if (status?.provider === 'panda-data') return { label: 'PandaData Configured', tone: 'review' }
+  return { label: 'Panda Replay', tone: 'review' }
+}
+
+function taskFailureMessage(task?: TaskSnapshot): string | undefined {
+  if (task?.phase !== 'failed') return undefined
+  const lastEvent = task.timeline.at(-1)
+  return lastEvent ? `${lastEvent.title}：${lastEvent.detail}` : '任务失败，请检查数据、模型或结算配置。'
+}
+
+function isVerifiableTestnetReceipt(
+  receipt?: SettlementReceipt,
+): receipt is SettlementReceipt & Required<Pick<SettlementReceipt, 'transactionHash' | 'explorerUrl' | 'blockHeight'>> {
+  return Boolean(
+    receipt
+    && receipt.mode === 'testnet'
+    && receipt.status === 'confirmed'
+    && receipt.transactionHash
+    && receipt.explorerUrl
+    && receipt.blockHeight,
+  )
 }
 
 function winner(task?: TaskSnapshot) {

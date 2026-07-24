@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import type { PactLedgerTrace } from '../src/domain/pactledger.js'
 import type { ActionIntent, AgentRun, CreateTaskInput, TaskPhase, TaskSnapshot, TimelineEvent } from '../src/domain/trading.js'
-import type { ExecutionAdapter } from './adapters/execution.js'
+import { createAgentPaymentIntent } from './pactledger/intents.js'
+import { PactLedgerService } from './pactledger/service.js'
 import { QuantResearchService } from './quant/service.js'
 import { TaskEvents } from './taskEvents.js'
 import { TaskRepository } from './repository.js'
@@ -17,7 +19,7 @@ export class TaskOrchestrator {
   constructor(
     private readonly repository: TaskRepository,
     private readonly events: TaskEvents,
-    private readonly executionAdapter: ExecutionAdapter,
+    private readonly pactLedger: PactLedgerService,
     private readonly quantResearch: QuantResearchService,
     private readonly treasury: TreasuryService,
     private readonly stepDelay = 450,
@@ -47,28 +49,48 @@ export class TaskOrchestrator {
       throw new InvalidTaskTransitionError(`Task cannot execute from phase ${current.phase}`)
     }
 
-    const intent = structuredClone(current.actionIntent)
     await this.treasury.recordExecutionCost(taskId)
     await this.update(taskId, 'executing', (snapshot) => {
       snapshot.execution.state = 'signing'
       if (snapshot.actionIntent) snapshot.actionIntent.status = 'executing'
-      setAgent(snapshot, 'execution', 'working', '提交 Injective 执行适配器', '00:01')
+      setAgent(snapshot, 'execution', 'working', '生成 Broker-ready 指令并结算 Execution Agent 服务费', '00:01')
     })
 
+    let executionPaymentTrace: PactLedgerTrace | undefined
     try {
-      const receipt = await this.executionAdapter.execute(intent)
+      executionPaymentTrace = await this.pactLedger.process(createAgentPaymentIntent({
+        tenantId: taskId,
+        appId: 'kaleidox',
+        payerAgentId: 'orchestrator',
+        payeeId: 'execution',
+        amount: 50,
+        currency: 'USDT',
+        purpose: 'execution',
+        protocol: 'internal',
+        metadata: {
+          actionIntentId: current.actionIntent.id,
+          symbol: current.actionIntent.symbol,
+          strategyVersion: current.actionIntent.strategyVersion,
+        },
+      }))
+      const receipt = executionPaymentTrace.receipt
+      if (!receipt || receipt.status !== 'confirmed' || !receipt.transactionHash) {
+        throw new Error(receipt?.error ?? 'Agent payment did not receive a confirmed receipt')
+      }
       return this.update(taskId, 'executed', (snapshot) => {
+        appendPaymentTrace(snapshot, executionPaymentTrace!)
         snapshot.execution = { state: 'executed', network: receipt.network, transactionHash: receipt.transactionHash }
         if (snapshot.actionIntent) snapshot.actionIntent.status = 'executed'
-        setAgent(snapshot, 'execution', 'complete', '执行回执已写入统一账本', '00:08')
-        appendTimeline(snapshot, '股票策略意图已完成结算', `交易哈希 ${receipt.transactionHash}`, 'success')
+        setAgent(snapshot, 'execution', 'complete', 'Broker-ready 指令已生成，Agent 服务费回执已入账', '00:08')
+        appendTimeline(snapshot, 'Execution Agent 服务费已完成结算', `Receipt ${receipt.transactionHash}`, 'success')
       })
     } catch (error) {
       return this.update(taskId, 'failed', (snapshot) => {
+        if (executionPaymentTrace) appendPaymentTrace(snapshot, executionPaymentTrace)
         snapshot.execution.state = 'ready'
         if (snapshot.actionIntent) snapshot.actionIntent.status = 'failed'
-        setAgent(snapshot, 'execution', 'blocked', 'Injective 执行适配器返回失败', '00:01')
-        appendTimeline(snapshot, '链上执行失败', error instanceof Error ? error.message : '未知执行错误', 'warning')
+        setAgent(snapshot, 'execution', 'blocked', 'Agent 服务费结算未确认', '00:01')
+        appendTimeline(snapshot, '服务费结算失败', error instanceof Error ? error.message : '未知执行错误', 'warning')
       })
     }
   }
@@ -112,11 +134,32 @@ export class TaskOrchestrator {
 
       await this.wait(1)
       await this.treasury.recordRiskFee(taskId)
+      const riskPaymentTrace = await this.pactLedger.process(createAgentPaymentIntent({
+        tenantId: taskId,
+        appId: 'kaleidox',
+        payerAgentId: 'strategy',
+        payeeId: 'risk',
+        amount: 15,
+        currency: 'USDT',
+        purpose: 'risk_review',
+        protocol: 'internal',
+        metadata: {
+          symbol: input.asset,
+          candidate: analysis.winner.name,
+          requestedPositionPct: 40,
+        },
+      }))
       await this.update(taskId, 'risk_review', (snapshot) => {
+        snapshot.paymentTraces.push(riskPaymentTrace)
         setAgent(snapshot, 'risk', 'blocked', '40% 单股仓位超过用户上限，已退回', '00:02')
         snapshot.firewallRules[1].current = '40% / 拒绝'
         snapshot.actionIntent = createActionIntent(input.asset, analysis.winner.name, 400, 'policy_rejected', '40% 单股仓位超过 30% 上限')
-        appendTimeline(snapshot, 'Policy Engine 退回初版', '建议仓位 40%，超过单一股票仓位上限 30%', 'warning')
+        appendTimeline(
+          snapshot,
+          'Policy Engine 退回初版',
+          `建议仓位 40%，超过单一股票仓位上限 30%；Risk 审核费 ${riskPaymentTrace.decision.outcome}`,
+          'warning',
+        )
       })
 
       await this.wait(1)
@@ -201,4 +244,10 @@ function appendTimeline(snapshot: TaskSnapshot, title: string, detail: string, t
     detail,
     tone,
   })
+}
+
+function appendPaymentTrace(snapshot: TaskSnapshot, trace: PactLedgerTrace): void {
+  if (!snapshot.paymentTraces.some((item) => item.intent.id === trace.intent.id)) {
+    snapshot.paymentTraces.push(trace)
+  }
 }

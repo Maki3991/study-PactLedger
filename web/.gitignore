@@ -7,3 +7,4 @@ dist
 *.log
 tests/artifacts
 server/data
+/.qoder

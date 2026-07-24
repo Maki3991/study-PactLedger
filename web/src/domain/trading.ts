@@ -1,3 +1,5 @@
+import type { PactLedgerTrace } from './pactledger.js'
+
 export type AgentStatus = 'complete' | 'working' | 'blocked' | 'waiting'
 export type CandidateStatus = 'rejected' | 'approved' | 'testing'
 
@@ -110,6 +112,7 @@ export interface TaskSnapshot {
   quantEvidence?: QuantEvidence
   researchSummary?: string
   actionIntent?: ActionIntent
+  paymentTraces: PactLedgerTrace[]
   execution: TaskExecution
   createdAt: string
   updatedAt: string
@@ -134,16 +137,26 @@ export interface InjectiveConfigStatus {
   mode: 'mock' | 'testnet'
   network: 'testnet'
   chainId: string
-  adapter: 'mock' | 'testnet-pending'
+  adapter: 'mock' | 'injective-testnet'
+  executionState: 'mock_ready' | 'testnet_configuration_required' | 'testnet_ready'
   readyForExecution: boolean
   credentialsConfigured: boolean
+  paymentAssetConfigured: boolean
+  payeesConfigured: boolean
   walletAddress?: string
-  marketIdConfigured: boolean
-  subaccountIdConfigured: boolean
+  paymentDenom?: string
+  paymentDecimals?: number
+  explorerTxBaseUrl: string
+  payees: {
+    risk: boolean
+    execution: boolean
+    poolmateMerchant: boolean
+  }
   endpoints: {
     rpc: string
     rest: string
     grpc: string
+    indexer: string
   }
   missing: string[]
 }
@@ -162,7 +175,7 @@ export interface PandaConfigStatus {
 }
 
 export interface PandaModelStatus {
-  provider: 'ark' | 'template'
+  provider: 'deepseek' | 'ark' | 'template'
   configured: boolean
   endpointId: string
   baseUrl: string

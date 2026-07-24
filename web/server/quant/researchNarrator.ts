@@ -9,27 +9,48 @@ export class PandaModelResearchNarrator implements ResearchNarrator {
   constructor(private readonly config: PandaModelConfig) {}
 
   async summarize(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[]): Promise<string> {
-    if (!this.config.apiKey) throw new Error('ARK_API_KEY is not configured')
+    if (!this.config.apiKey || this.config.provider === 'template') {
+      throw new Error('PandaAI model API key is not configured')
+    }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs)
     try {
-      const response = await fetch(`${this.config.baseUrl}/responses`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: this.config.endpointId,
-          input: createPrompt(input, evidence, candidates),
-        }),
-        signal: controller.signal,
-      })
+      const prompt = createPrompt(input, evidence, candidates)
+      const response = this.config.provider === 'deepseek'
+        ? await fetch(`${this.config.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${this.config.apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: this.config.endpointId,
+              messages: [{ role: 'user', content: prompt }],
+              temperature: 0.2,
+              max_tokens: 1_024,
+              stream: false,
+            }),
+            signal: controller.signal,
+          })
+        : await fetch(`${this.config.baseUrl}/responses`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${this.config.apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: this.config.endpointId,
+              input: prompt,
+            }),
+            signal: controller.signal,
+          })
       if (!response.ok) throw new Error(`PandaAI model request failed with status ${response.status}`)
-      const payload = await response.json() as ArkResponsesPayload
-      const text = extractOutputText(payload)
+      const payload = await response.json() as ModelResponsePayload
+      const text = this.config.provider === 'deepseek'
+        ? extractChatCompletionText(payload)
+        : extractArkOutputText(payload)
       if (!text) throw new Error('PandaAI model returned no text output')
-      return text.trim()
+      return ensureRiskDisclaimer(text)
     } finally {
       clearTimeout(timeout)
     }
@@ -57,12 +78,27 @@ function createPrompt(input: CreateTaskInput, evidence: QuantEvidence, candidate
   ].join('\n')
 }
 
-interface ArkResponsesPayload {
+interface ModelResponsePayload {
   output_text?: string
   output?: Array<{ content?: Array<{ text?: string }> }>
+  choices?: Array<{ message?: { content?: string } }>
 }
 
-function extractOutputText(payload: ArkResponsesPayload): string | undefined {
+function extractArkOutputText(payload: ModelResponsePayload): string | undefined {
   if (payload.output_text) return payload.output_text
   return payload.output?.flatMap((item) => item.content ?? []).map((item) => item.text).find(Boolean)
+}
+
+function extractChatCompletionText(payload: ModelResponsePayload): string | undefined {
+  return payload.choices?.map((choice) => choice.message?.content).find(Boolean)
+}
+
+function ensureRiskDisclaimer(value: string): string {
+  const disclaimer = '本结果不构成投资建议。'
+  const normalized = value.trim()
+  if (normalized.includes('不构成投资建议') && normalized.length <= 180) return normalized
+  const withoutDuplicate = normalized.replace(/(?:本结果)?不构成投资建议[。.]?/g, '').trim()
+  const separator = withoutDuplicate && !/[。！？.!?]$/.test(withoutDuplicate) ? '。' : ''
+  const maxBodyLength = Math.max(0, 180 - separator.length - disclaimer.length)
+  return `${withoutDuplicate.slice(0, maxBodyLength)}${separator}${disclaimer}`
 }

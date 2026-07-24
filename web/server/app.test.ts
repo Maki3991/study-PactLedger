@@ -2,12 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { FastifyInstance } from 'fastify'
 import type { TaskSnapshot } from '../src/domain/trading.js'
-import type { ExecutionAdapter } from './adapters/execution.js'
+import { SettlementAdapterError, type ExecutionAdapter } from './adapters/execution.js'
 import { buildApp } from './app.js'
 import { readInjectiveConfig } from './config/injective.js'
 
 const instantExecution: ExecutionAdapter = {
-  execute: async () => ({ transactionHash: '0xtest-receipt', network: 'Injective Testnet' }),
+  mode: 'testnet',
+  network: 'Injective Testnet',
+  settle: async (intent) => ({
+    intentId: intent.id,
+    mode: 'testnet',
+    transactionHash: '0xtest-receipt',
+    network: 'Injective Testnet',
+    status: 'confirmed',
+    confirmedAt: new Date().toISOString(),
+  }),
 }
 
 const demoTaskPayload = {
@@ -193,8 +202,6 @@ test('testnet mode masks credentials and blocks execution until the adapter is r
     INJECTIVE_EXECUTION_MODE: 'testnet',
     INJECTIVE_WALLET_ADDRESS: 'inj1abcdefghijklmnopqrstuvwxyz123456',
     INJECTIVE_PRIVATE_KEY: secret,
-    INJECTIVE_MARKET_ID: '0xmarket',
-    INJECTIVE_SUBACCOUNT_ID: '0xsubaccount',
   })
   const app = await buildApp({ stepDelay: 1_000, injectiveConfig })
   await app.ready()
@@ -214,5 +221,173 @@ test('testnet mode masks credentials and blocks execution until the adapter is r
   const task = createdResponse.json<TaskSnapshot>()
   const executionResponse = await app.inject({ method: 'POST', url: `/api/tasks/${task.id}/execute`, headers: auth(token) })
   assert.equal(executionResponse.statusCode, 503)
+  await app.close()
+})
+
+test('public base status is truthful, unauthenticated and never exposes signer secrets', async () => {
+  const secret = '1'.repeat(64)
+  const injectiveConfig = readInjectiveConfig({
+    INJECTIVE_EXECUTION_MODE: 'testnet',
+    INJECTIVE_WALLET_ADDRESS: 'inj1abcdefghijklmnopqrstuvwxyz123456',
+    INJECTIVE_PRIVATE_KEY: secret,
+    INJECTIVE_PAYMENT_DENOM: 'inj',
+    INJECTIVE_PAYMENT_DECIMALS: '18',
+    INJECTIVE_RISK_PAYEE_ADDRESS: 'inj1riskabcdefghijklmnopqrstuvwxyz12',
+    INJECTIVE_EXECUTION_PAYEE_ADDRESS: 'inj1executionabcdefghijklmnopqrstu',
+    INJECTIVE_POOLMATE_MERCHANT_ADDRESS: 'inj1merchantabcdefghijklmnopqrstuv',
+  })
+  const app = await buildApp({ stepDelay: 1_000, injectiveConfig })
+  await app.ready()
+
+  const response = await app.inject({ method: 'GET', url: '/api/public/base-status' })
+  assert.equal(response.statusCode, 200)
+  const payload = response.json()
+  assert.equal(payload.product, 'PactLedger')
+  assert.equal(payload.execution.state, 'testnet_ready')
+  assert.equal(payload.execution.receiptPersistence, 'memory')
+  assert.deepEqual(payload.flow, [
+    'Agent Intent',
+    'PactLedger Policy',
+    'Injective Settlement',
+    'Verifiable Receipt',
+  ])
+  assert.ok(!response.body.includes(secret))
+  assert.ok(!response.body.includes('privateKey'))
+  await app.close()
+})
+
+test('PoolMate proves approved merchant payment and blocks an unknown payee through the same API', async () => {
+  const app = await buildApp({ stepDelay: 1_000 })
+  await app.ready()
+
+  const approvedResponse = await app.inject({
+    method: 'POST',
+    url: '/api/demo/poolmate/checkout',
+    payload: { scenario: 'approved', intentId: 'PM-APPROVED-001' },
+  })
+  assert.equal(approvedResponse.statusCode, 200)
+  const approved = approvedResponse.json()
+  assert.equal(approved.intent.appId, 'poolmate')
+  assert.equal(approved.decision.code, 'POLICY_APPROVED')
+  assert.equal(approved.receipt.mode, 'mock')
+  assert.match(approved.receipt.transactionHash, /^mock_[0-9a-f]{24}$/)
+
+  const blockedResponse = await app.inject({
+    method: 'POST',
+    url: '/api/demo/poolmate/checkout',
+    payload: { scenario: 'blocked', intentId: 'PM-BLOCKED-001' },
+  })
+  assert.equal(blockedResponse.statusCode, 200)
+  const blocked = blockedResponse.json()
+  assert.equal(blocked.decision.outcome, 'rejected')
+  assert.equal(blocked.decision.code, 'PAYEE_NOT_ALLOWED')
+  assert.equal(blocked.intent.status, 'policy_rejected')
+  assert.equal(blocked.receipt, undefined)
+  await app.close()
+})
+
+test('Agent Card and A2A task routes are accessible in safe Mock mode', async () => {
+  const app = await buildApp({ stepDelay: 1_000, a2aApiKey: '' })
+  await app.ready()
+
+  const cardResponse = await app.inject({ method: 'GET', url: '/.well-known/agent-card.json' })
+  assert.equal(cardResponse.statusCode, 200)
+  const card = cardResponse.json()
+  assert.equal(card.name, 'KaleidoX on PactLedger')
+  assert.match(card.url, /\/a2a$/)
+  assert.equal(card.security, undefined)
+
+  const sendResponse = await app.inject({
+    method: 'POST',
+    url: '/a2a/tasks/send',
+    payload: {
+      id: 'message-1',
+      message: { parts: [{ text: '研究 000001.SZ，仓位 30%，最大回撤 5%' }] },
+    },
+  })
+  assert.equal(sendResponse.statusCode, 202)
+  const submitted = sendResponse.json<{ id: string; status: { state: string } }>()
+  assert.ok(submitted.id)
+  assert.equal(submitted.status.state, 'submitted')
+
+  const getResponse = await app.inject({ method: 'GET', url: `/a2a/tasks/${submitted.id}` })
+  assert.equal(getResponse.statusCode, 200)
+  assert.equal(getResponse.json<{ id: string }>().id, submitted.id)
+
+  const rpcResponse = await app.inject({
+    method: 'POST',
+    url: '/a2a',
+    payload: { jsonrpc: '2.0', id: 7, method: 'tasks/get', params: { id: submitted.id } },
+  })
+  assert.equal(rpcResponse.statusCode, 200)
+  assert.equal(rpcResponse.json().result.id, submitted.id)
+  await app.close()
+})
+
+test('Testnet A2A execution is blocked when A2A_API_KEY is not configured', async () => {
+  const injectiveConfig = readInjectiveConfig({
+    INJECTIVE_EXECUTION_MODE: 'testnet',
+    INJECTIVE_WALLET_ADDRESS: 'inj1abcdefghijklmnopqrstuvwxyz123456',
+    INJECTIVE_PRIVATE_KEY: '1'.repeat(64),
+    INJECTIVE_PAYMENT_DENOM: 'inj',
+    INJECTIVE_PAYMENT_DECIMALS: '18',
+    INJECTIVE_RISK_PAYEE_ADDRESS: 'inj1riskabcdefghijklmnopqrstuvwxyz12',
+    INJECTIVE_EXECUTION_PAYEE_ADDRESS: 'inj1executionabcdefghijklmnopqrstu',
+    INJECTIVE_POOLMATE_MERCHANT_ADDRESS: 'inj1merchantabcdefghijklmnopqrstuv',
+  })
+  const app = await buildApp({ stepDelay: 1_000, injectiveConfig, a2aApiKey: '' })
+  await app.ready()
+
+  const card = (await app.inject({ method: 'GET', url: '/.well-known/agent-card.json' })).json()
+  assert.deepEqual(card.security, [{ bearerAuth: [] }])
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/a2a/tasks/send',
+    payload: { message: { parts: [{ text: '研究 000001.SZ' }] } },
+  })
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.json().error.code, 'A2A_AUTH_REQUIRED')
+  await app.close()
+})
+
+test('failed execution keeps the Settlement Receipt in the task Trace', async () => {
+  const failingAdapter: ExecutionAdapter = {
+    mode: 'testnet',
+    network: 'Injective Testnet',
+    settle: async () => {
+      throw new SettlementAdapterError('INJECTIVE_BROADCAST_FAILED', '测试网广播失败。', true)
+    },
+  }
+  const app = await buildApp({ stepDelay: 5, executionAdapter: failingAdapter })
+  await app.ready()
+  const token = await registerAndGetToken(app)
+  const createdResponse = await app.inject({
+    method: 'POST',
+    url: '/api/tasks',
+    headers: auth(token),
+    payload: demoTaskPayload,
+  })
+  let current = createdResponse.json<TaskSnapshot>()
+  for (let attempt = 0; attempt < 40 && current.phase !== 'awaiting_approval'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    current = (await app.inject({
+      method: 'GET',
+      url: `/api/tasks/${current.id}`,
+      headers: auth(token),
+    })).json<TaskSnapshot>()
+  }
+  assert.equal(current.phase, 'awaiting_approval')
+  await app.inject({ method: 'POST', url: `/api/tasks/${current.id}/approve`, headers: auth(token) })
+  const failed = (await app.inject({
+    method: 'POST',
+    url: `/api/tasks/${current.id}/execute`,
+    headers: auth(token),
+  })).json<TaskSnapshot>()
+
+  assert.equal(failed.phase, 'failed')
+  const executionTrace = failed.paymentTraces.find((trace) => trace.intent.purpose === 'execution')
+  assert.equal(executionTrace?.receipt?.status, 'failed')
+  assert.equal(executionTrace?.receipt?.errorCode, 'INJECTIVE_BROADCAST_FAILED')
   await app.close()
 })

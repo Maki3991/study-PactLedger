@@ -47,9 +47,35 @@ export class ReplayMarketDataProvider implements MarketDataProvider {
   }
 }
 
+export class FallbackMarketDataProvider implements MarketDataProvider {
+  constructor(
+    private readonly primary: MarketDataProvider,
+    private readonly fallback: MarketDataProvider,
+  ) {}
+
+  async fetchDaily(query: MarketDataQuery): Promise<MarketDataResult> {
+    try {
+      return await this.primary.fetchDaily(query)
+    } catch (error) {
+      const result = await this.fallback.fetchDaily(query)
+      return {
+        ...result,
+        configured: true,
+        note: `PandaData 调用失败，已安全降级为确定性回放（${safeProviderError(error)}）。本任务不宣称真实行情。`,
+      }
+    }
+  }
+}
+
 export function createMarketDataProvider(config: PandaDataConfig): MarketDataProvider {
   const hasCredentials = Boolean(config.username && config.password)
-  if (config.mode === 'panda' || (config.mode === 'auto' && hasCredentials)) return new PandaDataProvider(config)
+  if (config.mode === 'panda') return new PandaDataProvider(config)
+  if (config.mode === 'auto' && hasCredentials) {
+    return new FallbackMarketDataProvider(
+      new PandaDataProvider(config),
+      new ReplayMarketDataProvider(),
+    )
+  }
   return new ReplayMarketDataProvider()
 }
 
@@ -136,4 +162,15 @@ function parseCompactDate(value: string): Date {
 
 function formatCompactDate(value: Date): string {
   return value.toISOString().slice(0, 10).replaceAll('-', '')
+}
+
+function safeProviderError(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'unknown provider error'
+  return message
+    .replace(/:\/\/[^@\s]+@/g, '://[redacted]@')
+    .replace(/(password|token|secret|api[_-]?key|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
 }

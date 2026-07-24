@@ -17,7 +17,7 @@ export function readPandaDataConfig(environment: NodeJS.ProcessEnv = process.env
   const mode: PandaDataMode = requestedMode === 'panda' || requestedMode === 'replay' ? requestedMode : 'auto'
   return {
     mode,
-    username: emptyToUndefined(environment.PANDA_DATA_USERNAME),
+    username: normalizePandaUsername(environment.PANDA_DATA_USERNAME),
     password: emptyToUndefined(environment.PANDA_DATA_PASSWORD),
     baseUrl: environment.PANDA_DATA_BASE_URL || 'http://pandadata.pandaaiquant.com',
     pythonExecutable: environment.PANDA_PYTHON_BIN || (process.platform === 'win32' ? '.venv/Scripts/python.exe' : 'python'),
@@ -47,6 +47,12 @@ export function getPandaConfigStatus(config: PandaDataConfig): PandaConfigStatus
     skill: 'QuantSkills/pandadata-api',
     missing,
   }
+}
+
+function normalizePandaUsername(value: string | undefined): string | undefined {
+  const normalized = emptyToUndefined(value)
+  if (!normalized) return undefined
+  return /^1\d{10}$/.test(normalized) ? `86${normalized}` : normalized
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {

@@ -3,17 +3,26 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
+  Check,
   ChevronRight,
+  CircleOff,
   Database,
   FileCheck2,
   Fingerprint,
   MessagesSquare,
+  LoaderCircle,
   RotateCcw,
   Send,
   ShieldCheck,
   Timer,
   Wallet,
+  Zap,
 } from 'lucide-react'
+import type { PactLedgerTrace } from '../domain/pactledger'
+import {
+  createPoolMateDemoIntentId,
+  runPoolMateCheckout,
+} from '../services/pactledgerClient'
 
 const TELEGRAM_GROUP_URL = import.meta.env.VITE_POOLMATE_TELEGRAM_URL?.trim()
 
@@ -68,7 +77,7 @@ const CHAT_SCRIPT: ChatMsg[] = [
     kind: 'agent',
     variant: 'ok',
     title: '已凑满 3/3 · 已向商户组单付款 ¥267.00',
-    lines: ['Treasury 校验通过：商户白名单 ✓ · 预算内 ✓', 'Mock Receipt rcpt_pm_7f3a9cc2 · Injective 接口待接入'],
+    lines: ['页面叙事示意：商户白名单 ✓ · 预算内 ✓', '下方按钮可调用真实 PactLedger API 生成 Mock Receipt'],
   },
   {
     kind: 'agent',
@@ -80,7 +89,7 @@ const CHAT_SCRIPT: ChatMsg[] = [
     kind: 'agent',
     variant: 'reject',
     title: '抱歉，你不在收款白名单里。',
-    lines: ['这笔钱我一分都动不了。', 'Treasury Policy 拒绝 · 审计事件 evt_pm_51bde07a'],
+    lines: ['这笔钱我一分都动不了。', '下方可实时验证：Policy 拒绝后不会调用 Settlement Adapter'],
   },
 ]
 
@@ -195,6 +204,105 @@ function ChatDemo() {
   )
 }
 
+function PoolMateTraceLab() {
+  const [trace, setTrace] = useState<PactLedgerTrace>()
+  const [running, setRunning] = useState<'approved' | 'blocked'>()
+  const [error, setError] = useState<string>()
+
+  const run = async (scenario: 'approved' | 'blocked') => {
+    setRunning(scenario)
+    setError(undefined)
+    try {
+      setTrace(await runPoolMateCheckout(scenario, createPoolMateDemoIntentId()))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '基座校验失败')
+    } finally {
+      setRunning(undefined)
+    }
+  }
+
+  const rejected = trace?.decision.outcome === 'rejected'
+  return (
+    <section className="pm-runtime" id="base-proof" aria-labelledby="pm-runtime-title">
+      <div className="pm-runtime-copy">
+        <p className="pm-eyebrow">LIVE PACTLEDGER API PROOF</p>
+        <h2 id="pm-runtime-title">静态故事讲场景，<br />这里运行真正的基座。</h2>
+        <p>
+          两个请求都进入生产 Fastify 的同一套 Payment Intent、Policy Engine 与 Receipt Service。
+          公共页面固定使用安全 Mock 结算，避免任何访客触发真实 Testnet 资金。
+        </p>
+        <div className="pm-runtime-actions">
+          <button type="button" onClick={() => void run('approved')} disabled={Boolean(running)}>
+            {running === 'approved' ? <LoaderCircle size={15} className="pm-spin" /> : <ShieldCheck size={15} />}
+            运行白名单商户付款
+          </button>
+          <button className="reject" type="button" onClick={() => void run('blocked')} disabled={Boolean(running)}>
+            {running === 'blocked' ? <LoaderCircle size={15} className="pm-spin" /> : <CircleOff size={15} />}
+            测试骗转账
+          </button>
+        </div>
+        {error && <p className="pm-runtime-error" role="alert">{error}</p>}
+      </div>
+
+      <div className={`pm-runtime-trace ${rejected ? 'is-rejected' : ''}`} aria-live="polite">
+        {!trace ? (
+          <div className="pm-runtime-empty">
+            <Fingerprint size={24} />
+            <strong>等待 Payment Intent</strong>
+            <span>选择成功或拒绝场景，观察 Settlement Adapter 是否被调用。</span>
+          </div>
+        ) : (
+          <>
+            <div className="pm-runtime-head">
+              <span>{trace.intent.id}</span>
+              <strong>{trace.intent.payerAgentId} → {trace.intent.payeeId}</strong>
+              <em>{trace.intent.amount} {trace.intent.currency}</em>
+            </div>
+            <div className="pm-runtime-route">
+              <RuntimeNode icon={Fingerprint} label="INTENT" value={trace.intent.purpose} state="pass" />
+              <ChevronRight size={13} />
+              <RuntimeNode icon={ShieldCheck} label="POLICY" value={trace.decision.code} state={rejected ? 'fail' : 'pass'} />
+              <ChevronRight size={13} />
+              <RuntimeNode icon={Zap} label="SETTLEMENT" value={rejected ? 'SKIPPED' : 'MOCK'} state={rejected ? 'skip' : 'pass'} />
+              <ChevronRight size={13} />
+              <RuntimeNode icon={FileCheck2} label="RECEIPT" value={rejected ? 'NOT CREATED' : 'MOCK'} state={rejected ? 'skip' : 'pass'} />
+            </div>
+            <div className="pm-runtime-verdict">
+              {rejected ? <CircleOff size={18} /> : <BadgeCheck size={18} />}
+              <div><span>{trace.decision.id}</span><strong>{trace.decision.reason}</strong></div>
+            </div>
+            <div className="pm-runtime-checks">
+              {trace.decision.checks.map((check) => (
+                <p className={check.passed ? 'pass' : 'fail'} key={check.code}>
+                  <span>{check.passed ? <Check size={11} /> : <CircleOff size={11} />}{check.label}</span>
+                  <strong>{check.detail}</strong>
+                </p>
+              ))}
+            </div>
+            {trace.receipt?.transactionHash && (
+              <code>{trace.receipt.transactionHash} · Mock Receipt · no Explorer</code>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function RuntimeNode({
+  icon: Icon,
+  label,
+  value,
+  state,
+}: {
+  icon: typeof Fingerprint
+  label: string
+  value: string
+  state: 'pass' | 'fail' | 'skip'
+}) {
+  return <div className={state}><Icon size={14} /><span><small>{label}</small><strong>{value}</strong></span></div>
+}
+
 /* -------------------------------- sections -------------------------------- */
 
 const trustPoints = [
@@ -211,7 +319,7 @@ const trustPoints = [
   {
     icon: RotateCcw,
     title: '所有结果都返回统一 Receipt',
-    body: '付款、退款、退差和拒绝事件使用同一种证据格式，后续可由 Injective Adapter 上链结算。',
+    body: '付款、退款、退差和拒绝事件使用同一种证据格式；Mock 与 Injective Testnet 状态严格分离。',
   },
 ]
 
@@ -230,9 +338,9 @@ const baseMappings = [
   },
   {
     icon: Fingerprint,
-    primitive: 'Action Intent',
+    primitive: 'Payment Intent',
     base: '统一表达高风险资金动作',
-    product: 'group_purchase、merchant_pay、refund',
+    product: 'merchant_pay、refund 与明确有效期',
   },
   {
     icon: FileCheck2,
@@ -247,7 +355,7 @@ const steps = [
   { num: '02', title: '群友各自确认份额', body: '每人一笔委托：金额上限、用途、截止时间，当场锁死。' },
   { num: '03', title: '凑满即生成付款 Intent', body: 'PoolMate 只负责业务映射；PactLedger 校验商户、金额和用途后再交给执行适配器。' },
   { num: '04', title: '自动分账退差', body: '批量优惠按份额退回、运费自动摊销，账单卡推送到群。' },
-  { num: '05', title: '每笔都有审计凭证', body: '所有资金流写入统一审计账本；当前为 Mock Receipt，Injective 适配器接口已预留。' },
+  { num: '05', title: '每笔都有审计凭证', body: '所有资金流写入统一审计账本；公共演示为 Mock，服务端已实现 Injective Testnet Adapter，待钱包与测试币联调。' },
 ]
 
 export function PoolMate() {
@@ -258,13 +366,13 @@ export function PoolMate() {
         <a className="pm-nav-back" href="/">
           <ArrowLeft size={15} /> PactLedger
         </a>
-        <span className="pm-nav-tag">PRODUCT 02 · MESSAGE-NATIVE</span>
+        <span className="pm-nav-tag">REFERENCE APP 02 · MESSAGE-NATIVE</span>
       </header>
 
       {/* -------------------------------- hero ------------------------------- */}
       <section className="pm-hero">
         <Reveal className="pm-hero-copy">
-          <p className="pm-eyebrow">PACTLEDGER PRODUCT INSTANCE · 02</p>
+          <p className="pm-eyebrow">PACTLEDGER REFERENCE APP · 02</p>
           <h1 className="pm-h1">PoolMate<span className="pm-h1-dot">.</span></h1>
           <p className="pm-hero-tag">同一套资金基座，<br /><span>换成群聊里的拼单 Agent。</span></p>
           <p className="pm-hero-sub">
@@ -276,8 +384,9 @@ export function PoolMate() {
               {TELEGRAM_GROUP_URL ? '在 Telegram 中打开' : 'Telegram 群待配置'} <ArrowRight size={16} />
             </TelegramCta>
             <a className="pm-btn pm-btn-text" href="#how">
-              看看它怎么工作 <ChevronRight size={16} />
+              看业务流程 <ChevronRight size={16} />
             </a>
+            <a className="pm-btn pm-btn-text" href="#base-proof">运行基座校验 <ChevronRight size={16} /></a>
           </div>
           <p className="pm-hero-note">{TELEGRAM_GROUP_URL ? '评委现场点击进群 · 30 秒体验完整拼单闭环' : '页面演示可直接体验 · 配置 VITE_POOLMATE_TELEGRAM_URL 后开放进群入口'}</p>
         </Reveal>
@@ -293,6 +402,8 @@ export function PoolMate() {
         </div>
         <p>Account <i /> Policy <i /> Intent <i /> Receipt</p>
       </section>
+
+      <PoolMateTraceLab />
 
       {/* ------------------------------ trust quote ------------------------------ */}
       <section className="pm-section pm-trust">
@@ -362,7 +473,7 @@ export function PoolMate() {
         <Reveal>
           <div className="pm-final-card">
             <BadgeCheck size={26} className="pm-final-icon" />
-            <h2>第二个产品，证明基座不是量化专用。</h2>
+            <h2>第二个参考应用，证明基座不是量化专用。</h2>
             <p>{TELEGRAM_GROUP_URL ? '进群发起一单拼单，观察相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务。' : '当前页面演示相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务；配置群链接后即可开放现场入口。'}</p>
             <TelegramCta className="pm-btn pm-btn-primary pm-btn-lg">
               {TELEGRAM_GROUP_URL ? '加入 Telegram 群 · 现场拼一单' : 'Telegram 群入口待配置'} <ArrowRight size={17} />
@@ -370,7 +481,7 @@ export function PoolMate() {
             <div className="pm-final-meta">
               <span><Wallet size={13} /> 独立 Treasury 账户</span>
               <span><ShieldCheck size={13} /> 策略级权限约束</span>
-              <span><FileCheck2 size={13} /> Injective 适配器已预留</span>
+              <span><FileCheck2 size={13} /> Mock / Testnet 真值分离</span>
             </div>
           </div>
         </Reveal>

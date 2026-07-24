@@ -2,14 +2,20 @@ import { randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 import cors from '@fastify/cors'
 import type { Pool } from 'pg'
+import type { PactLedgerBaseStatus } from '../src/domain/pactledger.js'
 import type { CreateTaskInput, TaskSnapshot, TaskStreamEvent } from '../src/domain/trading.js'
-import type { ExecutionAdapter } from './adapters/execution.js'
-import { createExecutionAdapter } from './adapters/createExecutionAdapter.js'
+import { buildAgentCard, parseA2AInput, toA2ATask } from './a2a.js'
+import { MockInjectiveAdapter, type SettlementAdapter } from './adapters/execution.js'
+import { createSettlementAdapter } from './adapters/createExecutionAdapter.js'
 import { getInjectiveConfigStatus, readInjectiveConfig, type InjectiveConfig } from './config/injective.js'
 import type { DatabaseConfigStatus } from './config/database.js'
 import { getPandaConfigStatus, readPandaDataConfig, type PandaDataConfig } from './config/panda.js'
 import { getPandaModelStatus, readPandaModelConfig, type PandaModelConfig } from './config/pandaModel.js'
 import { InvalidTaskTransitionError, TaskOrchestrator } from './orchestrator.js'
+import { createAgentPaymentIntent } from './pactledger/intents.js'
+import { PolicyEngine } from './pactledger/policyEngine.js'
+import { PactLedgerRepository } from './pactledger/repository.js'
+import { PactLedgerService } from './pactledger/service.js'
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
 import { createResearchNarrator } from './quant/researchNarrator.js'
@@ -26,10 +32,11 @@ declare module 'fastify' {
 }
 
 interface BuildAppOptions {
+  a2aApiKey?: string
   databasePool?: Pool
   databaseStatus?: DatabaseConfigStatus
   stepDelay?: number
-  executionAdapter?: ExecutionAdapter
+  executionAdapter?: SettlementAdapter
   injectiveConfig?: InjectiveConfig
   onTaskCreated?: (taskId: string) => void
   pandaConfig?: PandaDataConfig
@@ -46,9 +53,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const app = Fastify({ logger: false })
   const repository = new TaskRepository(options.databasePool)
   const treasury = new TreasuryService(options.databasePool)
+  const pactLedgerRepository = new PactLedgerRepository(options.databasePool)
   const userStore = new UserStore(options.databasePool)
   await repository.initialize()
   await treasury.initialize()
+  await pactLedgerRepository.initialize()
   await userStore.initialize()
   const events = new TaskEvents()
   const injectiveConfig = options.injectiveConfig ?? readInjectiveConfig()
@@ -61,14 +70,27 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     createMarketDataProvider(pandaConfig),
     createResearchNarrator(pandaModelConfig),
   )
+  const pactLedger = new PactLedgerService(
+    pactLedgerRepository,
+    new PolicyEngine(),
+    options.executionAdapter ?? createSettlementAdapter(injectiveConfig),
+  )
+  const poolMateDemoLedger = new PactLedgerService(
+    pactLedgerRepository,
+    new PolicyEngine(),
+    new MockInjectiveAdapter(),
+  )
   const orchestrator = new TaskOrchestrator(
     repository,
     events,
-    options.executionAdapter ?? createExecutionAdapter(injectiveConfig),
+    pactLedger,
     quantResearch,
     treasury,
     options.stepDelay,
   )
+  const a2aApiKey = options.a2aApiKey !== undefined
+    ? options.a2aApiKey.trim() || undefined
+    : process.env.A2A_API_KEY?.trim()
 
   await app.register(cors, { origin: true })
 
@@ -81,7 +103,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   app.addHook('onRequest', async (request, reply) => {
     const { url } = request
-    if (!url.startsWith('/api/') || url.startsWith('/api/auth') || url.startsWith('/api/health')) return
+    if (
+      !url.startsWith('/api/')
+      || url.startsWith('/api/auth')
+      || url.startsWith('/api/health')
+      || url.startsWith('/api/public/')
+      || url.startsWith('/api/demo/')
+    ) return
     const token = extractToken(request)
     const user = token ? await userStore.findByToken(token) : undefined
     if (!user) {
@@ -104,16 +132,126 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return task
   }
 
+  const authorizeA2A = async (request: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
+    if (!a2aApiKey && injectiveConfig.mode === 'mock') return true
+    if (!a2aApiKey) {
+      await reply.code(503).send({
+        error: { code: 'A2A_AUTH_REQUIRED', message: 'Testnet 模式必须配置 A2A_API_KEY 才能接收外部任务。' },
+      })
+      return false
+    }
+    if (extractToken(request) !== a2aApiKey) {
+      await reply.code(401).send({
+        error: { code: 'A2A_UNAUTHORIZED', message: 'A2A API Key 缺失或无效。' },
+      })
+      return false
+    }
+    return true
+  }
+
+  const createAndStartTask = async (input: CreateTaskInput, ownerId?: string): Promise<TaskSnapshot> => {
+    const id = randomUUID()
+    const date = new Date().toISOString().slice(2, 10).replaceAll('-', '')
+    const missionId = `KX-${date}-${id.slice(0, 4).toUpperCase()}`
+    const snapshot = await repository.save(createTaskSnapshot(id, missionId, input, ownerId))
+    await treasury.allocate(id)
+    options.onTaskCreated?.(id)
+    void orchestrator.start(id, input)
+    return snapshot
+  }
+
   app.get('/api/health', async () => ({
     status: 'ok',
-    service: 'kaleidox-api',
+    service: 'pactledger-api',
     dependencies: {
-      panda: pandaStatus.provider === 'panda-data' ? 'live' : 'replay',
-      pandaModel: pandaModelStatus.provider === 'ark' ? 'live' : 'template',
-      injective: injectiveStatus.readyForExecution ? 'ready' : 'configuration_required',
+      panda: pandaStatus.provider === 'panda-data' ? 'configured' : 'replay',
+      pandaModel: pandaModelStatus.provider === 'template' ? 'template' : pandaModelStatus.endpointId,
+      injective: injectiveStatus.executionState,
       database: options.databaseStatus?.provider ?? (options.databasePool ? 'postgresql' : 'memory-test'),
     },
   }))
+
+  app.get('/api/public/base-status', async (): Promise<PactLedgerBaseStatus> => {
+    const latestReceipt = await pactLedgerRepository.findLatestConfirmedTestnetReceipt()
+    const persistedReceipt = pactLedgerRepository.hasPersistentStorage ? latestReceipt : undefined
+    const state = injectiveConfig.mode === 'mock'
+      ? 'mock_ready'
+      : persistedReceipt
+        ? 'testnet_confirmed'
+        : injectiveStatus.readyForExecution ? 'testnet_ready' : 'testnet_configuration_required'
+    return {
+      product: 'PactLedger',
+      category: 'Agent Treasury / Agent Spend Control',
+      flow: ['Agent Intent', 'PactLedger Policy', 'Injective Settlement', 'Verifiable Receipt'],
+      execution: {
+        mode: injectiveConfig.mode,
+        state,
+        network: injectiveConfig.mode === 'mock' ? 'Mock' : 'Injective Testnet',
+        chainId: injectiveConfig.chainId,
+        adapter: injectiveStatus.adapter,
+        walletConfigured: injectiveStatus.credentialsConfigured,
+        paymentAssetConfigured: injectiveStatus.paymentAssetConfigured,
+        payeesConfigured: injectiveStatus.payeesConfigured,
+        receiptPersistence: pactLedgerRepository.hasPersistentStorage ? 'postgresql' : 'memory',
+        latestConfirmedReceipt: persistedReceipt ? {
+          intentId: persistedReceipt.intentId,
+          transactionHash: persistedReceipt.transactionHash,
+          explorerUrl: persistedReceipt.explorerUrl,
+          blockHeight: persistedReceipt.blockHeight,
+          confirmedAt: persistedReceipt.confirmedAt,
+        } : undefined,
+      },
+      proofCases: [
+        { appId: 'kaleidox', role: 'risk-pressure-test', endpoint: '/kaleidox.html' },
+        { appId: 'poolmate', role: 'cross-domain-reuse', endpoint: '/api/demo/poolmate/checkout' },
+      ],
+    }
+  })
+
+  app.get('/.well-known/agent-card.json', async (request) => {
+    const configuredBase = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '')
+    const host = request.headers.host ?? '127.0.0.1:8787'
+    return buildAgentCard(
+      configuredBase ?? `${request.protocol}://${host}`,
+      Boolean(a2aApiKey) || injectiveConfig.mode === 'testnet',
+    )
+  })
+
+  app.post<{ Body: { id?: string; message?: { parts?: Array<{ text?: string }> } } }>('/a2a/tasks/send', async (request, reply) => {
+    if (!await authorizeA2A(request, reply)) return
+    const text = request.body?.message?.parts?.find((part) => part.text)?.text ?? ''
+    const snapshot = await createAndStartTask(parseA2AInput(text))
+    return reply.code(202).send(toA2ATask(snapshot))
+  })
+
+  app.get<{ Params: { id: string } }>('/a2a/tasks/:id', async (request, reply) => {
+    if (!await authorizeA2A(request, reply)) return
+    const snapshot = await repository.findById(request.params.id)
+    if (!snapshot) return reply.code(404).send({ error: { code: -32001, message: 'Task not found' } })
+    return toA2ATask(snapshot)
+  })
+
+  app.post<{ Body: { jsonrpc?: string; id?: string | number; method?: string; params?: Record<string, unknown> } }>('/a2a', async (request, reply) => {
+    if (!await authorizeA2A(request, reply)) return
+    const rpcId = request.body?.id ?? null
+    const method = request.body?.method
+    const params = request.body?.params ?? {}
+    if (method === 'message/send') {
+      const message = params.message as { parts?: Array<{ text?: string }> } | undefined
+      const text = message?.parts?.find((part) => part.text)?.text ?? ''
+      const snapshot = await createAndStartTask(parseA2AInput(text))
+      return { jsonrpc: '2.0', id: rpcId, result: toA2ATask(snapshot) }
+    }
+    if (method === 'tasks/get') {
+      const taskId = String(params.id ?? '')
+      const snapshot = await repository.findById(taskId)
+      if (!snapshot) {
+        return reply.code(404).send({ jsonrpc: '2.0', id: rpcId, error: { code: -32001, message: 'Task not found' } })
+      }
+      return { jsonrpc: '2.0', id: rpcId, result: toA2ATask(snapshot) }
+    }
+    return reply.code(400).send({ jsonrpc: '2.0', id: rpcId, error: { code: -32601, message: 'Method not found' } })
+  })
 
   app.post<{ Body: AuthBody }>('/api/auth/register', async (request, reply) => {
     try {
@@ -149,6 +287,39 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/config/panda', async () => pandaStatus)
   app.get('/api/config/panda/model', async () => pandaModelStatus)
 
+  app.post<{ Body: { scenario?: 'approved' | 'blocked'; intentId?: string } }>('/api/demo/poolmate/checkout', async (request, reply) => {
+    const scenario = request.body?.scenario
+    if (scenario !== 'approved' && scenario !== 'blocked') {
+      return reply.code(400).send({
+        error: { code: 'INVALID_DEMO_SCENARIO', message: 'scenario 必须是 approved 或 blocked。' },
+      })
+    }
+    const intentId = request.body?.intentId?.trim()
+    if (intentId && !/^PM-[A-Z0-9-]{4,48}$/.test(intentId)) {
+      return reply.code(400).send({
+        error: { code: 'INVALID_INTENT_ID', message: 'intentId 必须使用 PM- 前缀与大写字母、数字或连字符。' },
+      })
+    }
+    const blocked = scenario === 'blocked'
+    return poolMateDemoLedger.process(createAgentPaymentIntent({
+      tenantId: `poolmate-demo-${new Date().toISOString().slice(0, 10)}`,
+      appId: 'poolmate',
+      payerAgentId: 'poolmate-treasury',
+      payeeId: blocked ? 'random-group-member' : 'merchant-demo',
+      amount: blocked ? 89 : 267,
+      currency: 'CNY-DEMO',
+      purpose: 'merchant_pay',
+      protocol: 'ap2',
+      intentId,
+      metadata: {
+        groupId: 'dongkui-yangmei-demo',
+        shares: blocked ? 1 : 3,
+        demoOnly: true,
+        settlementMode: 'mock',
+      },
+    }))
+  })
+
   app.post<{ Body: CreateTaskInput }>('/api/tasks', {
     schema: {
       body: {
@@ -168,15 +339,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
   }, async (request, reply) => {
     const user = requireUser(request)
-    const id = randomUUID()
-    const date = new Date().toISOString().slice(2, 10).replaceAll('-', '')
-    const missionId = `KX-${date}-${id.slice(0, 4).toUpperCase()}`
-    const snapshot = await repository.save(createTaskSnapshot(id, missionId, request.body, user.id))
-    await treasury.allocate(id)
-    options.onTaskCreated?.(id)
     reply.code(201)
-    void orchestrator.start(id, request.body)
-    return snapshot
+    return createAndStartTask(request.body, user.id)
   })
 
   app.post<{ Body: CreateTaskInput }>('/api/quant/analyze', async (request, reply) => {

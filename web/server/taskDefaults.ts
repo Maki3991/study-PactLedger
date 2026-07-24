@@ -39,6 +39,7 @@ export const createTaskSnapshot = (
     candidates: [],
     firewallRules: createFirewallRules(input),
     timeline: [],
+    paymentTraces: [],
     execution: { state: 'ready', network: 'Mock' },
     createdAt: now,
     updatedAt: now,

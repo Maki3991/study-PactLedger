@@ -33,7 +33,7 @@ export class QuantResearchService {
     try {
       researchSummary = await this.narrator.summarize(input, evidence, candidates)
     } catch (error) {
-      researchSummary = `研究解释模型暂不可用：${error instanceof Error ? error.message : 'unknown error'}。回测结果仍由确定性策略引擎生成。`
+      researchSummary = `研究解释模型暂不可用：${error instanceof Error ? error.message : 'unknown error'}。回测结果仍由确定性策略引擎生成。本结果不构成投资建议。`
     }
     return {
       candidates,

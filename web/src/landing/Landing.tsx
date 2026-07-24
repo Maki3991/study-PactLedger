@@ -1,539 +1,418 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowRight,
-  ArrowUpRight,
+  BadgeCheck,
+  Blocks,
   Bot,
   Check,
   CircleDollarSign,
+  CircleOff,
   Database,
+  ExternalLink,
   FileCheck2,
-  Layers,
-  Lock,
-  MessagesSquare,
+  Fingerprint,
+  Gauge,
+  LoaderCircle,
+  LockKeyhole,
+  Network,
   ReceiptText,
-  Route,
-  ScrollText,
   ShieldCheck,
-  TrendingUp,
-  Users,
-  Wallet,
+  Store,
+  WalletCards,
   Zap,
 } from 'lucide-react'
+import type {
+  PactLedgerBaseStatus,
+  PactLedgerExecutionState,
+  PactLedgerTrace,
+} from '../domain/pactledger'
+import {
+  createPoolMateDemoIntentId,
+  fetchPactLedgerBaseStatus,
+  runPoolMateCheckout,
+} from '../services/pactledgerClient'
 
-/* ---------------------------------- utils ---------------------------------- */
-
-function Reveal({ children, className = '', delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [visible, setVisible] = useState(() => (
-    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  ))
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el || visible) return
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          setVisible(true)
-          io.disconnect()
-        }
-      },
-      { threshold: 0.12 },
-    )
-    io.observe(el)
-    return () => io.disconnect()
-  }, [visible])
-
-  return (
-    <div ref={ref} className={`${className} lp-reveal ${visible ? 'is-visible' : ''}`} style={{ transitionDelay: `${delay}ms` }}>
-      {children}
-    </div>
-  )
+const executionCopy: Record<PactLedgerExecutionState, { label: string; detail: string; tone: string }> = {
+  mock_ready: {
+    label: 'MOCK READY',
+    detail: '当前结算为可复现 Mock；不会生成 Explorer 链接。',
+    tone: 'mock',
+  },
+  testnet_configuration_required: {
+    label: 'TESTNET CONFIG REQUIRED',
+    detail: 'SDK 路径已实现；钱包、denom 或收款地址仍未配置完整。',
+    tone: 'pending',
+  },
+  testnet_ready: {
+    label: 'TESTNET READY · UNCONFIRMED',
+    detail: '服务端具备广播条件，但数据库中尚无已确认 Testnet Receipt。',
+    tone: 'pending',
+  },
+  testnet_confirmed: {
+    label: 'TESTNET CONFIRMED',
+    detail: '已发现持久化的 Injective Testnet Receipt，可打开 Explorer 核验。',
+    tone: 'confirmed',
+  },
 }
 
-function randomHash() {
-  const hex = () => Math.floor(Math.random() * 16).toString(16)
-  const seg = (n: number) => Array.from({ length: n }, hex).join('')
-  return `evt_${seg(8)}`
-}
-
-function nowTime() {
-  return new Date().toLocaleTimeString('zh-CN', { hour12: false })
-}
-
-/* ------------------------------- ledger stream ------------------------------ */
-
-type LedgerEvent = {
-  tenant: 'KX' | 'PM'
-  primitive: '委托' | '消费' | '分配'
-  desc: string
-  amount: string
-  hash: string
-  time: string
-}
-
-const EVENT_POOL: Array<Pick<LedgerEvent, 'tenant' | 'primitive' | 'desc' | 'amount'>> = [
-  { tenant: 'KX', primitive: '委托', desc: '用户 → Planner · 交易委托', amount: '1,000.00 USDT' },
-  { tenant: 'KX', primitive: '消费', desc: 'Strategy → Research · 购买研究报告', amount: '12.50 USDT' },
-  { tenant: 'KX', primitive: '消费', desc: 'Risk 审核 · 否决 · 费用不退', amount: '8.00 USDT' },
-  { tenant: 'PM', primitive: '委托', desc: '群友确认拼单份额 · 杨梅 ×1 箱', amount: '¥89.00' },
-  { tenant: 'PM', primitive: '消费', desc: 'PoolMate → 演示商户 · 组单付款', amount: '¥267.00' },
-  { tenant: 'KX', primitive: '消费', desc: 'Backtest 验证服务 · 按次计费', amount: '6.25 USDT' },
-  { tenant: 'PM', primitive: '分配', desc: '批量 payout · 退差价 / 摊运费', amount: '¥15.00' },
-  { tenant: 'KX', primitive: '分配', desc: 'performance fee 分润 · 优胜链路', amount: '31.80 USDT' },
-  { tenant: 'KX', primitive: '消费', desc: 'Research → 外部数据源 · 402 握手', amount: '2.10 USDT' },
-  { tenant: 'PM', primitive: '委托', desc: '群友确认份额 · 上限锁死', amount: '¥89.00' },
-]
-
-function LedgerStream() {
-  const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const [events, setEvents] = useState<LedgerEvent[]>(() =>
-    EVENT_POOL.slice(0, 6).map((e) => ({ ...e, hash: randomHash(), time: nowTime() })),
-  )
-  const cursor = useRef(6)
-
-  useEffect(() => {
-    if (reduced) return
-    const timer = window.setInterval(() => {
-      setEvents((prev) => {
-        const next = EVENT_POOL[cursor.current % EVENT_POOL.length]
-        cursor.current += 1
-        return [{ ...next, hash: randomHash(), time: nowTime() }, ...prev].slice(0, 6)
-      })
-    }, 2400)
-    return () => window.clearInterval(timer)
-  }, [reduced])
-
-  return (
-    <div className="lp-ledger" aria-label="统一审计账本演示事件流">
-      <div className="lp-ledger-chrome">
-        <span className="lp-ledger-dots"><i /><i /><i /></span>
-        <span className="lp-ledger-title"><Database size={12} /> UNIFIED AUDIT LEDGER · DEMO</span>
-        <span className="lp-ledger-live"><i /> MOCK</span>
-      </div>
-      <div className="lp-ledger-body">
-        {events.map((e, i) => (
-          <div className="lp-ledger-row" key={`${e.time}-${e.hash}-${i}`}>
-            <span className={`lp-tenant lp-tenant-${e.tenant.toLowerCase()}`}>{e.tenant}</span>
-            <span className="lp-ledger-primitive">{e.primitive}</span>
-            <span className="lp-ledger-desc">{e.desc}</span>
-            <span className="lp-ledger-amount">{e.amount}</span>
-            <span className="lp-ledger-hash">{e.hash}</span>
-            <Check size={13} className="lp-ledger-check" />
-          </div>
-        ))}
-      </div>
-      <div className="lp-ledger-foot">
-        <span>两个租户映射 · 同一事件模型</span>
-        <span className="lp-ledger-mono">ROUTER → POLICY GATE → EXECUTION ADAPTER</span>
-      </div>
-    </div>
-  )
-}
-
-/* --------------------------------- sections --------------------------------- */
-
-const problems = [
+const baseCapabilities = [
   {
-    num: '01',
-    icon: MessagesSquare,
-    kicker: '协作 = 喊话',
-    title: '协作无法成为经济',
-    body: 'Agent 间协作只有消息传递：研究、回测、风控的劳动没有定价、没有结算、没有凭证。干得再多，也只是一段聊天记录。',
+    icon: WalletCards,
+    title: 'Agent Account',
+    detail: '给 Agent 分配预算与账户，但不把任意签名权交给 Agent。',
   },
   {
-    num: '02',
-    icon: TrendingUp,
-    kicker: '进化 = 改代码',
-    title: '没有市场，就没有淘汰',
-    body: '干得好的 Agent 没有回报，干得差的没有代价。团队进化靠人熬夜改代码，而不是靠市场机制自然选择。',
-  },
-  {
-    num: '03',
-    icon: Wallet,
-    kicker: '花钱 = 裸奔',
-    title: '没人敢把预算交给 AI',
-    body: '没有钱包隔离、没有额度、没有白名单。一次幻觉就是一次真实亏损——这是 Agent 经济最大的拦路虎。',
-  },
-]
-
-const capabilities = [
-  {
-    icon: Wallet,
-    title: 'Agent Treasury 账户体系',
-    body: '子账户开设、预算分配、盈亏归集。每个 Agent 对应独立账户，链上钱包由执行适配器接入。',
+    icon: Fingerprint,
+    title: 'Payment Intent',
+    detail: 'Agent 只能提交“向谁、为何、花多少”的结构化付款意图。',
   },
   {
     icon: ShieldCheck,
-    title: '消费策略引擎',
-    body: '单笔上限 / 日限额 / 资产与收款方白名单。超限不是警告，策略引擎会直接拒绝执行。',
+    title: 'Policy Decision',
+    detail: '用途、白名单、限额、有效期和人工批准逐项留下理由。',
   },
   {
-    icon: Route,
-    title: 'Protocol Router 边界',
-    body: '以 canonical checkout 固化协议输入输出；x402 / ACP / AP2 connector 作为后续接入点。',
+    icon: Blocks,
+    title: 'Injective Settlement',
+    detail: '批准后的服务费或商户付款才会进入测试网结算适配器。',
   },
   {
     icon: ReceiptText,
-    title: '计费与审计账本',
-    body: 'Agent 间高频微支付计费，provenance 收据哈希写入成果，全事件可回放、可审计。',
-  },
-  {
-    icon: Zap,
-    title: 'Injective 执行适配器',
-    body: 'Action Intent 与 Receipt 边界已经固化。当前 Demo 使用可复现 Mock，链上团队可替换适配器接入测试网。',
+    title: 'Receipt Ledger',
+    detail: '成功、拒绝与失败都形成同一条可恢复、可审计 Trace。',
   },
 ]
 
-const pipeline = ['Action Intent', 'Protocol Router', 'Policy Gate', 'Execution Adapter', '审计账本']
-
-const primitives = [
-  {
-    name: '委托',
-    dir: '人 → Agent',
-    kx: '用户下达交易委托：1,000 USDT · 最大亏损 5% · 单仓 ≤ 30%',
-    pm: '群友确认拼单份额：金额上限 + 用途 + 截止时间',
-    proto: 'ACP / AP2',
-  },
-  {
-    name: '消费',
-    dir: 'Agent → 服务方',
-    kx: 'Agent 间购买研究 / 回测 / 风控审核，外采付费数据',
-    pm: '向演示商户完成组单付款（agent checkout）',
-    proto: 'x402 / AP2',
-  },
-  {
-    name: '分配',
-    dir: 'Agent → 人',
-    kx: '策略盈利后，performance fee 分润到各 Agent',
-    pm: '退差价、摊运费，批量 payout 到每个群友',
-    proto: '批量 payout',
-  },
-]
-
-const tenantFlows = {
-  kx: ['用户委托', '六 Agent 市场协作', 'Champion–Challenger', 'Treasury 检查', '执行适配器'],
-  pm: ['群里 @它', '拼单卡片', '收齐份额', '商户组单付款', '分账退差'],
-}
-
-const stats = [
-  { value: '3', label: '种资金流 · 委托 / 消费 / 分配' },
-  { value: '2', label: '个演示租户 · 场景毫不相干' },
-  { value: '1', label: '套事件模型 · 共享 Intent / Policy / Receipt 边界' },
-  { value: '100%', label: '结算事件可审计 · Mock / 链上模式显式标注' },
+const injectiveReasons = [
+  { value: '< 1s', label: '亚秒级出块', detail: 'Agent 不必为每次小额服务采购等待漫长确认。' },
+  { value: '≈ 0', label: '接近零 Gas', detail: '让高频 Agent 微支付在经济上真正可行。' },
+  { value: 'L1', label: '原生结算层', detail: '交易哈希、区块高度和事件构成公开证据。' },
+  { value: '24/7', label: '机器经济轨道', detail: '适合 Agent-to-Agent 与 Agent-to-Merchant 持续结算。' },
 ]
 
 export function Landing() {
+  const [baseStatus, setBaseStatus] = useState<PactLedgerBaseStatus>()
+  const [statusError, setStatusError] = useState<string>()
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchPactLedgerBaseStatus(controller.signal)
+      .then(setBaseStatus)
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setStatusError(error instanceof Error ? error.message : '无法读取基座状态')
+        }
+      })
+    return () => controller.abort()
+  }, [])
+
   return (
-    <div className="lp">
-      {/* ------------------------------- nav ------------------------------- */}
-      <header className="lp-nav">
-        <a className="lp-brand" href="#top">
-          <span className="lp-brand-mark"><ScrollText size={15} /></span>
-          <span className="lp-brand-name">PactLedger</span>
+    <div className="pl-page">
+      <a className="pl-skip" href="#main">跳到主要内容</a>
+      <header className="pl-nav">
+        <a className="pl-brand" href="#top" aria-label="PactLedger 首页">
+          <span className="pl-brand-mark"><LockKeyhole size={15} /></span>
+          <span><strong>PactLedger</strong><small>Agent Spend Control</small></span>
         </a>
-        <nav className="lp-nav-links" aria-label="页面导航">
-          <a href="#problem">核心问题</a>
-          <a href="#base">基座能力</a>
-          <a href="#tenants">双租户</a>
-          <a href="#demo">Demo</a>
+        <nav aria-label="首页导航">
+          <a href="#base">基座</a>
+          <a href="#injective">Injective</a>
+          <a href="#proof">实例证明</a>
         </nav>
-        <div className="lp-nav-right">
-          <a className="lp-btn lp-btn-sm lp-btn-primary" href="#demo">进入 Demo</a>
-        </div>
+        <a className="pl-nav-cta" href="/kaleidox.html">运行主 Demo <ArrowRight size={14} /></a>
       </header>
 
-      <main>
-        {/* ------------------------------- hero ------------------------------ */}
-        <section className="lp-hero" id="top">
-          <div className="lp-hero-inner">
-            <Reveal>
-              <span className="lp-badge"><i />AGENT FINANCIAL INFRASTRUCTURE</span>
-            </Reveal>
-            <Reveal delay={70}>
-              <h1 className="lp-h1">
-                Agent 时代的
-                <br />
-                <span className="lp-h1-grad">财务系统</span>
-              </h1>
-            </Reveal>
-            <Reveal delay={140}>
-              <p className="lp-hero-sub">
-                今天的多 Agent 系统，协作靠消息传递，进化靠人改代码。PactLedger 给每个 Agent
-                独立的 Treasury 子账户、不可越过的花钱权限、统一的结算与审计账本——
-                一套基建，用两个毫不相干的场景验证同一组接入边界。
-              </p>
-            </Reveal>
-            <Reveal delay={210}>
-              <div className="lp-hero-cta">
-                <a className="lp-btn lp-btn-primary lp-btn-lg" href="/kaleidox.html">进入 KaleidoX 控制台 <ArrowRight size={16} /></a>
-                <a className="lp-btn lp-btn-ghost lp-btn-lg" href="/poolmate.html">PoolMate 群聊 Demo <ArrowUpRight size={16} /></a>
-              </div>
-            </Reveal>
-            <Reveal delay={260}>
-              <p className="lp-hero-meta">Model Adapter · A2A-ready · Protocol Connectors · Injective Adapter · PandaData</p>
-            </Reveal>
+      <main id="main">
+        <section className="pl-hero" id="top">
+          <div className="pl-hero-copy">
+            <p className="pl-track"><span>PRIMARY TRACK</span> INJECTIVE BLOCKCHAIN × AI</p>
+            <h1>Agent 可以提出花钱。<br /><em>只有规则允许它真正花钱。</em></h1>
+            <p className="pl-lead">
+              PactLedger 是 Agent 的可编程财务控制层。业务 Agent 不持有自由支配的资金权限；
+              每一笔服务采购或商户付款都必须经过 Intent、Policy、按需人工批准、Injective 结算与 Receipt。
+            </p>
+            <div className="pl-hero-actions">
+              <a className="pl-button pl-button-primary" href="/kaleidox.html">
+                看 KaleidoX 风险压力测试 <ArrowRight size={16} />
+              </a>
+              <a className="pl-button pl-button-secondary" href="/poolmate.html">
+                看 PoolMate 跨场景复用
+              </a>
+            </div>
+            <p className="pl-truth-note">
+              <CircleOff size={13} /> PandaAI 提供 A 股数据；Injective 只结算 Agent 服务费与商户付款，不交易 A 股。
+            </p>
           </div>
 
-          <Reveal className="lp-hero-visual" delay={320}>
-            <div className="lp-ledger-wrap">
-              <LedgerStream />
-            </div>
-          </Reveal>
+          <RuntimeConsole status={baseStatus} error={statusError} />
         </section>
 
-        {/* ------------------------------ tracks ----------------------------- */}
-        <section className="lp-tracks" aria-label="技术接入边界">
-          <span>INTEGRATION TARGETS</span>
-          <strong>INJECTIVE ADAPTER READY</strong>
-          <strong>MODEL ADAPTER</strong>
-          <strong>PANDADATA</strong>
-          <strong>A2A PROTOCOL</strong>
-          <strong>X402 · ACP · AP2</strong>
-        </section>
-
-        {/* ------------------------------- stats ----------------------------- */}
-        <section className="lp-stats" aria-label="关键数字">
-          <Reveal className="lp-stats-row">
-            {stats.map((s) => (
-              <div className="lp-stat" key={s.label}>
-                <strong>{s.value}</strong>
-                <span>{s.label}</span>
-              </div>
-            ))}
-          </Reveal>
-        </section>
-
-        {/* ------------------------------ problem ----------------------------- */}
-        <section className="lp-section" id="problem">
-          <Reveal className="lp-section-head">
-            <p className="lp-eyebrow"><span className="lp-sec-num">01</span>THE PROBLEM — 核心问题</p>
-            <h2 className="lp-h2">Agent 经济缺的不是智能，<br />是财务系统。</h2>
-            <p className="lp-section-sub">
-              模型越来越强，但 Agent 之间的钱怎么流动，今天没有答案。三个断层，卡住了整个 Agent 经济。
+        <section className="pl-injective" id="injective" aria-labelledby="injective-title">
+          <div className="pl-section-label"><span>01</span> WHY INJECTIVE</div>
+          <div className="pl-injective-intro">
+            <h2 id="injective-title">不是把区块链贴在页脚。<br />它是 Agent 付款的结算轨道。</h2>
+            <p>
+              Policy 决定“能不能付”，Injective 证明“是否真的付了”。快速确认与极低费用让大量小额、自动化的 Agent 服务采购具备可行性。
             </p>
-          </Reveal>
-          <div className="lp-problem-grid">
-            {problems.map((p, idx) => (
-              <Reveal key={p.title} delay={idx * 90}>
-                <article className="lp-problem-item">
-                  <div className="lp-problem-top">
-                    <span className="lp-problem-num">{p.num}</span>
-                    <p.icon size={20} className="lp-problem-icon" />
-                  </div>
-                  <span className="lp-problem-kicker">{p.kicker}</span>
-                  <h3>{p.title}</h3>
-                  <p>{p.body}</p>
-                </article>
-              </Reveal>
+          </div>
+          <div className="pl-injective-grid">
+            {injectiveReasons.map((reason) => (
+              <article key={reason.label}>
+                <strong>{reason.value}</strong>
+                <h3>{reason.label}</h3>
+                <p>{reason.detail}</p>
+              </article>
             ))}
           </div>
         </section>
 
-        {/* ------------------------------- base ------------------------------- */}
-        <section className="lp-section" id="base">
-          <Reveal className="lp-section-head">
-            <p className="lp-eyebrow"><span className="lp-sec-num">02</span>THE BASE — 基座能力</p>
-            <h2 className="lp-h2">一套 Treasury，<br />五种基座能力。</h2>
-            <p className="lp-section-sub">
-              不含任何业务逻辑，可单独部署给任意场景。每一笔钱，都走同一条路。
-            </p>
-          </Reveal>
-
-          <div className="lp-base-grid">
-            <div className="lp-cap-list">
-              {capabilities.map((c, idx) => (
-                <Reveal key={c.title} delay={idx * 60}>
-                  <article className="lp-cap-item">
-                    <c.icon size={19} className="lp-cap-icon" />
-                    <div>
-                      <h3>{c.title}</h3>
-                      <p>{c.body}</p>
-                    </div>
-                  </article>
-                </Reveal>
-              ))}
+        <section className="pl-base" id="base" aria-labelledby="base-title">
+          <div className="pl-section-label"><span>02</span> THE CONTROL PLANE</div>
+          <div className="pl-base-heading">
+            <div>
+              <h2 id="base-title">基座负责财务制度。<br />实例只负责业务。</h2>
+              <p>股票研究、群聊拼单都可以变化；下面五个金融原语保持不变。</p>
             </div>
-
-            <div className="lp-base-side">
-              <Reveal delay={100}>
-                <div className="lp-pipeline">
-                  <span className="lp-pipeline-label">每一笔钱的必经之路</span>
-                  {pipeline.map((step, idx) => (
-                    <div className="lp-pipeline-stepwrap" key={step}>
-                      <div className="lp-pipeline-step">
-                        <span className="lp-pipeline-idx">{String(idx + 1).padStart(2, '0')}</span>
-                        <span>{step}</span>
-                      </div>
-                      {idx < pipeline.length - 1 && <span className="lp-pipeline-arrow" />}
-                    </div>
-                  ))}
-                </div>
-              </Reveal>
-              <Reveal delay={180}>
-                <div className="lp-immutable">
-                  <div className="lp-immutable-head">
-                    <Lock size={14} />
-                    <span>不可修改边界</span>
-                    <em>IMMUTABLE</em>
-                  </div>
-                  <div className="lp-immutable-chips">
-                    {['用户总预算', '最大单笔金额', '最大仓位 / 最大亏损', '资产与收款方白名单', '人工确认门槛', 'Treasury 底层权限'].map((c) => (
-                      <span key={c}>{c}</span>
-                    ))}
-                  </div>
-                  <p className="lp-immutable-punch">AI 可以进化策略，<strong>永远不能进化自己的权限。</strong></p>
-                </div>
-              </Reveal>
-            </div>
+            <code>Intent → PolicyDecision → Approval? → Settlement → Receipt</code>
           </div>
-        </section>
-
-        {/* ------------------------------ tenants ----------------------------- */}
-        <section className="lp-section" id="tenants">
-          <Reveal className="lp-section-head">
-            <p className="lp-eyebrow"><span className="lp-sec-num">03</span>PROOF — 双租户证明</p>
-            <h2 className="lp-h2">一套基建，<br />两个毫不相干的场景。</h2>
-            <p className="lp-section-sub">
-              两个场景使用同一组 Intent / Policy / Receipt 原语：KaleidoX 已接入运行，PoolMate 展示下一租户的接入映射。
-            </p>
-          </Reveal>
-
-          <div className="lp-tenant-grid">
-            <Reveal>
-              <article className="lp-tenant-card lp-tenant-kx">
-                <div className="lp-tenant-head">
-                  <span className="lp-tenant-tag">TENANT 01</span>
-                  <Bot size={19} />
-                </div>
-                <h3>KaleidoX</h3>
-                <p className="lp-tenant-role">AI 交易团队 · 股票量化</p>
-                <p className="lp-tenant-why">最严苛的压力测试——AI 花错钱，立刻亏损。</p>
-                <ul className="lp-flow">
-                  {tenantFlows.kx.map((s) => <li key={s}>{s}</li>)}
-                </ul>
-                <p className="lp-tenant-note">六个 Agent 对应独立 Treasury 子账户，靠市场机制协作与进化；Injective 钱包与链上执行由适配器接入。</p>
+          <div className="pl-capability-list">
+            {baseCapabilities.map((capability, index) => (
+              <article key={capability.title}>
+                <span className="pl-cap-index">{String(index + 1).padStart(2, '0')}</span>
+                <capability.icon size={18} />
+                <h3>{capability.title}</h3>
+                <p>{capability.detail}</p>
               </article>
-            </Reveal>
-            <Reveal delay={110}>
-              <article className="lp-tenant-card lp-tenant-pm">
-                <div className="lp-tenant-head">
-                  <span className="lp-tenant-tag">TENANT 02</span>
-                  <Users size={19} />
-                </div>
-                <h3>PoolMate</h3>
-                <p className="lp-tenant-role">群聊拼单 · 代购结算 Agent</p>
-                <p className="lp-tenant-why">最贴近普通人的场景——AI 替一群人管钱。</p>
-                <ul className="lp-flow">
-                  {tenantFlows.pm.map((s) => <li key={s}>{s}</li>)}
-                </ul>
-                <p className="lp-tenant-note">消息原生，权限被 Treasury 策略锁死。群友的信任不来自「它是好人」，来自「它做不了坏事」。</p>
-              </article>
-            </Reveal>
-          </div>
-
-          <Reveal>
-            <div className="lp-primitive-wrap">
-              <div className="lp-primitive-head">
-                <Layers size={14} />
-                <span>同构资金流 — 同一组原语，两个场景的实例化</span>
-              </div>
-              <div className="lp-primitive-table" role="table" aria-label="同构资金流原语对照表">
-                <div className="lp-primitive-row lp-primitive-header" role="row">
-                  <span role="columnheader">原语</span>
-                  <span role="columnheader">KaleidoX · AI 交易团队</span>
-                  <span role="columnheader">PoolMate · 群聊拼单</span>
-                  <span role="columnheader">协议</span>
-                </div>
-                {primitives.map((p) => (
-                  <div className="lp-primitive-row" role="row" key={p.name}>
-                    <span role="cell"><strong>{p.name}</strong><small>{p.dir}</small></span>
-                    <span role="cell">{p.kx}</span>
-                    <span role="cell">{p.pm}</span>
-                    <span role="cell"><code>{p.proto}</code></span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Reveal>
-
-          <Reveal>
-            <blockquote className="lp-quote">
-              上一幕它管的是一支 AI 交易团队，这一幕它在群里替普通人管拼单——
-              <strong>同一套财务系统，明天可以管任何 Agent 的钱。</strong>
-            </blockquote>
-          </Reveal>
-        </section>
-
-        {/* ------------------------------- demo ------------------------------- */}
-        <section className="lp-section" id="demo">
-          <Reveal className="lp-section-head">
-            <p className="lp-eyebrow"><span className="lp-sec-num">04</span>LIVE DEMO — 两个入口</p>
-            <h2 className="lp-h2">两个入口，同一套基座模型。</h2>
-            <p className="lp-section-sub">KaleidoX 已连接服务器任务与审计账本；PoolMate 用交互演示说明下一租户如何复用同一组资金原语。</p>
-          </Reveal>
-
-          <div className="lp-demo-grid">
-            <Reveal>
-              <a className="lp-demo-card lp-demo-kx" href="/kaleidox.html">
-                <div className="lp-demo-top">
-                  <span className="lp-tenant-tag">WEB CONSOLE · TENANT 01</span>
-                  <span className="lp-demo-arrow-circle"><ArrowUpRight size={18} /></span>
-                </div>
-                <h3>KaleidoX 控制台</h3>
-                <p className="lp-demo-desc">一笔失败交易，如何让一支「自己管钱」的 AI 团队进化出下一代策略。</p>
-                <ul>
-                  <li><CircleDollarSign size={15} /> 六个 Agent 对应独立 Treasury 子账户</li>
-                  <li><TrendingUp size={15} /> 策略 V1 → V2 进化全程，风控否决实录</li>
-                  <li><FileCheck2 size={15} /> 当前使用 Mock Receipt，Injective 测试网适配器接口已预留</li>
-                </ul>
-                <span className="lp-demo-cta">进入控制台 <ArrowRight size={15} /></span>
-              </a>
-            </Reveal>
-            <Reveal delay={110}>
-              <a className="lp-demo-card lp-demo-pm" href="/poolmate.html">
-                <div className="lp-demo-top">
-                  <span className="lp-tenant-tag">MESSAGE-NATIVE · TENANT 02</span>
-                  <span className="lp-demo-arrow-circle"><ArrowUpRight size={18} /></span>
-                </div>
-                <h3>PoolMate 群聊拼单</h3>
-                <p className="lp-demo-desc">把它拉进群，它替全群管钱——而它自己一分钱都花不出规则之外。</p>
-                <ul>
-                  <li><MessagesSquare size={15} /> 消息原生拼单卡片，零安装零学习成本</li>
-                  <li><Wallet size={15} /> 收份额 → 商户付款 → 分账退差，全闭环</li>
-                  <li><ShieldCheck size={15} /> 彩蛋：骗它转账？Treasury 策略当场拒绝</li>
-                </ul>
-                <span className="lp-demo-cta">了解 PoolMate · 进群体验 <ArrowRight size={15} /></span>
-              </a>
-            </Reveal>
+            ))}
           </div>
         </section>
 
-        {/* ------------------------------- final ------------------------------- */}
-        <section className="lp-final">
-          <Reveal>
-            <p className="lp-eyebrow lp-eyebrow-center">ONE TREASURY · EVERY AGENT</p>
-            <h2 className="lp-final-h">
-              一套财务系统，上午管一支 AI 交易团队，<br />
-              下午在群里替普通人管钱。
-            </h2>
-            <div className="lp-hero-cta lp-final-cta">
-              <a className="lp-btn lp-btn-primary lp-btn-lg" href="/kaleidox.html">进入 KaleidoX 控制台 <ArrowRight size={16} /></a>
-              <a className="lp-btn lp-btn-ghost lp-btn-lg" href="/poolmate.html">PoolMate 群聊 Demo <ArrowUpRight size={16} /></a>
-            </div>
-          </Reveal>
+        <section className="pl-proof" id="proof" aria-labelledby="proof-title">
+          <div className="pl-section-label"><span>03</span> TWO PROOF CASES</div>
+          <div className="pl-proof-head">
+            <h2 id="proof-title">业务换了，控制层没有换。</h2>
+            <p>一个实例证明高风险场景下必须踩刹车；另一个证明基座不是股票专用代码。</p>
+          </div>
+          <div className="pl-apps">
+            <a className="pl-app pl-app-kx" href="/kaleidox.html">
+              <span className="pl-app-type">REFERENCE APP 01 · RISK PRESSURE TEST</span>
+              <Bot size={22} />
+              <h3>KaleidoX</h3>
+              <p>股票 Agent 研究 A 股、比较策略并生成 Broker-ready 指令；PactLedger 约束预算、仓位、批准与 Agent 服务费。</p>
+              <ul>
+                <li><Check size={13} /> PandaAI 数据或明确 Replay</li>
+                <li><Check size={13} /> 40% 仓位建议被独立风控拒绝</li>
+                <li><Check size={13} /> Injective 结算 Risk / Execution 服务费</li>
+              </ul>
+              <span className="pl-app-link">打开控制台 <ArrowRight size={14} /></span>
+            </a>
+            <a className="pl-app pl-app-pm" href="/poolmate.html">
+              <span className="pl-app-type">REFERENCE APP 02 · CROSS-DOMAIN REUSE</span>
+              <Store size={22} />
+              <h3>PoolMate</h3>
+              <p>群聊 Agent 只新增消息理解、拼单状态与商户 checkout；账户、白名单、Intent、Policy 与 Receipt 全部复用。</p>
+              <ul>
+                <li><Check size={13} /> 白名单商户付款通过</li>
+                <li><Check size={13} /> “把钱转给我”被 Policy 拒绝</li>
+                <li><Check size={13} /> 拒绝请求不会进入 Settlement Adapter</li>
+              </ul>
+              <span className="pl-app-link">打开复用证明 <ArrowRight size={14} /></span>
+            </a>
+          </div>
+
+          <BaseTraceLab />
+        </section>
+
+        <section className="pl-close">
+          <div>
+            <BadgeCheck size={22} />
+            <p>评委只需要记住一句话</p>
+            <h2>业务 Agent 可以进化，<br />它永远不能进化自己的资金权限。</h2>
+          </div>
+          <a className="pl-button pl-button-primary" href="/kaleidox.html">开始 90 秒主 Demo <ArrowRight size={16} /></a>
         </section>
       </main>
 
-      {/* ------------------------------ footer ------------------------------ */}
-      <footer className="lp-footer">
-        <div className="lp-footer-brand">
-          <span className="lp-brand-mark"><ScrollText size={14} /></span>
-          <span className="lp-brand-name">PactLedger</span>
-        </div>
-        <p className="lp-footer-line">Model Adapter · A2A-ready · Protocol Connectors · Injective Adapter · PandaData / Skills</p>
-        <p className="lp-footer-sub">AdventureX 2026 Hackathon — Tracks: Injective / PandaAI / Photon</p>
+      <footer className="pl-footer">
+        <span><strong>PactLedger</strong> · Agent Treasury / Agent Spend Control</span>
+        <span>Injective Testnet · PandaAI · A2A · PostgreSQL</span>
       </footer>
     </div>
   )
+}
+
+function RuntimeConsole({ status, error }: { status?: PactLedgerBaseStatus; error?: string }) {
+  const stateCopy = status ? executionCopy[status.execution.state] : undefined
+  const flow = status?.flow ?? ['Agent Intent', 'PactLedger Policy', 'Injective Settlement', 'Verifiable Receipt']
+  const icons = [Fingerprint, ShieldCheck, Blocks, FileCheck2]
+
+  return (
+    <aside className="pl-runtime" aria-label="PactLedger 实时运行状态">
+      <div className="pl-runtime-head">
+        <span><i /> PACTLEDGER / RUNTIME</span>
+        <strong className={`pl-runtime-state ${stateCopy?.tone ?? 'loading'}`}>
+          {!stateCopy && !error && <LoaderCircle size={12} className="pl-spin" />}
+          {error ? 'STATUS UNAVAILABLE' : stateCopy?.label ?? 'READING STATUS'}
+        </strong>
+      </div>
+      <div className="pl-runtime-flow">
+        {flow.map((step, index) => {
+          const Icon = icons[index]
+          const settlementPending = index >= 2 && status?.execution.state === 'testnet_configuration_required'
+          return (
+            <div className={`pl-runtime-step ${settlementPending ? 'pending' : ''}`} key={step}>
+              <span>{String(index + 1).padStart(2, '0')}</span>
+              <Icon size={17} />
+              <div>
+                <strong>{step}</strong>
+                <small>{flowDetail(index)}</small>
+              </div>
+              {index < flow.length - 1 && <ArrowRight size={14} />}
+            </div>
+          )
+        })}
+      </div>
+      <div className="pl-runtime-note" role="status">
+        {error ?? stateCopy?.detail ?? '正在读取服务端脱敏状态…'}
+      </div>
+      <dl className="pl-runtime-grid">
+        <RuntimeDatum label="Chain" value={status?.execution.chainId ?? '—'} />
+        <RuntimeDatum label="Signer" value={truthValue(status?.execution.walletConfigured)} />
+        <RuntimeDatum label="Payment asset" value={truthValue(status?.execution.paymentAssetConfigured)} />
+        <RuntimeDatum label="Payees" value={truthValue(status?.execution.payeesConfigured)} />
+        <RuntimeDatum label="Receipt store" value={status?.execution.receiptPersistence ?? '—'} />
+        <RuntimeDatum label="Adapter" value={status?.execution.adapter ?? '—'} />
+      </dl>
+      {status?.execution.latestConfirmedReceipt?.explorerUrl ? (
+        <a className="pl-explorer" href={status.execution.latestConfirmedReceipt.explorerUrl} target="_blank" rel="noreferrer">
+          <span><Database size={14} /> 已持久化 Testnet Receipt</span>
+          <strong>{shorten(status.execution.latestConfirmedReceipt.transactionHash)}</strong>
+          <ExternalLink size={14} />
+        </a>
+      ) : (
+        <div className="pl-no-receipt"><Database size={14} /> 当前没有可公开核验的已持久化 Testnet Receipt</div>
+      )}
+    </aside>
+  )
+}
+
+function RuntimeDatum({ label, value }: { label: string; value: string }) {
+  return <div><dt>{label}</dt><dd>{value}</dd></div>
+}
+
+function BaseTraceLab() {
+  const [trace, setTrace] = useState<PactLedgerTrace>()
+  const [running, setRunning] = useState<'approved' | 'blocked'>()
+  const [error, setError] = useState<string>()
+
+  const run = async (scenario: 'approved' | 'blocked') => {
+    setRunning(scenario)
+    setError(undefined)
+    try {
+      setTrace(await runPoolMateCheckout(scenario, createPoolMateDemoIntentId()))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '基座验证失败')
+    } finally {
+      setRunning(undefined)
+    }
+  }
+
+  const rejected = trace?.decision.outcome === 'rejected'
+  return (
+    <div className="pl-lab">
+      <div className="pl-lab-copy">
+        <span>LIVE API PROOF · SAFE MOCK SETTLEMENT</span>
+        <h3>十秒看懂基座：<br />合法付款通过，骗转账当场拒绝。</h3>
+        <p>
+          两个按钮都调用生产 Fastify 中的同一个 Payment Intent、Policy Engine 与 Receipt Service。
+          为避免公开页面触发真实资金，本验证固定使用 Mock Adapter，并明确标注。
+        </p>
+        <div className="pl-lab-actions">
+          <button type="button" onClick={() => void run('approved')} disabled={Boolean(running)}>
+            {running === 'approved' ? <LoaderCircle size={15} className="pl-spin" /> : <CircleDollarSign size={15} />}
+            运行白名单付款
+          </button>
+          <button className="danger" type="button" onClick={() => void run('blocked')} disabled={Boolean(running)}>
+            {running === 'blocked' ? <LoaderCircle size={15} className="pl-spin" /> : <CircleOff size={15} />}
+            测试“把钱转给我”
+          </button>
+        </div>
+        {error && <p className="pl-lab-error" role="alert">{error}</p>}
+      </div>
+
+      <div className={`pl-trace ${rejected ? 'rejected' : ''}`} aria-live="polite">
+        {!trace ? (
+          <div className="pl-trace-empty">
+            <Network size={24} />
+            <strong>等待一笔真实 API 请求</strong>
+            <span>运行任一场景后，这里将显示完整 Intent → Policy → Settlement → Receipt。</span>
+          </div>
+        ) : (
+          <>
+            <div className="pl-trace-head">
+              <span>{trace.intent.id}</span>
+              <strong>{trace.intent.amount} {trace.intent.currency}</strong>
+            </div>
+            <div className="pl-trace-route">
+              <TraceNode icon={Fingerprint} label="INTENT" value={trace.intent.purpose} state="pass" />
+              <ArrowRight size={13} />
+              <TraceNode icon={ShieldCheck} label="POLICY" value={trace.decision.code} state={rejected ? 'fail' : 'pass'} />
+              <ArrowRight size={13} />
+              <TraceNode icon={Zap} label="SETTLEMENT" value={rejected ? 'SKIPPED' : 'MOCK'} state={rejected ? 'skip' : 'pass'} />
+              <ArrowRight size={13} />
+              <TraceNode icon={ReceiptText} label="RECEIPT" value={rejected ? 'NOT CREATED' : 'MOCK RECEIPT'} state={rejected ? 'skip' : 'pass'} />
+            </div>
+            <div className="pl-trace-verdict">
+              {rejected ? <CircleOff size={17} /> : <BadgeCheck size={17} />}
+              <div><span>{trace.decision.id}</span><strong>{trace.decision.reason}</strong></div>
+            </div>
+            <div className="pl-trace-checks">
+              {trace.decision.checks.map((check) => (
+                <p className={check.passed ? 'pass' : 'fail'} key={check.code}>
+                  <span>{check.passed ? <Check size={11} /> : <CircleOff size={11} />}{check.label}</span>
+                  <strong>{check.detail}</strong>
+                </p>
+              ))}
+            </div>
+            {trace.receipt?.transactionHash && (
+              <code className="pl-mock-hash">{trace.receipt.transactionHash} · no explorer</code>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TraceNode({
+  icon: Icon,
+  label,
+  value,
+  state,
+}: {
+  icon: typeof Gauge
+  label: string
+  value: string
+  state: 'pass' | 'fail' | 'skip'
+}) {
+  return <div className={state}><Icon size={14} /><span><small>{label}</small><strong>{value}</strong></span></div>
+}
+
+function flowDetail(index: number): string {
+  return [
+    'Agent 只能提出付款意图',
+    '预算、用途、白名单与审批',
+    '批准后才进入测试网广播',
+    '哈希、区块、Explorer 与持久化',
+  ][index]
+}
+
+function truthValue(value: boolean | undefined): string {
+  if (value === undefined) return '—'
+  return value ? 'configured' : 'missing'
+}
+
+function shorten(value?: string): string {
+  if (!value) return '—'
+  return value.length > 22 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value
 }
