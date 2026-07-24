@@ -14,6 +14,7 @@ import type { PoolMateConfig } from "../config.js";
 import type { PoolMateDatabase } from "../infrastructure/db/database.js";
 import { SystemStatusService } from "../application/systemStatusService.js";
 import type { OrderService } from "../application/orderService.js";
+import type { PaymentOrchestrationService } from "../application/paymentOrchestrationService.js";
 import { DomainError } from "../domain/domainError.js";
 import type { ConfirmationIdentityVerifier } from "./telegramWebAppIdentityVerifier.js";
 
@@ -22,6 +23,7 @@ export interface CreateServerOptions {
   database: PoolMateDatabase;
   getBotStatus: () => BotStatus;
   orderService?: OrderService;
+  paymentOrchestrationService?: PaymentOrchestrationService;
   identityVerifier?: ConfirmationIdentityVerifier;
   logger?: boolean;
 }
@@ -334,6 +336,30 @@ export async function createServer(
           firstHeader(request.headers["idempotency-key"])
         )
     );
+    if (options.paymentOrchestrationService) {
+      app.post<{ Params: { orderId: string } }>(
+        "/api/orders/:orderId/payment/submit",
+        { preHandler: requireAdmin },
+        async (request, reply) => {
+          disableSensitiveCaching(reply);
+          parseInput(emptyBodySchema, request.body ?? {});
+          return options.paymentOrchestrationService!.submit(
+            request.params.orderId
+          );
+        }
+      );
+      app.post<{ Params: { orderId: string } }>(
+        "/api/orders/:orderId/payment/recover",
+        { preHandler: requireAdmin },
+        async (request, reply) => {
+          disableSensitiveCaching(reply);
+          parseInput(emptyBodySchema, request.body ?? {});
+          return options.paymentOrchestrationService!.recover(
+            request.params.orderId
+          );
+        }
+      );
+    }
   }
 
   app.setNotFoundHandler(async (request, reply) => {

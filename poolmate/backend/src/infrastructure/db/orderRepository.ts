@@ -3,7 +3,10 @@ import type {
   CheckoutItemView,
   FundingMode,
   OrderDetailView,
-  OrderState
+  OrderState,
+  PaymentOutboxView,
+  PaymentProjectionStatus,
+  SettlementMode
 } from "@poolmate/shared";
 import type { PoolMateDatabase } from "./database.js";
 
@@ -94,8 +97,43 @@ export interface PaymentRequestRow {
   assetId: string;
   amountAtomic: string;
   expiresAt: string;
-  status: "ready";
+  status:
+    | "ready"
+    | "submitting"
+    | "submitted"
+    | "confirmed"
+    | "demo_confirmed"
+    | "failed"
+    | "unknown";
   createdAt: string;
+}
+
+export interface PaymentProjectionRow {
+  paymentRequestId: string;
+  operationId: string;
+  status: PaymentProjectionStatus;
+  settlementMode: SettlementMode;
+  errorCode: string | null;
+  errorMessage: string | null;
+  receiptId: string | null;
+  transactionHash: string | null;
+  explorerUrl: string | null;
+  confirmedAt: string | null;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentOutboxRow {
+  id: string;
+  paymentRequestId: string;
+  operationId: string;
+  status: PaymentOutboxView["status"];
+  attempts: number;
+  lastErrorCode: string | null;
+  availableAt: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ConfirmationLookupRow extends CheckoutRow {
@@ -143,6 +181,26 @@ interface NewCheckout extends CheckoutRow {
 interface NewPaymentRequest extends PaymentRequestRow {
   updatedAt: string;
 }
+
+export interface PaymentStateUpdate {
+  requestStatus: PaymentRequestRow["status"];
+  projectionStatus: PaymentProjectionStatus;
+  settlementMode: SettlementMode;
+  outboxStatus: PaymentOutboxRow["status"];
+  orderState: OrderState;
+  errorCode?: string;
+  errorMessage?: string;
+  receipt?: {
+    receiptId: string;
+    transactionHash: string;
+    explorerUrl: string;
+    confirmedAt: string;
+  };
+  availableAt: string;
+  now: string;
+}
+
+export type PaymentSubmissionClaim = "claimed" | "busy" | "expired";
 
 function mapGroup(row: Record<string, unknown>): GroupRow {
   return {
@@ -215,6 +273,61 @@ function mapCheckout(row: Record<string, unknown>): CheckoutRow {
         : String(row.source_idempotency_key),
     requestHash: row.request_hash === null ? null : String(row.request_hash),
     createdAt: String(row.created_at)
+  };
+}
+
+function mapPaymentRequest(row: Record<string, unknown>): PaymentRequestRow {
+  return {
+    id: String(row.id),
+    orderId: String(row.order_id),
+    checkoutId: String(row.checkout_id),
+    checkoutVersion: Number(row.checkout_version),
+    checkoutHash: String(row.checkout_hash),
+    confirmationSetId: String(row.confirmation_set_id),
+    idempotencyKey: String(row.idempotency_key),
+    payerRef: String(row.payer_ref),
+    payeeId: String(row.payee_id),
+    assetId: String(row.asset_id),
+    amountAtomic: String(row.amount_atomic),
+    expiresAt: String(row.expires_at),
+    status: String(row.status) as PaymentRequestRow["status"],
+    createdAt: String(row.created_at)
+  };
+}
+
+function mapPaymentProjection(
+  row: Record<string, unknown>
+): PaymentProjectionRow {
+  return {
+    paymentRequestId: String(row.payment_request_id),
+    operationId: String(row.operation_id),
+    status: String(row.status) as PaymentProjectionStatus,
+    settlementMode: String(row.settlement_mode) as SettlementMode,
+    errorCode: row.error_code === null ? null : String(row.error_code),
+    errorMessage: row.error_message === null ? null : String(row.error_message),
+    receiptId: row.receipt_id === null ? null : String(row.receipt_id),
+    transactionHash:
+      row.transaction_hash === null ? null : String(row.transaction_hash),
+    explorerUrl: row.explorer_url === null ? null : String(row.explorer_url),
+    confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
+    attempts: Number(row.attempts),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapPaymentOutbox(row: Record<string, unknown>): PaymentOutboxRow {
+  return {
+    id: String(row.id),
+    paymentRequestId: String(row.payment_request_id),
+    operationId: String(row.operation_id),
+    status: String(row.status) as PaymentOutboxRow["status"],
+    attempts: Number(row.attempts),
+    lastErrorCode:
+      row.last_error_code === null ? null : String(row.last_error_code),
+    availableAt: String(row.available_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
   };
 }
 
@@ -291,6 +404,17 @@ export class OrderTransaction {
       .prepare("SELECT * FROM pm_orders WHERE source_idempotency_key = ?")
       .get(key) as Record<string, unknown> | undefined;
     return row ? mapOrder(row) : undefined;
+  }
+
+  claimOrderRequestHash(id: string, requestHash: string): boolean {
+    return (
+      this.connection
+        .prepare(
+          `UPDATE pm_orders SET request_hash = ?
+           WHERE id = ? AND request_hash IS NULL`
+        )
+        .run(requestHash, id).changes === 1
+    );
   }
 
   listOrders(): OrderRow[] {
@@ -388,6 +512,17 @@ export class OrderTransaction {
       )
       .get(sourceIdempotencyKey) as Record<string, unknown> | undefined;
     return row ? mapCheckout(row) : undefined;
+  }
+
+  claimCheckoutRequestHash(id: string, requestHash: string): boolean {
+    return (
+      this.connection
+        .prepare(
+          `UPDATE pm_checkout_snapshots SET request_hash = ?
+           WHERE id = ? AND request_hash IS NULL`
+        )
+        .run(requestHash, id).changes === 1
+    );
   }
 
   supersedeConfirmations(orderId: string, now: string): void {
@@ -504,27 +639,45 @@ export class OrderTransaction {
       .prepare(
         `SELECT r.* FROM pm_payment_requests r
          JOIN pm_checkout_snapshots c ON c.id = r.checkout_id
-         WHERE r.order_id = ? AND r.status = 'ready' AND c.is_canonical = 1
+         WHERE r.order_id = ? AND c.is_canonical = 1
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .get(orderId) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
-    return {
-      id: String(row.id),
-      orderId: String(row.order_id),
-      checkoutId: String(row.checkout_id),
-      checkoutVersion: Number(row.checkout_version),
-      checkoutHash: String(row.checkout_hash),
-      confirmationSetId: String(row.confirmation_set_id),
-      idempotencyKey: String(row.idempotency_key),
-      payerRef: String(row.payer_ref),
-      payeeId: String(row.payee_id),
-      assetId: String(row.asset_id),
-      amountAtomic: String(row.amount_atomic),
-      expiresAt: String(row.expires_at),
-      status: String(row.status) as "ready",
-      createdAt: String(row.created_at)
-    };
+    return row ? mapPaymentRequest(row) : undefined;
+  }
+
+  paymentRequestById(id: string): PaymentRequestRow | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM pm_payment_requests WHERE id = ?")
+      .get(id) as Record<string, unknown> | undefined;
+    return row ? mapPaymentRequest(row) : undefined;
+  }
+
+  paymentProjection(
+    paymentRequestId: string
+  ): PaymentProjectionRow | undefined {
+    const row = this.connection
+      .prepare(
+        "SELECT * FROM pm_payment_projections WHERE payment_request_id = ?"
+      )
+      .get(paymentRequestId) as Record<string, unknown> | undefined;
+    return row ? mapPaymentProjection(row) : undefined;
+  }
+
+  paymentProjectionByOperation(
+    operationId: string
+  ): PaymentProjectionRow | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM pm_payment_projections WHERE operation_id = ?")
+      .get(operationId) as Record<string, unknown> | undefined;
+    return row ? mapPaymentProjection(row) : undefined;
+  }
+
+  paymentOutbox(paymentRequestId: string): PaymentOutboxRow | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM pm_outbox WHERE payment_request_id = ?")
+      .get(paymentRequestId) as Record<string, unknown> | undefined;
+    return row ? mapPaymentOutbox(row) : undefined;
   }
 
   confirmationByTokenHash(
@@ -731,6 +884,246 @@ export class OrderTransaction {
           row.updatedAt
         ).changes > 0
     );
+  }
+
+  ensurePaymentWorkflow(input: {
+    paymentRequest: NewPaymentRequest;
+    operationId: string;
+    outboxId: string;
+    now: string;
+  }): boolean {
+    const created = this.ensurePaymentRequest(input.paymentRequest);
+    const request = this.paymentRequestById(input.paymentRequest.id);
+    if (!request) {
+      throw new Error("Payment request could not be loaded after insertion.");
+    }
+    if (
+      request.idempotencyKey !== input.paymentRequest.idempotencyKey ||
+      request.orderId !== input.paymentRequest.orderId ||
+      request.checkoutId !== input.paymentRequest.checkoutId
+    ) {
+      throw new Error("Payment request identity conflict.");
+    }
+    this.connection
+      .prepare(
+        `INSERT OR IGNORE INTO pm_payment_projections
+         (payment_request_id, operation_id, status, settlement_mode, attempts,
+          created_at, updated_at)
+         VALUES (?, ?, 'READY', 'disabled', 0, ?, ?)`
+      )
+      .run(request.id, input.operationId, input.now, input.now);
+    this.connection
+      .prepare(
+        `INSERT OR IGNORE INTO pm_outbox
+         (id, payment_request_id, operation_id, status, attempts, available_at,
+          created_at, updated_at)
+         VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`
+      )
+      .run(
+        input.outboxId,
+        request.id,
+        input.operationId,
+        input.now,
+        input.now,
+        input.now
+      );
+    return created;
+  }
+
+  claimPaymentSubmission(
+    paymentRequestId: string,
+    settlementMode: SettlementMode,
+    leaseUntil: string,
+    now: string
+  ): PaymentSubmissionClaim {
+    const request = this.paymentRequestById(paymentRequestId);
+    if (!request) return "busy";
+    if (
+      !Number.isFinite(new Date(request.expiresAt).getTime()) ||
+      new Date(request.expiresAt).getTime() <= new Date(now).getTime()
+    ) {
+      return "expired";
+    }
+    const claimed = this.connection
+      .prepare(
+        `UPDATE pm_outbox
+         SET status = 'processing', attempts = attempts + 1,
+             last_error_code = NULL, available_at = ?, updated_at = ?
+         WHERE payment_request_id = ? AND status IN ('pending', 'blocked')
+           AND available_at <= ?`
+      )
+      .run(leaseUntil, now, paymentRequestId, now).changes;
+    if (claimed === 0) return "busy";
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_requests
+         SET status = 'submitting', updated_at = ? WHERE id = ?`
+      )
+      .run(now, paymentRequestId);
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_projections
+         SET status = 'SUBMITTING', settlement_mode = ?, error_code = NULL,
+             error_message = NULL, attempts = attempts + 1, updated_at = ?
+         WHERE payment_request_id = ?`
+      )
+      .run(settlementMode, now, paymentRequestId);
+    return "claimed";
+  }
+
+  claimPaymentRecovery(
+    paymentRequestId: string,
+    leaseUntil: string,
+    now: string
+  ): boolean {
+    const interrupted = this.connection
+      .prepare(
+        `UPDATE pm_payment_projections
+         SET status = 'UNKNOWN', error_code = 'PAYMENT_OPERATION_UNKNOWN',
+             error_message = 'Submission lease expired and requires recovery.',
+             updated_at = ?
+         WHERE payment_request_id = ? AND status = 'SUBMITTING'
+           AND EXISTS (
+             SELECT 1 FROM pm_outbox
+             WHERE payment_request_id = ? AND status = 'processing'
+               AND available_at <= ?
+           )`
+      )
+      .run(now, paymentRequestId, paymentRequestId, now).changes;
+    if (interrupted > 0) {
+      this.connection
+        .prepare(
+          `UPDATE pm_payment_requests SET status = 'unknown', updated_at = ?
+           WHERE id = ? AND status = 'submitting'`
+        )
+        .run(now, paymentRequestId);
+      this.connection
+        .prepare(
+          `UPDATE pm_outbox SET status = 'unknown', updated_at = ?
+           WHERE payment_request_id = ? AND status = 'processing'`
+        )
+        .run(now, paymentRequestId);
+      const request = this.paymentRequestById(paymentRequestId);
+      if (request) {
+        this.updateOrderState(request.orderId, "PAYMENT_UNKNOWN", now);
+      }
+    }
+    const claimed = this.connection
+      .prepare(
+        `UPDATE pm_outbox
+         SET status = 'processing', attempts = attempts + 1,
+             last_error_code = NULL, available_at = ?, updated_at = ?
+         WHERE payment_request_id = ?
+           AND (status IN ('unknown', 'completed')
+             OR (status = 'processing' AND available_at <= ?))`
+      )
+      .run(leaseUntil, now, paymentRequestId, now).changes;
+    if (claimed === 0) return false;
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_projections
+         SET attempts = attempts + 1, updated_at = ?
+         WHERE payment_request_id = ? AND status IN ('SUBMITTED', 'UNKNOWN')`
+      )
+      .run(now, paymentRequestId);
+    return true;
+  }
+
+  updatePaymentState(
+    paymentRequestId: string,
+    update: PaymentStateUpdate
+  ): void {
+    this.assertPaymentState(update);
+    const request = this.paymentRequestById(paymentRequestId);
+    if (!request) throw new Error("Payment request not found.");
+    this.connection
+      .prepare(
+        "UPDATE pm_payment_requests SET status = ?, updated_at = ? WHERE id = ?"
+      )
+      .run(update.requestStatus, update.now, paymentRequestId);
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_projections
+         SET status = ?, settlement_mode = ?, error_code = ?, error_message = ?,
+             receipt_id = ?, transaction_hash = ?, explorer_url = ?, confirmed_at = ?,
+             updated_at = ?
+         WHERE payment_request_id = ?`
+      )
+      .run(
+        update.projectionStatus,
+        update.settlementMode,
+        update.errorCode ?? null,
+        update.errorMessage ?? null,
+        update.receipt?.receiptId ?? null,
+        update.receipt?.transactionHash ?? null,
+        update.receipt?.explorerUrl ?? null,
+        update.receipt?.confirmedAt ?? null,
+        update.now,
+        paymentRequestId
+      );
+    this.connection
+      .prepare(
+        `UPDATE pm_outbox
+         SET status = ?, last_error_code = ?, available_at = ?, updated_at = ?
+         WHERE payment_request_id = ?`
+      )
+      .run(
+        update.outboxStatus,
+        update.errorCode ?? null,
+        update.availableAt,
+        update.now,
+        paymentRequestId
+      );
+    this.updateOrderState(request.orderId, update.orderState, update.now);
+  }
+
+  private assertPaymentState(update: PaymentStateUpdate): void {
+    if (update.projectionStatus === "CONFIRMED") {
+      const receipt = update.receipt;
+      let explorerIsHttps = false;
+      try {
+        explorerIsHttps =
+          new URL(receipt?.explorerUrl ?? "").protocol === "https:";
+      } catch {
+        explorerIsHttps = false;
+      }
+      if (
+        (update.settlementMode !== "testnet" &&
+          update.settlementMode !== "live") ||
+        !receipt?.receiptId ||
+        !receipt.transactionHash ||
+        !explorerIsHttps ||
+        !Number.isFinite(new Date(receipt.confirmedAt).getTime()) ||
+        update.requestStatus !== "confirmed" ||
+        update.orderState !== "PAID"
+      ) {
+        throw new Error("Confirmed payment evidence is incomplete.");
+      }
+    }
+    if (
+      (update.requestStatus === "confirmed" || update.orderState === "PAID") &&
+      update.projectionStatus !== "CONFIRMED"
+    ) {
+      throw new Error("Paid state requires a confirmed payment projection.");
+    }
+  }
+
+  updatePaymentStateIfCurrent(
+    paymentRequestId: string,
+    operationId: string,
+    allowedStatuses: PaymentProjectionStatus[],
+    update: PaymentStateUpdate
+  ): boolean {
+    const projection = this.paymentProjectionByOperation(operationId);
+    if (
+      !projection ||
+      projection.paymentRequestId !== paymentRequestId ||
+      !allowedStatuses.includes(projection.status)
+    ) {
+      return false;
+    }
+    this.updatePaymentState(paymentRequestId, update);
+    return true;
   }
 }
 

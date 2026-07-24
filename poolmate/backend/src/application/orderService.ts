@@ -14,6 +14,8 @@ import type {
   OrderState,
   OrderSummaryView,
   ParticipantView,
+  PaymentOutboxView,
+  PaymentProjectionView,
   PoolMatePaymentRequest,
   UpdateClaimRequest
 } from "@poolmate/shared";
@@ -26,6 +28,8 @@ import type {
   OrderRow,
   OrderTransaction,
   ParticipantRow,
+  PaymentOutboxRow,
+  PaymentProjectionRow,
   PaymentRequestRow
 } from "../infrastructure/db/orderRepository.js";
 import { OrderRepository } from "../infrastructure/db/orderRepository.js";
@@ -262,8 +266,48 @@ function publicPaymentRequest(row: PaymentRequestRow): PoolMatePaymentRequest {
     payeeId: row.payeeId,
     money: { assetId: row.assetId, amountAtomic: row.amountAtomic },
     expiresAt: row.expiresAt,
-    status: "ready",
+    status: row.status,
     createdAt: row.createdAt
+  };
+}
+
+function publicPaymentProjection(
+  row: PaymentProjectionRow
+): PaymentProjectionView {
+  const hasReceipt =
+    row.receiptId && row.transactionHash && row.explorerUrl && row.confirmedAt;
+  return {
+    paymentRequestId: row.paymentRequestId,
+    operationId: row.operationId,
+    status: row.status,
+    settlementMode: row.settlementMode,
+    ...(row.errorCode ? { errorCode: row.errorCode } : {}),
+    ...(row.errorMessage ? { errorMessage: row.errorMessage } : {}),
+    ...(hasReceipt
+      ? {
+          receipt: {
+            receiptId: row.receiptId!,
+            transactionHash: row.transactionHash!,
+            explorerUrl: row.explorerUrl!,
+            confirmedAt: row.confirmedAt!
+          }
+        }
+      : {}),
+    attempts: row.attempts,
+    updatedAt: row.updatedAt
+  };
+}
+
+function publicPaymentOutbox(row: PaymentOutboxRow): PaymentOutboxView {
+  return {
+    id: row.id,
+    paymentRequestId: row.paymentRequestId,
+    operationId: row.operationId,
+    status: row.status,
+    attempts: row.attempts,
+    ...(row.lastErrorCode ? { lastErrorCode: row.lastErrorCode } : {}),
+    availableAt: row.availableAt,
+    updatedAt: row.updatedAt
   };
 }
 
@@ -342,11 +386,25 @@ export class OrderService {
         createdAt: now,
         updatedAt: now
       });
-      if (order.requestHash !== requestHash) {
+      const persistedRequestHash =
+        order.requestHash ??
+        stableDigest(
+          JSON.stringify({
+            operation: "create-order-v1",
+            groupId: order.groupId,
+            ownerUserId: order.ownerUserId,
+            title: order.title,
+            targetUnits: order.targetUnits
+          })
+        );
+      if (persistedRequestHash !== requestHash) {
         throw new DomainError(
           "IDEMPOTENCY_CONFLICT",
           "The idempotency key was already used for a different create-order request."
         );
+      }
+      if (order.requestHash === null) {
+        transaction.claimOrderRequestHash(order.id, requestHash);
       }
       return this.detail(transaction, order);
     });
@@ -531,16 +589,28 @@ export class OrderService {
     const requestHash = stableDigest(
       JSON.stringify({ operation: "finalize-checkout-v1", orderId, merchantId })
     );
-    const snapshot = this.repository.read((transaction) => {
+    const snapshot = this.repository.immediate((transaction) => {
       const order = this.requireOrder(transaction, orderId);
       if (normalizedSourceKey) {
         const existing = transaction.checkoutBySourceKey(normalizedSourceKey);
         if (existing) {
-          if (existing.requestHash !== requestHash) {
+          const persistedRequestHash =
+            existing.requestHash ??
+            stableDigest(
+              JSON.stringify({
+                operation: "finalize-checkout-v1",
+                orderId: existing.orderId,
+                merchantId: existing.merchantId
+              })
+            );
+          if (persistedRequestHash !== requestHash) {
             throw new DomainError(
               "IDEMPOTENCY_CONFLICT",
               "The idempotency key was already used for a different checkout request."
             );
+          }
+          if (existing.requestHash === null) {
+            transaction.claimCheckoutRequestHash(existing.id, requestHash);
           }
           return {
             order,
@@ -601,11 +671,23 @@ export class OrderService {
       if (normalizedSourceKey) {
         const existing = transaction.checkoutBySourceKey(normalizedSourceKey);
         if (existing) {
-          if (existing.requestHash !== requestHash) {
+          const persistedRequestHash =
+            existing.requestHash ??
+            stableDigest(
+              JSON.stringify({
+                operation: "finalize-checkout-v1",
+                orderId: existing.orderId,
+                merchantId: existing.merchantId
+              })
+            );
+          if (persistedRequestHash !== requestHash) {
             throw new DomainError(
               "IDEMPOTENCY_CONFLICT",
               "The idempotency key was already used for a different checkout request."
             );
+          }
+          if (existing.requestHash === null) {
+            transaction.claimCheckoutRequestHash(existing.id, requestHash);
           }
           return {
             order: this.detail(transaction, order),
@@ -991,22 +1073,29 @@ export class OrderService {
           const idempotencyKey = stableDigest(
             `poolmate-payment:${row.orderId}:${row.version}:${row.hash}`
           );
-          paymentRequestCreated = transaction.ensurePaymentRequest({
-            id: stableId("pmpr", idempotencyKey),
-            orderId: row.orderId,
-            checkoutId: row.id,
-            checkoutVersion: row.version,
-            checkoutHash: row.hash,
-            confirmationSetId,
-            idempotencyKey,
-            payerRef: this.payerRef,
-            payeeId: row.payeeId,
-            assetId: row.assetId,
-            amountAtomic: row.totalAmountAtomic,
-            expiresAt: row.expiresAt,
-            status: "ready",
-            createdAt: now,
-            updatedAt: now
+          const paymentRequestId = stableId("pmpr", idempotencyKey);
+          paymentRequestCreated = transaction.ensurePaymentWorkflow({
+            paymentRequest: {
+              id: paymentRequestId,
+              orderId: row.orderId,
+              checkoutId: row.id,
+              checkoutVersion: row.version,
+              checkoutHash: row.hash,
+              confirmationSetId,
+              idempotencyKey,
+              payerRef: this.payerRef,
+              payeeId: row.payeeId,
+              assetId: row.assetId,
+              amountAtomic: row.totalAmountAtomic,
+              expiresAt: row.expiresAt,
+              status: "ready",
+              createdAt: now,
+              updatedAt: now
+            },
+            // The operation identity is derived only from the immutable payment key.
+            operationId: `pmop_${idempotencyKey}`,
+            outboxId: `pmob_${paymentRequestId}`,
+            now
           });
           transaction.updateOrderState(row.orderId, "READY_FOR_PAYMENT", now);
         }
@@ -1131,6 +1220,12 @@ export class OrderService {
     const participants = transaction.participants(order.id);
     const checkout = transaction.latestCanonicalCheckout(order.id);
     const paymentRequest = transaction.paymentRequest(order.id);
+    const paymentProjection = paymentRequest
+      ? transaction.paymentProjection(paymentRequest.id)
+      : undefined;
+    const paymentOutbox = paymentRequest
+      ? transaction.paymentOutbox(paymentRequest.id)
+      : undefined;
     return {
       ...summary,
       participants: participants.map(publicParticipant),
@@ -1139,6 +1234,12 @@ export class OrderService {
         : {}),
       ...(paymentRequest
         ? { paymentRequest: publicPaymentRequest(paymentRequest) }
+        : {}),
+      ...(paymentProjection
+        ? { paymentProjection: publicPaymentProjection(paymentProjection) }
+        : {}),
+      ...(paymentOutbox
+        ? { paymentOutbox: publicPaymentOutbox(paymentOutbox) }
         : {})
     };
   }

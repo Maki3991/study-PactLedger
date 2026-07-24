@@ -120,6 +120,62 @@ test("create-order idempotency rejects a different request payload", () => {
   database.close();
 });
 
+test("legacy idempotency rows adopt a hash only for an identical request", () => {
+  const { database, service } = fixture();
+  const group = service.createGroup({
+    telegramChatId: "-10001",
+    title: "Team lunch"
+  });
+  const request = {
+    groupId: group.id,
+    ownerUserId: "owner-1",
+    title: "Noodle set",
+    targetUnits: 2,
+    sourceIdempotencyKey: "legacy-create-once"
+  };
+  const first = service.createOrder(request);
+  database.immediate((connection) => {
+    connection
+      .prepare("UPDATE pm_orders SET request_hash = NULL WHERE id = ?")
+      .run(first.id);
+  });
+
+  assert.deepEqual(service.createOrder(request), first);
+  assert.equal(
+    database.read(
+      (connection) =>
+        (
+          connection
+            .prepare("SELECT request_hash FROM pm_orders WHERE id = ?")
+            .get(first.id) as { request_hash: string | null }
+        ).request_hash?.length
+    ),
+    64
+  );
+  database.immediate((connection) => {
+    connection
+      .prepare("UPDATE pm_orders SET request_hash = NULL WHERE id = ?")
+      .run(first.id);
+  });
+  assert.throws(
+    () => service.createOrder({ ...request, targetUnits: 3 }),
+    (error) =>
+      error instanceof DomainError && error.code === "IDEMPOTENCY_CONFLICT"
+  );
+  assert.equal(
+    database.read(
+      (connection) =>
+        (
+          connection
+            .prepare("SELECT request_hash FROM pm_orders WHERE id = ?")
+            .get(first.id) as { request_hash: string | null }
+        ).request_hash
+    ),
+    null
+  );
+  database.close();
+});
+
 test("exact checkout confirmations create one stable payment request", async () => {
   const { database, service } = fixture();
   const order = createCollectingOrder(service, 3);
@@ -187,12 +243,41 @@ test("exact checkout confirmations create one stable payment request", async () 
   assert.equal(ready.state, "READY_FOR_PAYMENT");
   assert.equal(ready.paymentRequest?.status, "ready");
   assert.equal(ready.paymentRequest?.money.amountAtomic, "10");
+  assert.equal(ready.paymentProjection?.status, "READY");
+  assert.equal(ready.paymentProjection?.settlementMode, "disabled");
+  assert.equal(ready.paymentOutbox?.status, "pending");
+  assert.equal(
+    ready.paymentProjection?.operationId,
+    `pmop_${ready.paymentRequest?.idempotencyKey}`
+  );
   assert.equal(
     database.read(
       (connection) =>
         (
           connection
             .prepare("SELECT COUNT(*) AS count FROM pm_payment_requests")
+            .get() as { count: number }
+        ).count
+    ),
+    1
+  );
+  assert.equal(
+    database.read(
+      (connection) =>
+        (
+          connection
+            .prepare("SELECT COUNT(*) AS count FROM pm_payment_projections")
+            .get() as { count: number }
+        ).count
+    ),
+    1
+  );
+  assert.equal(
+    database.read(
+      (connection) =>
+        (
+          connection
+            .prepare("SELECT COUNT(*) AS count FROM pm_outbox")
             .get() as { count: number }
         ).count
     ),
@@ -215,6 +300,13 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
     { merchantId: "merchant-demo" },
     "quote-update-1"
   );
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        "UPDATE pm_checkout_snapshots SET request_hash = NULL WHERE id = ?"
+      )
+      .run(first.order.checkout!.id);
+  });
   const duplicate = await service.finalizeCheckout(
     order.id,
     { merchantId: "merchant-demo" },
@@ -223,6 +315,19 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
   assert.equal(duplicate.order.checkout?.version, 1);
   assert.deepEqual(duplicate.confirmationLinks, []);
   assert.equal(merchant.calls, 1);
+  assert.equal(
+    database.read(
+      (connection) =>
+        (
+          connection
+            .prepare(
+              "SELECT request_hash FROM pm_checkout_snapshots WHERE id = ?"
+            )
+            .get(first.order.checkout!.id) as { request_hash: string | null }
+        ).request_hash?.length
+    ),
+    64
+  );
   await assert.rejects(
     service.finalizeCheckout(
       order.id,

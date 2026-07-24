@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { createServer } from "../src/api/server.js";
 import { OrderService } from "../src/application/orderService.js";
+import { PaymentOrchestrationService } from "../src/application/paymentOrchestrationService.js";
 import { loadConfig } from "../src/config.js";
 import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
 import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
@@ -246,6 +247,8 @@ test("P1 APIs enforce admin writes and expose only canonical public state", asyn
   });
   assert.equal(ready.json().state, "READY_FOR_PAYMENT");
   assert.equal(ready.json().paymentRequest.status, "ready");
+  assert.equal(ready.json().paymentProjection.status, "READY");
+  assert.equal(ready.json().paymentOutbox.status, "pending");
 
   await app.close();
   current.database.close();
@@ -297,6 +300,117 @@ test("confirmation decline requires TMA identity and never creates payment", asy
     current.orderService.getOrder(draft.id).paymentRequest,
     undefined
   );
+
+  await app.close();
+  current.database.close();
+});
+
+test("payment submit and recover APIs require admin and expose stable results", async () => {
+  const current = fixture();
+  const group = current.orderService.createGroup({
+    telegramChatId: "-10003",
+    title: "Payments group"
+  });
+  const draft = current.orderService.createOrder({
+    groupId: group.id,
+    ownerUserId: "100",
+    title: "Payment checkout",
+    targetUnits: 1
+  });
+  current.orderService.publishOrder(draft.id);
+  current.orderService.claimOrder(draft.id, {
+    userId: "101",
+    displayName: "Ada",
+    units: 1
+  });
+  const checkout = await current.orderService.finalizeCheckout(draft.id, {
+    merchantId: "merchant-demo"
+  });
+  const token = new URLSearchParams(
+    new URL(checkout.confirmationLinks[0]!.url).hash.slice(1)
+  ).get("token")!;
+  current.orderService.confirm(token, "101");
+  const operationId = current.orderService.getOrder(draft.id).paymentProjection!
+    .operationId;
+  let submitCalls = 0;
+  const recoverCalls: string[] = [];
+  const paymentOrchestrationService = new PaymentOrchestrationService({
+    repository: new OrderRepository(current.database),
+    orderService: current.orderService,
+    paymentBaseClient: {
+      settlementMode: "testnet",
+      async submit() {
+        submitCalls += 1;
+        return {
+          status: "unknown",
+          operationId,
+          settlementMode: "testnet",
+          errorCode: "PAYMENT_OPERATION_UNKNOWN"
+        };
+      },
+      async recover(recoveredOperationId) {
+        recoverCalls.push(recoveredOperationId);
+        return {
+          status: "confirmed",
+          operationId: recoveredOperationId,
+          settlementMode: "testnet",
+          receiptId: "receipt-api",
+          transactionHash: "0xapi",
+          explorerUrl: "https://explorer.example/tx/0xapi",
+          confirmedAt: "2026-07-25T12:01:00.000Z"
+        };
+      }
+    },
+    now: () => new Date("2026-07-25T12:00:00.000Z")
+  });
+  const app = await createServer({
+    ...current,
+    paymentOrchestrationService,
+    getBotStatus: () => "disabled",
+    logger: false
+  });
+
+  const unauthorized = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/payment/submit`,
+    payload: {}
+  });
+  assert.equal(unauthorized.statusCode, 401);
+  assert.equal(submitCalls, 0);
+  const adminHeaders = { authorization: "Bearer admin-secret" };
+  const unknown = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/payment/submit`,
+    headers: adminHeaders,
+    payload: {}
+  });
+  assert.equal(unknown.statusCode, 200, unknown.body);
+  assert.equal(unknown.json().state, "PAYMENT_UNKNOWN");
+  assert.equal(unknown.headers["cache-control"], "private, no-store");
+  const recovered = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/payment/recover`,
+    headers: adminHeaders,
+    payload: {}
+  });
+  assert.equal(recovered.statusCode, 200, recovered.body);
+  assert.equal(recovered.json().state, "PAID");
+  assert.equal(
+    recovered.json().paymentProjection.receipt.receiptId,
+    "receipt-api"
+  );
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(recoverCalls, [operationId]);
+
+  const invalidRecovery = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/payment/recover`,
+    headers: adminHeaders,
+    payload: { operationId: "attacker-operation" }
+  });
+  assert.equal(invalidRecovery.statusCode, 400);
+  assert.equal(invalidRecovery.json().error.code, "INVALID_REQUEST");
+  assert.deepEqual(recoverCalls, [operationId]);
 
   await app.close();
   current.database.close();
