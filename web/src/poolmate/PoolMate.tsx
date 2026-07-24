@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -58,6 +58,50 @@ function Reveal({ children, className = '', delay = 0 }: { children: ReactNode; 
   return (
     <div ref={ref} className={`${className} pm-reveal ${visible ? 'is-visible' : ''}`} style={{ transitionDelay: `${delay}ms` }}>
       {children}
+    </div>
+  )
+}
+
+/* ------------------------------ bot status ------------------------------ */
+
+interface BotStatusData { ok: boolean; username?: string; inviteUrl?: string; reason?: string }
+
+function BotStatusWidget() {
+  const [status, setStatus] = useState<BotStatusData | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  const check = useCallback(async () => {
+    setChecking(true)
+    try {
+      const res = await fetch('/api/poolmate/bot-status')
+      setStatus(await res.json() as BotStatusData)
+    } catch {
+      setStatus({ ok: false, reason: '网络错误，无法连接后端' })
+    } finally {
+      setChecking(false)
+    }
+  }, [])
+
+  useEffect(() => { void check() }, [check])
+
+  const dotClass = checking ? 'checking' : status?.ok ? 'online' : 'offline'
+  const label = checking
+    ? 'Bot 检测中…'
+    : !status ? '—'
+    : status.ok ? `@${status.username} · 在线` : `Bot 离线 · ${status.reason ?? '未知'}`
+
+  return (
+    <div className="pm-bot-status">
+      <span className={`pm-bot-dot ${dotClass}`} />
+      <span className="pm-bot-label">{label}</span>
+      {status?.ok && status.inviteUrl && (
+        <a className="pm-bot-open" href={status.inviteUrl} target="_blank" rel="noreferrer">
+          打开群 →
+        </a>
+      )}
+      <button className="pm-bot-refresh" type="button" title="重新检测" disabled={checking} onClick={() => void check()}>
+        {checking ? <LoaderCircle size={12} className="pm-spin" /> : <RotateCcw size={12} />}
+      </button>
     </div>
   )
 }
@@ -389,6 +433,7 @@ export function PoolMate() {
             <a className="pm-btn pm-btn-text" href="#base-proof">运行基座校验 <ChevronRight size={16} /></a>
           </div>
           <p className="pm-hero-note">{TELEGRAM_GROUP_URL ? '评委现场点击进群 · 30 秒体验完整拼单闭环' : '页面演示可直接体验 · 配置 VITE_POOLMATE_TELEGRAM_URL 后开放进群入口'}</p>
+          <BotStatusWidget />
         </Reveal>
         <Reveal className="pm-hero-phone" delay={150}>
           <ChatDemo />
