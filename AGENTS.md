@@ -34,14 +34,14 @@ Intent -> PolicyDecision -> Approval(optional) -> Settlement -> Receipt
 
 - 当前产品前端位于 `web/src/`。
 - 当前部署入口与唯一权威后端位于 `web/server/`。
-- 根目录 `server/` 是较早的 Express/A2A 实现；A2A 已收敛到 Fastify。除非任务明确要求清退遗留代码，不要在那里新增或修复产品逻辑。
+- 较早的根目录 Express `server/` 已删除；禁止重新创建第二套后端，所有 API、A2A、Telegram 与支付逻辑都必须进入 `web/server/`。
 - 通用基座代码不得出现只属于股票或拼单的硬编码语义。
 - `.qoder/repowiki/` 是自动生成参考资料，不是产品事实源，不要手工维护。
 
 ## 四、当前交付基线（2026-07-24）
 
-- `web/server/` 已实现并通过本地验证：通用 Intent / Policy / Settlement / Receipt、PostgreSQL 持久化与幂等、PoolMate 合法/拒绝 Trace、Fastify A2A、公开 Base Status、Injective 官方 SDK Testnet Adapter。
-- 本地质量门已通过：lint、生产构建、API tests `37/37`。
+- `web/server/` 已实现并通过本地验证：通用 Intent / Policy / Settlement / Receipt、PostgreSQL 持久化与幂等、PoolMate 合法/拒绝 Trace、Fastify A2A、Telegram Bot Mock 支付闭环、公开 Base Status、Injective 官方 SDK Testnet Adapter。
+- 本地质量门已通过：lint、生产构建、API tests `42/42`。
 - PandaData `get_stock_daily_pre` 与 DeepSeek V4 Pro 已分别完成真实调用验证；DeepSeek 是主模型，Ark 仅作后备。
 - 尚无真实 Injective Testnet 确认交易；钱包、收款地址、denom/精度和测试币属于当前外部配置阻塞。
 - 公网 `http://129.226.91.246:8787` 仍是旧部署。完成 redeploy/restart 和公网 Smoke Test 前，不得宣称 Agent Card 或新 Base Status 已上线。
@@ -60,6 +60,6 @@ Intent -> PolicyDecision -> Approval(optional) -> Settlement -> Receipt
 2. 将当前 `main` 重新部署到生产 Fastify，确认 `/api/health`、`/api/public/base-status` 与 `/.well-known/agent-card.json` 公网可访问。
 3. 固化 Explorer、Receipt JSON、Agent Card、3 个 A2A 示例任务和响应时长等提交证据。
 4. 增加广播后链上查询恢复；当前中断的 `settling` 状态只会安全隔离，不会自动重播。
-5. 最后再做协议连接器、Telegram、更多策略、更多页面和高级合约。
+5. 最后再做协议连接器、Telegram 生产联调、更多策略、更多页面和高级合约。
 
 任何时间冲突下，优先完成可被现场验证的端到端证据，不扩展无法证明的概念。

@@ -35,7 +35,7 @@ Injective 不负责：
 - KaleidoX Risk 服务费与 PoolMate 商户付款均复用通用 `PactLedgerService` / `SettlementAdapter` 边界。
 - `InjectiveTestnetSettlementAdapter` 已使用官方 SDK `MsgSend` 实现直接转账，包含白名单、denom/精度、原子金额、地址/签名一致性、区块确认 Receipt 与稳定错误码。
 - 并发相同 Intent 只调用一次 Adapter；已确认或失败 Receipt 在重启后可恢复。
-- lint、生产构建与 API tests `37/37` 已通过，其中包含 Injective Adapter、配置、幂等与中断状态测试。
+- lint、生产构建与 API tests `42/42` 已通过，其中包含 Injective Adapter、配置、幂等、中断状态与 Telegram Mock 支付测试。
 
 尚未具备：
 

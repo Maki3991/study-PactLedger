@@ -7,4 +7,4 @@
 - [Injective 接入](../docs/INJECTIVE_AGENT_PAYMENT_HANDOFF.md)
 - [编程 Agent 约束](../AGENTS.md)
 
-快速开始：进入本目录，准备 PostgreSQL 与 `.env.local`，然后运行 `npm ci`、`npm run dev`。根目录 `server/` 是旧 Express/A2A 实现；当前 Docker、systemd 与产品开发只使用本目录的 Fastify 服务。
+快速开始：进入本目录，准备 PostgreSQL 与 `.env.local`，然后运行 `npm ci`、`npm run dev`。仓库只有本目录中的 Fastify 服务是后端入口；不要在根目录重新创建第二套服务。

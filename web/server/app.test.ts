@@ -256,6 +256,28 @@ test('public base status is truthful, unauthenticated and never exposes signer s
   await app.close()
 })
 
+test('public PoolMate Bot status verifies Telegram without exposing the server token', async () => {
+  const token = 'telegram-server-only-token'
+  const app = await buildApp({
+    stepDelay: 1_000,
+    telegramBotToken: token,
+    telegramProbe: async () => ({ username: 'pactledger_poolmate_bot', firstName: 'PoolMate' }),
+  })
+  await app.ready()
+
+  const response = await app.inject({ method: 'GET', url: '/api/public/poolmate/bot-status' })
+  assert.equal(response.statusCode, 200)
+  const status = response.json()
+  assert.equal(status.ok, true)
+  assert.equal(status.configured, true)
+  assert.equal(status.running, false)
+  assert.equal(status.settlementMode, 'mock')
+  assert.equal(status.username, 'pactledger_poolmate_bot')
+  assert.equal(status.reasonCode, 'BOT_NOT_STARTED')
+  assert.ok(!response.body.includes(token))
+  await app.close()
+})
+
 test('PoolMate proves approved merchant payment and blocks an unknown payee through the same API', async () => {
   const app = await buildApp({ stepDelay: 1_000 })
   await app.ready()

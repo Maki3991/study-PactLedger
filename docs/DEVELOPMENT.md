@@ -10,7 +10,7 @@ web/server/    Fastify API、任务编排、量化、Treasury、Policy 与 Adapt
 PostgreSQL     用户、会话、任务、账户、流水与 Receipt
 ```
 
-`Dockerfile` 只复制并构建 `web/`，生产 systemd 服务也从 `web/server/index.ts` 启动。A2A、Agent Card 和 PactLedger Trace 已收敛到 Fastify。根目录 `server/` 只是较早的 Express/A2A 遗留实现，不是运行入口，不要在那里新增或修复产品逻辑。
+`Dockerfile` 只复制并构建 `web/`，生产 systemd 服务也从 `web/server/index.ts` 启动。A2A、Agent Card、Telegram Bot 和 PactLedger Trace 已收敛到 Fastify。较早的根目录 Express `server/` 已删除；禁止重新创建第二套后端。
 
 ## 2. 本地准备
 
@@ -60,7 +60,7 @@ npm run dev
 - Web：`http://127.0.0.1:5173`
 - API：`http://127.0.0.1:8787`
 
-不要在仓库根目录执行旧的 `npm run dev`；它会同时涉及两套后端脚本，不能代表当前生产拓扑。
+推荐在 `web/` 目录执行开发、构建和测试命令；根目录同名 npm 脚本只代理到 `web/`，仓库没有第二套后端运行路径。
 
 ## 3. 页面入口
 
@@ -88,6 +88,13 @@ npm run dev
 - 模型只生成基于回测证据的解释文本，不负责决定交易。
 - UI 必须显示 `PandaData Live` 或 `Panda Replay`。
 
+### Telegram
+
+- `TELEGRAM_BOT_TOKEN` 只由 Fastify 服务端读取；禁止使用 `VITE_` 前缀。
+- 未配置 Token 时 Bot 不启动，公开状态端点返回 `BOT_NOT_CONFIGURED`。
+- Telegram 拼单会话持久化到 PostgreSQL；付款使用确定性 Intent ID 进入同一个 PactLedger Policy / Receipt 流程。
+- 当前 Telegram checkout 固定使用 Mock Adapter，消息与页面必须显示 `Mock Receipt · No Chain`。迁移到 Testnet 前不得自动操作真实资金。
+
 ### Injective
 
 - 默认 `INJECTIVE_EXECUTION_MODE=mock`。
@@ -109,7 +116,7 @@ npm run test:api
 
 - `npm run lint`：通过。
 - `npm run build`：通过。
-- `npm run test:api`：`37/37` 通过。
+- `npm run test:api`：`42/42` 通过。
 
 高风险变更还必须验证：
 
@@ -143,6 +150,7 @@ GET  /api/treasury/:taskId/audit-log
 GET  /api/health
 
 GET  /api/public/base-status
+GET  /api/public/poolmate/bot-status
 POST /api/demo/poolmate/checkout
 
 GET  /.well-known/agent-card.json
@@ -151,7 +159,7 @@ POST /a2a/tasks/send
 GET  /a2a/tasks/:id
 ```
 
-以上 PactLedger、PoolMate 与 A2A 路由均已在 Fastify 实现并通过本地测试。Testnet 模式必须设置 `A2A_API_KEY` 才能接收外部任务；Agent Card 会声明 Bearer API Key 鉴权。`PUBLIC_BASE_URL` 用于生成公网 A2A 地址。当前仅缺生产重新部署和公网 Smoke Test。
+以上 PactLedger、PoolMate、Telegram 状态与 A2A 路由均已在 Fastify 实现并通过本地测试。Testnet 模式必须设置 `A2A_API_KEY` 才能接收外部任务；Agent Card 会声明 Bearer API Key 鉴权。`PUBLIC_BASE_URL` 用于生成公网 A2A 地址。当前仍需配置真实 Bot Token、重新部署并完成公网 Smoke Test。
 
 ## 7. Docker Compose
 
@@ -223,6 +231,7 @@ curl -fsS http://127.0.0.1:8787/.well-known/agent-card.json
 ```text
 web/src/domain/                 稳定领域模型
 web/server/pactledger/          通用 Intent / Policy / Receipt 基座
+web/server/poolmate/            Telegram 传输、拼单会话与规范化付款编排
 web/server/orchestrator.ts      KaleidoX 业务编排
 web/server/treasury.ts          Agent 内部账户和流水
 web/server/quant/               PandaData、确定性回测、研究解释

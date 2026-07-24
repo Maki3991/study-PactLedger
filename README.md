@@ -6,7 +6,7 @@ PactLedger 是本仓库唯一主产品。KaleidoX 与 PoolMate 是两个参考�
 
 ## 当前交付状态（2026-07-24）
 
-- 运行时基线 `ca13473` 已完成 lint、生产构建与 API tests `37/37`。
+- 当前源码已完成 lint、生产构建与 API tests `42/42`。
 - 通用 PactLedger Trace、PostgreSQL Receipt/幂等、PoolMate 同基座 API、Fastify A2A 和 Injective 官方 SDK Testnet Adapter 已实现。
 - PandaData 真实日线与 DeepSeek V4 Pro 已完成外部调用验证；Ark 保留为模型后备。
 - 尚未完成真实 Injective Testnet 交易，原因是缺少正式配置的钱包、收款地址、denom/精度与测试币。
@@ -42,5 +42,6 @@ PactLedger 是本仓库唯一主产品。KaleidoX 与 PoolMate 是两个参考�
 - `/api/health`：后端依赖摘要；即使显示 `testnet_ready` 也不等于已经产生真实 Injective 链上交易。
 - `/api/public/base-status`：无需登录的 PactLedger 基座与真实结算证据状态。
 - `/.well-known/agent-card.json`：Fastify A2A Agent Card；Testnet 外部任务必须配置 `A2A_API_KEY`。
+- `/api/public/poolmate/bot-status`：无需登录的 Telegram Bot 连接状态；不返回 Token，付款模式明确为 Mock。
 
-本地开发请从 `web/` 目录启动。根目录 `server/` 是旧 Express/A2A 实现，不是 Docker/生产入口。具体命令见 [开发文档](docs/DEVELOPMENT.md)。
+本地开发请从 `web/` 目录启动。仓库只保留 `web/server/` 这一套 Fastify 后端，具体命令见 [开发文档](docs/DEVELOPMENT.md)。

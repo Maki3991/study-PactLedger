@@ -87,9 +87,9 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
           </div>
 
           <div className="kx-auth-title">
-            <span>KALEIDOX WORKSPACE</span>
-            <h2>{mode === 'login' ? '继续你的研究任务' : '创建一个演示账户'}</h2>
-            <p>{mode === 'login' ? '登录后进入 PactLedger 风险压力测试参考应用。' : '账户、任务和审计证据将持久化到 PostgreSQL。'}</p>
+            <span>KALEIDOX DEMO</span>
+            <h2>{mode === 'login' ? '进入 KaleidoX Demo' : '创建一个演示账户'}</h2>
+            <p>{mode === 'login' ? '登录后可查看案例展板，并进入工作区创建任务、亲自批准执行。' : '账户、任务和审计证据将持久化到 PostgreSQL。'}</p>
           </div>
 
           <label className="kx-auth-field">
@@ -113,7 +113,7 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
 
           <button className="kx-auth-submit" type="submit" disabled={pending}>
             {pending ? <Loader2 size={16} className="spin" /> : null}
-            {pending ? '正在处理…' : mode === 'login' ? '进入 KaleidoX' : '注册并进入'}
+            {pending ? '正在处理…' : mode === 'login' ? '进入 KaleidoX Demo' : '注册并进入 Demo'}
             {!pending && <ArrowRight size={16} />}
           </button>
 

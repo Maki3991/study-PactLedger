@@ -14,6 +14,7 @@ export function useTaskWorkflow() {
   const [task, setTask] = useState<TaskSnapshot>()
   const [error, setError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
+  const [actionPending, setActionPending] = useState(false)
   const unsubscribeRef = useRef<() => void>(() => undefined)
 
   useEffect(() => () => unsubscribeRef.current(), [])
@@ -38,8 +39,9 @@ export function useTaskWorkflow() {
   }, [])
 
   const approveAndExecute = useCallback(async () => {
-    if (!task || task.phase !== 'awaiting_approval') return
+    if (!task || task.phase !== 'awaiting_approval' || actionPending) return
     setError(undefined)
+    setActionPending(true)
     try {
       const approved = await approveTask(task.id)
       setTask(approved)
@@ -47,8 +49,10 @@ export function useTaskWorkflow() {
       setTask(executed)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '执行失败')
+    } finally {
+      setActionPending(false)
     }
-  }, [task])
+  }, [actionPending, task])
 
-  return { task, error, submitting, start, approveAndExecute }
+  return { task, error, submitting, actionPending, start, approveAndExecute }
 }

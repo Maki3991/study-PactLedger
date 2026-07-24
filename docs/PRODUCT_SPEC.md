@@ -10,7 +10,7 @@
 >
 > 产品类别：Agent Treasury / Agent Spend Control
 >
-> 运行时基线：`ca13473`，lint / build / API tests `37/37` 已通过
+> 运行时基线：lint / build / API tests `42/42` 已通过
 >
 > 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
 
@@ -66,7 +66,7 @@ Injective：结算 Agent 服务费/商户付款并生成可验证 Receipt
 2. 跑通一笔真实 Injective Testnet Agent 服务费。
 3. 将已完成的 Fastify A2A、公开 Base Status 与 PoolMate Trace 重新部署到公网并完成 Smoke Test。
 4. 固化 Explorer、数据库 Receipt、Agent Card、3 个 A2A 示例任务和演示录像等评审证据。
-5. 再扩展 x402 / ACP / AP2、Telegram、更多策略和高级合约。
+5. 再扩展 x402 / ACP / AP2、Telegram 生产联调、更多策略和高级合约。
 
 ---
 
@@ -386,7 +386,7 @@ payee_not_allowed
 
 P0：让 PoolMate 页面真实调用同一个 PactLedger Policy/Trace API，完成一笔白名单商户付款和一笔陌生收款人拒绝。
 
-P1：接 Telegram Bot 或群链接，支持消息到 Intent。
+P1：Telegram Bot、持久化拼单与消息到 Intent 已在 Fastify 实现；待配置生产 Token 并固化真实群聊收发证据。
 
 P2：真实收款、批量退款、运费摊销和争议流程。
 
@@ -400,7 +400,8 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 
 | 能力 | 状态 | 当前证据 / 说明 |
 |---|---|---|
-| PactLedger 落地页与两个入口 | 已实现 | `web/src/landing/`、`kaleidox.html`、`poolmate.html` |
+| PactLedger 落地页与两个参考应用入口 | 已实现 | `web/src/landing/` 保持基座介绍与 KaleidoX / PoolMate 入口职责，`kaleidox.html`、`poolmate.html` 承载各自案例 |
+| KaleidoX 案例展板与任务工作区 | 已实现 | `kaleidox.html` 默认展示评委版案例展板，首屏可进入 `?view=workspace`；工作区支持配置任务、SSE 进度、Policy 纠偏、人工批准、Mock/Testnet 回执区分与同任务证据回显 |
 | 用户注册、登录、会话隔离 | 已实现 | Fastify 鉴权与 PostgreSQL 用户/会话表 |
 | 任务状态机与 SSE 更新 | 已实现 | `web/server/orchestrator.ts`、`/api/tasks/:id/events` |
 | PostgreSQL 任务持久化 | 已实现 | 任务快照、owner 隔离与恢复 |
@@ -416,7 +417,7 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 | Settlement Receipt 独立持久化 | 已实现 | PostgreSQL Intent / Decision / Receipt 三表、单进程同 Intent 并发去重、重启恢复已确认/失败 Receipt；中断 `settling` 会隔离，链上查询恢复仍待实现 |
 | A2A Agent Card / 任务协议 | 已实现 | Fastify Agent Card、REST 任务、JSON-RPC 与 API-key 保护均已通过本地测试；待生产重新部署与公网 Smoke Test |
 | x402 / ACP / AP2 | 原型 | 当前主要作为协议标签；尚无完整握手、鉴权和支付 Connector |
-| Telegram 群机器人 | 原型 | 仅有可配置群链接与页面聊天脚本，未形成消息到支付闭环 |
+| Telegram 群机器人 | 已实现 | Bot、会话与状态端点已迁入 `web/server/` Fastify；群消息可形成持久化拼单和标准 `AgentPaymentIntent -> Policy -> Mock Receipt`，陌生收款人产生真实拒绝 Trace；尚未配置生产 Token，明确为 `Mock · No Chain`，也不满足 Photon iMessage 门槛 |
 | 链上 Treasury 合约 | 待实现 | 仓库当前无可验证部署 Manifest |
 
 ### 7.1 源码完成度与生产部署必须分开判断
@@ -640,13 +641,13 @@ Protocol Request -> Canonical AgentPaymentIntent -> Policy -> Settlement -> Rece
 
 ### 11.2 90 秒主 Demo
 
-1. 打开 PactLedger：一句话说明这是 Agent 财务控制层。
-2. KaleidoX 请求向 Risk Agent 支付审核费。
-3. 屏幕依次显示 Account、Payment Intent、Policy checks。
-4. 展示一笔超限或陌生收款人请求被拒绝，没有进入结算层。
-5. 合法请求通过，出现真实 Injective Testnet Receipt 与 Explorer。
-6. 切换 PoolMate，向白名单商户提交付款。
-7. 使用同一个 PactLedger API 和同一种 Trace，成功或拒绝都进入同一本审计账本。
+1. 打开 PactLedger：一句话说明这是 Agent 财务控制层，然后进入第一个参考应用 KaleidoX。
+2. KaleidoX 默认先展示案例展板；点击“进入工作区亲自运行”，让评委明确这不是静态展示页。
+3. 在工作区选择股票，设置预算、最大回撤与仓位上限并启动任务。
+4. 观察 PandaData / Replay 证据、Agent 进度与 Policy 将 40% 越界建议修订为 25%。
+5. 由评委或演示者点击人工批准，再核验 Execution Agent 服务费 Receipt；Mock 必须显示 `No Chain`，只有真实 Testnet 确认后才展示 Explorer。
+6. 切回案例展板，确认同一 Task ID、Action Intent、PolicyDecision 与 Receipt 已回显为完整证据链。
+7. 切换 PoolMate，展示白名单商户付款或陌生收款人拒绝，并说明它复用同一 PactLedger API 与 Trace。
 8. 收束：“业务换了，财务控制层没有换。”
 
 ### 11.3 KaleidoX 加深 Demo
@@ -658,6 +659,7 @@ Protocol Request -> Canonical AgentPaymentIntent -> Policy -> Settlement -> Rece
 - 40% 请求被风控拒绝，修订为 25%。
 - 人工批准不可绕过。
 - Agent 内部账户的服务采购流水。
+- 工作区生成的同一任务证据会回显到案例展板，便于讲解与操作在两个视图间切换。
 
 ### 11.4 PoolMate 记忆点
 
@@ -802,7 +804,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 
 #### 2. 生产重新部署与公网 Smoke
 
-- 生产入口只使用 `web/server/` Fastify，根目录 `server/` 仅为遗留参考。
+- 生产入口只使用 `web/server/` Fastify；旧 Express 后端已删除，禁止重新创建第二套服务。
 - 拉取最新 `main`，执行 `npm ci`、`npm run build` 并重启服务。
 - `/api/health` 必须返回 `service: pactledger-api`。
 - `/api/public/base-status` 与 `/.well-known/agent-card.json` 必须公网 `200`。
@@ -813,12 +815,12 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - DeepSeek V4 Pro 完成 3 个 A2A 示例任务，均小于 20 分钟并带风险提示。
 - 保存 PandaData 数据源、股票代码、日期区间和数据量证据。
 - 保存 Injective Explorer、Receipt JSON、数据库查询和 Mock 降级画面。
-- 保存 lint、build、API tests `37/37` 与生产 Smoke 结果。
+- 保存 lint、build、API tests `42/42` 与生产 Smoke 结果。
 
 ### P1：提升完整度
 
 - 统一 Protocol Router Connector 接口。
-- Telegram 消息到 Intent。
+- 配置生产 Telegram Bot Token，完成真实群聊收发与 Mock Trace 证据固化。
 - Receipt 总账页同时展示两个应用。
 - Policy 管理界面和人工审批队列。
 - 真实退款 / 退差。
@@ -847,7 +849,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 
 - 目标：让最新 Fastify 运行时替换公网旧版本。
 - 入口：`Dockerfile`、`compose.yaml`、`deploy/agent-treasury.service`、`web/server/app.ts`。
-- 不要做：在根目录 `server/` 修复另一套 Express 路由。
+- 不要做：在根目录重新创建 Express 服务或第二套路由。
 - 验收：公网 health 显示 `pactledger-api`，Base Status 与 Agent Card `200`，A2A 鉴权/提交/查询通过。
 
 ### Agent C：PandaAI 赛道验收
@@ -905,6 +907,8 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 
 ### Demo
 
+- PactLedger 整体落地页只负责解释基座与提供参考应用入口，不用参考应用工作区替换它。
+- KaleidoX 默认是评委可扫读的案例展板，但首屏必须有明显工作区入口；工作区负责真实创建任务、人工批准与回执核验。
 - 第一屏讲控制，不讲复杂生态。
 - 第一笔真实链上交易选小额、语义清楚的 Risk 审核费。
 - 永远准备清晰标注的降级方案。
@@ -927,7 +931,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - [x] Mock / Replay / Testnet / Live 在 UI 和 API 中无歧义。
 - [ ] A2A Agent Card 与任务端点在生产 Fastify 服务可访问。
 - [ ] PandaAI 使用的底座模型、Skills 清单和鉴权方式符合赛题要求，3 个示例任务在 20 分钟内完成并包含风险提示。
-- [x] 本地 lint、build 与 API tests `37/37` 全部通过。
+- [x] 本地 lint、build 与 API tests `42/42` 全部通过。
 - [ ] 最新 Fastify 已部署，生产 smoke 全部通过。
 - [ ] 网络失败时能安全降级，且不伪造链上证据。
 
