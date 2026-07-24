@@ -112,13 +112,14 @@ export class TaskOrchestrator {
         snapshot.quantEvidence = analysis.evidence
         snapshot.researchSummary = analysis.researchSummary
         setAgent(snapshot, 'research', 'complete', `${analysis.evidence.barCount} 根日线已归档`, '00:06')
-        setAgent(snapshot, 'strategy', 'working', '生成双均线、波动率和市场状态策略', '00:01')
+        setAgent(snapshot, 'strategy', 'working', 'AI DecisionAgent 分析市场状态并生成策略提案', '00:01')
         appendTimeline(snapshot, '股票数据获取完成', `${analysis.evidence.provider} · ${analysis.evidence.symbol} · ${analysis.evidence.barCount} bars`, 'success')
       })
 
       await this.wait(1)
       await this.update(taskId, 'backtesting', (snapshot) => {
-        setAgent(snapshot, 'strategy', 'complete', '生成 V1、V2-A、V2-B 三个版本', '00:03')
+        const candidateNames = analysis.candidates.map((c) => c.name).join('、')
+        setAgent(snapshot, 'strategy', 'complete', `生成 ${analysis.candidates.length} 个候选策略：${candidateNames}`, '00:03')
         setAgent(snapshot, 'backtest', 'working', '运行含手续费和样本外区间的回测', '00:01')
       })
 

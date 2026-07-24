@@ -22,6 +22,8 @@ import { PoolMateTelegramRuntime, type TelegramIdentityProbe } from './poolmate/
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
 import { createResearchNarrator } from './quant/researchNarrator.js'
+import { DecisionAgent } from './quant/decisionAgent.js'
+import { AgentMemory } from './quant/agentMemory.js'
 import { TaskRepository } from './repository.js'
 import { TaskEvents } from './taskEvents.js'
 import { createTaskSnapshot } from './taskDefaults.js'
@@ -74,9 +76,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const pandaStatus = getPandaConfigStatus(pandaConfig)
   const pandaModelConfig = options.pandaModelConfig ?? readPandaModelConfig()
   const pandaModelStatus = getPandaModelStatus(pandaModelConfig)
+  const agentMemory = new AgentMemory(options.databasePool)
+  await agentMemory.initialize()
+  const researchNarrator = createResearchNarrator(pandaModelConfig)
+  const decisionAgent = new DecisionAgent(researchNarrator, agentMemory)
   const quantResearch = options.quantResearch ?? new QuantResearchService(
     createMarketDataProvider(pandaConfig),
-    createResearchNarrator(pandaModelConfig),
+    researchNarrator,
+    decisionAgent,
   )
   const pactLedger = new PactLedgerService(
     pactLedgerRepository,
@@ -309,6 +316,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/config/injective', async () => injectiveStatus)
   app.get('/api/config/panda', async () => pandaStatus)
   app.get('/api/config/panda/model', async () => pandaModelStatus)
+
+  // ── Agent Knowledge Base ──
+  app.get<{ Querystring: { symbol?: string; limit?: string } }>('/api/public/knowledge-base', async (request) => {
+    const symbol = request.query.symbol
+    const limit = Math.min(Number(request.query.limit || 20), 50)
+    if (symbol) {
+      const records = await agentMemory.findBySymbol(symbol)
+      return { records: records.slice(0, limit), total: records.length }
+    }
+    // 无 symbol 时返回统计摘要
+    const count = await agentMemory.count()
+    const recentContext = await agentMemory.getRecentContext(90)
+    return { totalRecords: count, recentContext, hint: '使用 ?symbol=000001.SZ 查询特定股票的决策记录' }
+  })
 
   app.post<{ Body: { scenario?: 'approved' | 'blocked'; intentId?: string } }>('/api/demo/poolmate/checkout', async (request, reply) => {
     const scenario = request.body?.scenario

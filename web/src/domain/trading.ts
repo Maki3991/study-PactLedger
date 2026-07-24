@@ -181,3 +181,51 @@ export interface PandaModelStatus {
   baseUrl: string
   missing: string[]
 }
+
+// ── Decision Agent Types ──
+
+/** AI 生成的策略提案（来自 DeepSeek） */
+export interface StrategyProposal {
+  id: string
+  name: string
+  description: string
+  entryRules: string
+  exitRules: string
+  positionLogic: string
+  confidence: number
+  rationale: string
+  marketRegime: string
+}
+
+/** 决策记录——Agent 记忆的基本单元 */
+export interface DecisionRecord {
+  id: string
+  taskId: string
+  symbol: string
+  date: string
+  marketRegime: string
+  proposals: StrategyProposal[]
+  selectedStrategy: string
+  evidence: QuantEvidence
+  createdAt: string
+}
+
+/** 传递给 AI 的决策上下文 */
+export interface DecisionContext {
+  symbol: string
+  dateRange: { start: string; end: string }
+  barCount: number
+  priceSummary: {
+    start: number
+    end: number
+    min: number
+    max: number
+    volatility: number
+  }
+  constraints: {
+    maxLossPct: number
+    maxAssetPct: number
+    budget: number
+  }
+  historicalContext?: string
+}

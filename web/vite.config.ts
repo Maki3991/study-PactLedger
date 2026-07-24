@@ -16,6 +16,7 @@ export default defineConfig({
         kaleidox: fileURLToPath(new URL('./kaleidox.html', import.meta.url)),
         landing: fileURLToPath(new URL('./landing.html', import.meta.url)),
         poolmate: fileURLToPath(new URL('./poolmate.html', import.meta.url)),
+        'knowledge-base': fileURLToPath(new URL('./knowledge-base.html', import.meta.url)),
       },
     },
   },
