@@ -7,6 +7,7 @@ async function migrate() {
   const schemas = [
     join(__dirname, 'schema.sql'),
     join(__dirname, '../treasury/schema.sql'),
+    join(__dirname, '../poolmate/schema.sql'),
   ]
 
   const client = await pool.connect()

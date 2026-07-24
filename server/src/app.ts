@@ -5,6 +5,7 @@ import { configRouter } from './routes/config'
 import { agentCardRouter } from './routes/agentCard'
 import { a2aRouter } from './routes/a2a'
 import { treasuryRouter } from './treasury/routes'
+import { poolmateRouter } from './routes/poolmate'
 
 export const app = express()
 
@@ -15,6 +16,7 @@ app.use(express.json())
 app.use('/api/tasks', tasksRouter)
 app.use('/api/config', configRouter)
 app.use('/api/treasury', treasuryRouter)
+app.use('/api/poolmate', poolmateRouter)
 
 // A2A protocol routes (used by PandaAI platform)
 app.use('/.well-known/agent-card.json', agentCardRouter)

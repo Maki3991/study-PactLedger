@@ -34,6 +34,7 @@ import type { AuthUser } from './services/authClient'
 import { useAuth } from './services/useAuth'
 import { useInjectiveConfig } from './services/useInjectiveConfig'
 import { usePandaConfig } from './services/usePandaConfig'
+import { useBotStatus } from './services/useBotStatus'
 import { useTaskWorkflow } from './services/useTaskWorkflow'
 
 const presets = [
@@ -84,6 +85,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
   const { task, error, submitting, start, approveAndExecute } = useTaskWorkflow()
   const panda = usePandaConfig()
   const injective = useInjectiveConfig()
+  const bot = useBotStatus()
   const normalizedSymbol = symbol.trim().toUpperCase()
   const canStart = !submitting && (!task || task.phase === 'executed' || task.phase === 'failed')
   const executionReady = injective.status?.readyForExecution === true
@@ -129,6 +131,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
             label={injectivePresentation.label}
             tone={injectivePresentation.tone}
           />
+          <BotStatusPill bot={bot} />
           <span className="kx-user-name">{user.username}</span>
           <button className="kx-icon-button" type="button" title="退出登录" onClick={() => void onLogout()}>
             <LogOut size={16} />
@@ -325,6 +328,26 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
                 <SystemRow label="Execution" value={injective.status?.adapter ?? 'loading'} />
                 <SystemRow label="Settlement state" value={injectivePresentation.label} />
                 <SystemRow label="Chain" value={injective.status?.chainId ?? 'injective-888'} />
+                <div className="kx-bot-row">
+                  <span>PoolMate Bot</span>
+                  <strong>{bot.label}</strong>
+                  <button
+                    className="kx-bot-test-btn"
+                    type="button"
+                    disabled={bot.testing}
+                    onClick={() => void bot.test()}
+                  >
+                    {bot.testing ? '检测中…' : '测试连接'}
+                  </button>
+                </div>
+                {bot.status?.ok && bot.status.inviteUrl && (
+                  <a className="kx-bot-link" href={bot.status.inviteUrl} target="_blank" rel="noreferrer">
+                    → 打开 @{bot.status.username}
+                  </a>
+                )}
+                {bot.status && !bot.status.ok && (
+                  <p className="kx-bot-error">{bot.status.reason}</p>
+                )}
               </div>
             </details>
           </aside>
@@ -341,6 +364,20 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
 
 function StatusPill({ label, tone }: { label: string; tone: 'ok' | 'review' }) {
   return <span className={`kx-status-pill ${tone}`}><i />{label}</span>
+}
+
+function BotStatusPill({ bot }: { bot: ReturnType<typeof useBotStatus> }) {
+  return (
+    <button
+      className={`kx-status-pill ${bot.tone} kx-bot-pill`}
+      type="button"
+      title={bot.status?.ok ? `点击重新检测 Bot 连接` : bot.status?.reason ?? '点击检测'}
+      onClick={() => void bot.test()}
+      disabled={bot.testing}
+    >
+      <i />{bot.testing ? '检测中…' : `PoolMate ${bot.label}`}
+    </button>
+  )
 }
 
 function Primitive({ icon: Icon, label, detail }: { icon: typeof Database; label: string; detail: string }) {

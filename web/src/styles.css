@@ -1041,3 +1041,42 @@ summary:focus-visible {
   .kx-nav,
   .kx-auth-panel { background: var(--paper); backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
+
+/* ── PoolMate Bot status ──────────────────────────────────────────────────── */
+.kx-bot-pill { cursor: pointer; border: none; }
+.kx-bot-pill:disabled { opacity: .6; cursor: default; }
+
+.kx-bot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.kx-bot-row > span { color: var(--ink-3, #888); flex: 0 0 auto; }
+.kx-bot-row > strong { flex: 1; font-weight: 600; font-size: 12px; }
+.kx-bot-test-btn {
+  padding: 3px 10px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: .75;
+  transition: opacity .15s;
+}
+.kx-bot-test-btn:hover:not(:disabled) { opacity: 1; }
+.kx-bot-test-btn:disabled { opacity: .4; cursor: default; }
+.kx-bot-link {
+  display: block;
+  padding: 2px 0 6px;
+  font-size: 11px;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+.kx-bot-link:hover { text-decoration: underline; }
+.kx-bot-error {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  color: var(--red, #ef4444);
+}
