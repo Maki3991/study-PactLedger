@@ -1,12 +1,12 @@
 {
-  "name": "kaleidox",
+  "name": "pactledger",
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,green \"npm run dev --prefix server\" \"npm run dev --prefix web\"",
-    "migrate": "npm run migrate --prefix server"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
+    "dev": "npm run dev --prefix web",
+    "build": "npm run build --prefix web",
+    "lint": "npm run lint --prefix web",
+    "test:api": "npm run test:api --prefix web",
+    "start:api": "npm run start:api --prefix web"
   }
 }

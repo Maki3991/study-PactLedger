@@ -16,6 +16,9 @@ import { createAgentPaymentIntent } from './pactledger/intents.js'
 import { PolicyEngine } from './pactledger/policyEngine.js'
 import { PactLedgerRepository } from './pactledger/repository.js'
 import { PactLedgerService } from './pactledger/service.js'
+import { PoolMateRepository } from './poolmate/repository.js'
+import { PoolMateService } from './poolmate/service.js'
+import { PoolMateTelegramRuntime, type TelegramIdentityProbe } from './poolmate/telegram.js'
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
 import { createResearchNarrator } from './quant/researchNarrator.js'
@@ -42,6 +45,9 @@ interface BuildAppOptions {
   pandaConfig?: PandaDataConfig
   pandaModelConfig?: PandaModelConfig
   quantResearch?: QuantResearchService
+  startTelegramBot?: boolean
+  telegramBotToken?: string
+  telegramProbe?: TelegramIdentityProbe
 }
 
 interface AuthBody {
@@ -54,10 +60,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const repository = new TaskRepository(options.databasePool)
   const treasury = new TreasuryService(options.databasePool)
   const pactLedgerRepository = new PactLedgerRepository(options.databasePool)
+  const poolMateRepository = new PoolMateRepository(options.databasePool)
   const userStore = new UserStore(options.databasePool)
   await repository.initialize()
   await treasury.initialize()
   await pactLedgerRepository.initialize()
+  await poolMateRepository.initialize()
   await userStore.initialize()
   const events = new TaskEvents()
   const injectiveConfig = options.injectiveConfig ?? readInjectiveConfig()
@@ -80,6 +88,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     new PolicyEngine(),
     new MockInjectiveAdapter(),
   )
+  const poolMateService = new PoolMateService(poolMateRepository, poolMateDemoLedger)
+  const poolMateBot = new PoolMateTelegramRuntime(
+    options.telegramBotToken?.trim() || undefined,
+    poolMateService,
+    options.telegramProbe,
+  )
   const orchestrator = new TaskOrchestrator(
     repository,
     events,
@@ -93,6 +107,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     : process.env.A2A_API_KEY?.trim()
 
   await app.register(cors, { origin: true })
+
+  if (options.startTelegramBot) {
+    app.addHook('onReady', async () => {
+      await poolMateBot.start()
+    })
+  }
 
   const extractToken = (request: FastifyRequest): string | undefined => {
     const header = request.headers.authorization
@@ -168,8 +188,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       pandaModel: pandaModelStatus.provider === 'template' ? 'template' : pandaModelStatus.endpointId,
       injective: injectiveStatus.executionState,
       database: options.databaseStatus?.provider ?? (options.databasePool ? 'postgresql' : 'memory-test'),
+      poolmateBot: poolMateBot.getStatus().running ? 'running' : poolMateBot.getStatus().configured ? 'configured' : 'disabled',
     },
   }))
+
+  app.get('/api/public/poolmate/bot-status', async () => poolMateBot.refreshStatus())
 
   app.get('/api/public/base-status', async (): Promise<PactLedgerBaseStatus> => {
     const latestReceipt = await pactLedgerRepository.findLatestConfirmedTestnetReceipt()
@@ -426,6 +449,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   })
 
   app.addHook('onClose', async () => {
+    await poolMateBot.stop()
     orchestrator.close()
     await options.databasePool?.end()
   })

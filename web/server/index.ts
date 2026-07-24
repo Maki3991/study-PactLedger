@@ -12,14 +12,19 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const webRoot = join(currentDirectory, '..')
 const staticRoot = join(webRoot, 'dist')
 const host = process.env.KALEIDOX_API_HOST ?? '127.0.0.1'
-const port = Number(process.env.KALEIDOX_API_PORT ?? 8787)
+const port = Number(process.env.KALEIDOX_API_PORT ?? process.env.PORT ?? 8787)
 const databaseConfig = readDatabaseConfig()
 const databaseStatus = getDatabaseConfigStatus(databaseConfig)
 if (!databaseStatus.configured) {
   throw new Error(`PostgreSQL configuration is incomplete: ${databaseStatus.missing.join(', ')}`)
 }
 const databasePool = createDatabasePool(databaseConfig)
-const app = await buildApp({ databasePool, databaseStatus })
+const app = await buildApp({
+  databasePool,
+  databaseStatus,
+  startTelegramBot: true,
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+})
 
 if (process.env.KALEIDOX_SERVE_WEB !== 'false' && existsSync(staticRoot)) {
   await app.register(fastifyStatic, {

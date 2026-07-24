@@ -1,7 +1,0 @@
-node_modules/
-dist/
-*.js.map
-*.log
-.env
-.env.*
-!.env.example

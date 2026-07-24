@@ -22,6 +22,7 @@
     "@vitejs/plugin-react": "latest",
     "dotenv": "17.4.2",
     "fastify": "latest",
+    "grammy": "^1.45.1",
     "lucide-react": "latest",
     "pg": "^8.22.0",
     "react": "latest",

@@ -7,3 +7,4 @@ __pycache__/
 *.log
 .playwright-cli/
 web/output/playwright/
+/tmp
