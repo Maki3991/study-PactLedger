@@ -63,8 +63,9 @@ export class TaskOrchestrator {
         appId: 'kaleidox',
         payerAgentId: 'orchestrator',
         payeeId: 'execution',
-        amount: 50,
-        currency: 'USDT',
+        amount: 0.001,
+        currency: 'INJ',
+        denom: 'inj',
         purpose: 'execution',
         protocol: 'internal',
         metadata: {
@@ -140,8 +141,9 @@ export class TaskOrchestrator {
         appId: 'kaleidox',
         payerAgentId: 'strategy',
         payeeId: 'risk',
-        amount: 15,
-        currency: 'USDT',
+        amount: 0.0005,
+        currency: 'INJ',
+        denom: 'inj',
         purpose: 'risk_review',
         protocol: 'internal',
         metadata: {
