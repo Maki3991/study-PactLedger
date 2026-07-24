@@ -1,59 +1,66 @@
 import { useState } from 'react'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import {
   Activity,
+  AlertTriangle,
   Bell,
   Bot,
   BrainCircuit,
   ChevronDown,
   Command,
   Database,
-  FlaskConical,
   GitBranch,
   History,
   LayoutDashboard,
   LogOut,
   Menu,
-  Network,
-  PanelLeftClose,
   Search,
   ShieldCheck,
   Vault,
   WalletCards,
   X,
 } from 'lucide-react'
-import { AgentRail } from './components/AgentRail'
 import { AuthScreen } from './components/AuthScreen'
 import { useAuth } from './services/useAuth'
 import type { AuthUser } from './services/authClient'
 import { EvolutionPanel } from './components/EvolutionPanel'
 import { FirewallPanel } from './components/FirewallPanel'
 import { InjectiveConfigDrawer } from './components/InjectiveConfigDrawer'
-import { demoAgents, firewallRules, initialCandidates, timeline } from './services/demoData'
+import { firewallRules, initialCandidates } from './services/demoData'
 import { useTaskWorkflow } from './services/useTaskWorkflow'
 import { useInjectiveConfig } from './services/useInjectiveConfig'
 import { TaskFlowView } from './views/TaskFlowView'
-import { StrategyLabView } from './views/StrategyLabView'
 import { MemoryBankView } from './views/MemoryBankView'
 import { ExecutionView } from './views/ExecutionView'
 import { TreasuryView } from './views/TreasuryView'
 
 const navigation = [
-  { label: '总览', icon: LayoutDashboard, active: true },
-  { label: '任务流', icon: Network },
-  { label: '策略实验', icon: FlaskConical },
-  { label: '记忆库', icon: Database },
-  { label: '链上执行', icon: WalletCards },
-  { label: '资金流', icon: Vault },
+  { label: '总览', icon: LayoutDashboard, path: '/' },
+  { label: '记忆库', icon: Database, path: '/memory' },
+  { label: '链上执行', icon: WalletCards, path: '/execution' },
+  { label: '资金流', icon: Vault, path: '/treasury' },
 ]
 
 const viewMeta: Record<string, { title: string; subtitle: string }> = {
-  '总览': { title: 'ETH 策略进化任务', subtitle: '从失败交易中生成下一代策略，并在用户风险边界内完成验证与执行。' },
-  '任务流': { title: 'A2A 任务编排', subtitle: '多 Agent 协作管线的实时状态与交互记录。' },
-  '策略实验': { title: '策略竞争实验室', subtitle: 'Champion–Challenger 回测对比与版本进化历史。' },
-  '记忆库': { title: '双层记忆系统', subtitle: '用户偏好记忆与策略表现记忆的持久化存储。' },
-  '链上执行': { title: 'Injective 测试网执行', subtitle: 'Capital Firewall 校验、交易广播与链上回执。' },
-  '资金流': { title: 'Agent Treasury', subtitle: '6 个 Agent 钱包实时余额、资金流向与不可篡改审计账本。' },
+  '/': { title: 'ETH 策略进化任务', subtitle: '从失败交易中生成下一代策略，并在用户风险边界内完成验证与执行。' },
+  '/memory': { title: '双层记忆系统', subtitle: '用户偏好记忆与策略表现记忆的持久化存储，以及知识库进化过程。' },
+  '/execution': { title: 'Injective 测试网执行', subtitle: 'Capital Firewall 校验、交易广播与链上回执。' },
+  '/treasury': { title: 'Agent Treasury', subtitle: '6 个 Agent 钱包实时余额、资金流向与不可篡改审计账本。' },
 }
+
+const failureAttribution = [
+  'V1 过度依赖短期趋势信号，在震荡行情中连续产生错误入场',
+  '未识别当前市场状态（震荡 vs 趋势），导致策略与环境不匹配',
+  '交易频率过高（23 笔），放大错误信号影响并增加手续费损耗',
+]
+
+const mechanismSteps = [
+  { step: '01', text: 'Evolution Agent 从失败交易中生成多个候选策略变体' },
+  { step: '02', text: 'Backtest Agent 使用相同数据区间进行 Champion–Challenger 回测' },
+  { step: '03', text: '只有风险调整后表现更好、且通过样本外验证的候选策略才能晋级' },
+  { step: '04', text: 'Risk Agent 重新审核，高风险变更需用户确认' },
+  { step: '05', text: '获胜策略升级为新版本，后续交易关联到明确的策略版本' },
+]
 
 function App() {
   const { session, validating, login, register, logout } = useAuth()
@@ -80,14 +87,13 @@ function Workspace({ user, onLogout }: WorkspaceProps) {
   const [selectedStrategy, setSelectedStrategy] = useState('v2b')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
-  const [activeNav, setActiveNav] = useState('总览')
   const { task, error, start, approveAndExecute } = useTaskWorkflow()
   const injective = useInjectiveConfig()
+  const location = useLocation()
+  const currentPath = location.pathname
 
-  const agents = task?.agents ?? demoAgents
   const candidates = task?.candidates.length ? task.candidates : initialCandidates
   const rules = task?.firewallRules ?? firewallRules
-  const events = task ? task.timeline : timeline
   const executionState = task?.execution.state ?? 'ready'
   const canStart = !task || task.phase === 'executed' || task.phase === 'failed'
   const runLabel = !task
@@ -107,15 +113,16 @@ function Workspace({ user, onLogout }: WorkspaceProps) {
 
         <nav className="primary-nav" aria-label="主导航">
           <span className="nav-label">WORKSPACE</span>
-          {navigation.map(({ label, icon: Icon, active }) => (
-            <button
-              className={(activeNav === label || (active && activeNav === '总览')) ? 'nav-item active' : 'nav-item'}
+          {navigation.map(({ label, icon: Icon, path }) => (
+            <NavLink
+              className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}
               key={label}
-              onClick={() => { setActiveNav(label); setSidebarOpen(false) }}
+              to={path}
+              end={path === '/'}
+              onClick={() => setSidebarOpen(false)}
             >
               <Icon size={17} /><span>{label}</span>
-              {label === '任务流' && <small>1</small>}
-            </button>
+            </NavLink>
           ))}
         </nav>
 
@@ -151,8 +158,8 @@ function Workspace({ user, onLogout }: WorkspaceProps) {
           <section className="mission-header">
             <div>
               <span className="mission-id">MISSION / {task?.missionId ?? 'KX-260723-DEMO'}</span>
-              <h1>{viewMeta[activeNav]?.title ?? 'ETH 策略进化任务'}</h1>
-              <p>{viewMeta[activeNav]?.subtitle ?? ''}</p>
+              <h1>{viewMeta[currentPath]?.title ?? 'ETH 策略进化任务'}</h1>
+              <p>{viewMeta[currentPath]?.subtitle ?? ''}</p>
             </div>
             <div className="mission-controls">
               <button className="secondary-action"><History size={16} /> 历史快照</button>
@@ -162,7 +169,7 @@ function Workspace({ user, onLogout }: WorkspaceProps) {
 
           {error && <div className="api-error" role="alert">{error}</div>}
 
-          {(activeNav === '总览' || activeNav === '链上执行') && (
+          {(currentPath === '/' || currentPath === '/execution') && (
             <section className="constraint-strip" aria-label="任务授权范围">
               <div className="constraint-title"><ShieldCheck size={17} /><span>用户授权边界</span></div>
               <div><span>预算</span><strong>1,000 USDT</strong></div>
@@ -173,50 +180,69 @@ function Workspace({ user, onLogout }: WorkspaceProps) {
             </section>
           )}
 
-          {activeNav === '总览' && (
-            <div className="dashboard-grid">
-              <AgentRail agents={agents} />
-              <EvolutionPanel candidates={candidates} selectedId={selectedStrategy} onSelect={setSelectedStrategy} />
-              <FirewallPanel
+          <Routes>
+            <Route path="/" element={
+              <>
+                <div className="dashboard-grid">
+                  <EvolutionPanel candidates={candidates} selectedId={selectedStrategy} onSelect={setSelectedStrategy} />
+                  <FirewallPanel
+                    rules={rules}
+                    executionState={executionState}
+                    canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
+                    transactionHash={task?.execution.transactionHash}
+                    onExecute={approveAndExecute}
+                  />
+                </div>
+
+                <TaskFlowView task={task} />
+
+                <div className="overview-insights">
+                  <section className="panel attribution-panel" aria-labelledby="attribution-heading">
+                    <div className="panel-heading">
+                      <div><span className="eyebrow">Failure Attribution</span><h2 id="attribution-heading">V1 失败归因</h2></div>
+                      <X size={18} className="attribution-icon" />
+                    </div>
+                    <div className="attribution-body">
+                      {failureAttribution.map((text, index) => (
+                        <div className="attribution-item" key={index}>
+                          <AlertTriangle size={14} />
+                          <p>{text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="panel mechanism-panel" aria-labelledby="mechanism-heading">
+                    <div className="panel-heading">
+                      <div><span className="eyebrow">Champion–Challenger</span><h2 id="mechanism-heading">晋级机制</h2></div>
+                      <GitBranch size={18} className="mechanism-icon" />
+                    </div>
+                    <div className="mechanism-body">
+                      {mechanismSteps.map((item) => (
+                        <div className="mechanism-step" key={item.step}>
+                          <span>{item.step}</span>
+                          <p>{item.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              </>
+            } />
+            <Route path="/memory" element={<MemoryBankView task={task} />} />
+            <Route path="/execution" element={
+              <ExecutionView
+                task={task}
                 rules={rules}
                 executionState={executionState}
                 canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
                 transactionHash={task?.execution.transactionHash}
+                injectiveStatus={injective.status}
                 onExecute={approveAndExecute}
               />
-
-              <section className="panel timeline-panel" aria-labelledby="timeline-heading">
-                <div className="panel-heading">
-                  <div><span className="eyebrow">Decision ledger</span><h2 id="timeline-heading">决策证据链</h2></div>
-                  <button className="icon-button" title="筛选记录"><PanelLeftClose size={17} /></button>
-                </div>
-                <div className="timeline-list">
-                  {events.map((event, index) => (
-                    <div className={`timeline-event ${event.tone}`} key={`${event.time}-${index}`}>
-                      <time>{event.time}</time><i />
-                      <div><strong>{event.title}</strong><span>{event.detail}</span></div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-          )}
-
-          {activeNav === '任务流' && <TaskFlowView task={task} />}
-          {activeNav === '策略实验' && <StrategyLabView task={task} />}
-          {activeNav === '记忆库' && <MemoryBankView task={task} />}
-          {activeNav === '链上执行' && (
-            <ExecutionView
-              task={task}
-              rules={rules}
-              executionState={executionState}
-              canExecute={task?.phase === 'awaiting_approval' && injective.status?.readyForExecution === true}
-              transactionHash={task?.execution.transactionHash}
-              injectiveStatus={injective.status}
-              onExecute={approveAndExecute}
-            />
-          )}
-          {activeNav === '资金流' && <TreasuryView taskId={task?.id} />}
+            } />
+            <Route path="/treasury" element={<TreasuryView taskId={task?.id} />} />
+          </Routes>
 
           <footer className="workspace-footer">
             <span><BrainCircuit size={14} /> DeepSeek V4 Pro</span>

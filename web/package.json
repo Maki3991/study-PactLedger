@@ -21,13 +21,14 @@
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-router-dom": "^7.18.1",
     "vite": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@types/node": "latest",
     "concurrently": "9.2.4",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",

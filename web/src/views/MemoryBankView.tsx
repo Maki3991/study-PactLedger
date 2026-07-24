@@ -1,7 +1,15 @@
 import {
   BookOpen,
   Brain,
+  BrainCircuit,
+  CheckCircle2,
+  Circle,
   Clock,
+  Cpu,
+  FlaskConical,
+  GitBranch,
+  Loader2,
+  SearchCode,
   ShieldCheck,
   ThumbsDown,
   ThumbsUp,
@@ -18,6 +26,84 @@ const userFeedback = [
 
 interface MemoryBankViewProps {
   task?: TaskSnapshot
+}
+
+interface EvolutionNode {
+  id: string
+  icon: typeof Brain
+  title: string
+  detail: string
+  artifact?: string
+  time?: string
+  status: 'done' | 'active' | 'pending'
+}
+
+function buildEvolutionTimeline(task?: TaskSnapshot): EvolutionNode[] {
+  const phase = task?.phase ?? 'created'
+  const candidates = task?.candidates ?? []
+  const challengers = candidates.filter((c) => c.id !== 'v1')
+  const winner = candidates.find((c) => c.status === 'approved')
+  const timeline = task?.timeline ?? []
+
+  const phaseOrder = ['created', 'researching', 'strategizing', 'backtesting', 'risk_review', 'awaiting_approval', 'approved', 'executing', 'executed']
+  const phaseIdx = phaseOrder.indexOf(phase)
+  const reached = (p: string) => phaseIdx >= phaseOrder.indexOf(p)
+
+  const nodes: EvolutionNode[] = [
+    {
+      id: 'detect',
+      icon: ShieldCheck,
+      title: '失败检测 & 触发进化',
+      detail: 'V1 策略执行偏差超过阈值（-4.9%），系统自动触发知识进化流程',
+      artifact: '偏差报告: actual -4.9% vs expected +0.3%',
+      time: timeline[0]?.time,
+      status: reached('researching') ? 'done' : phase === 'created' ? 'active' : 'pending',
+    },
+    {
+      id: 'attribution',
+      icon: SearchCode,
+      title: '归因分析 & 知识提取',
+      detail: 'Evolution Agent 分析 23 笔失败交易，识别核心问题：缺乏市场状态识别、交易频率过高、信号确认不足',
+      artifact: '提取 3 条教训 → 写入短期记忆',
+      time: timeline.find((t) => t.title.includes('归因') || t.title.includes('Research'))?.time,
+      status: reached('strategizing') ? 'done' : phase === 'researching' ? 'active' : 'pending',
+    },
+    {
+      id: 'generate',
+      icon: Cpu,
+      title: '候选策略生成',
+      detail: challengers.length
+        ? `基于归因结果生成 ${challengers.length} 个候选策略：${challengers.map((c) => `${c.name}（${c.signal}）`).join('、')}`
+        : '基于归因结果生成多个候选策略变体',
+      artifact: challengers.length ? `策略指纹: ${challengers.map((c) => c.id).join(', ')}` : undefined,
+      time: timeline.find((t) => t.title.includes('Strategy') || t.title.includes('策略'))?.time,
+      status: reached('backtesting') ? 'done' : phase === 'strategizing' ? 'active' : 'pending',
+    },
+    {
+      id: 'validate',
+      icon: FlaskConical,
+      title: 'Champion–Challenger 回测验证',
+      detail: challengers.length
+        ? `126 日样本外回测：${challengers.map((c) => `${c.name} Sharpe ${c.sharpe.toFixed(2)} / 回撤 ${c.drawdownPct.toFixed(1)}%`).join(' · ')}`
+        : '使用相同数据区间进行 Champion–Challenger 对比回测',
+      artifact: winner ? `胜出: ${winner.name} (Sharpe ${winner.sharpe.toFixed(2)})` : undefined,
+      time: timeline.find((t) => t.title.includes('Backtest') || t.title.includes('回测'))?.time,
+      status: reached('risk_review') ? 'done' : phase === 'backtesting' ? 'active' : 'pending',
+    },
+    {
+      id: 'consolidate',
+      icon: GitBranch,
+      title: '知识沉淀 & 版本晋级',
+      detail: winner
+        ? `${winner.name} 晋级为新 Champion，策略指纹与偏差阈值写入长期记忆，后续交易关联明确策略版本`
+        : '获胜策略升级为新版本，偏差阈值与策略指纹归档至长期记忆',
+      artifact: winner ? `新 Champion: ${winner.name} · 记忆归档完成` : undefined,
+      time: task?.execution.transactionHash ? timeline[timeline.length - 1]?.time : undefined,
+      status: reached('executed') ? 'done' : reached('awaiting_approval') ? 'active' : 'pending',
+    },
+  ]
+
+  return nodes
 }
 
 export function MemoryBankView({ task }: MemoryBankViewProps) {
@@ -86,6 +172,31 @@ export function MemoryBankView({ task }: MemoryBankViewProps) {
               <div className="memory-item-body">
                 <p>{item.text}</p>
                 <span className="memory-meta">{item.time}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel memory-evolution-panel" aria-labelledby="evolution-heading">
+        <div className="panel-heading">
+          <div><span className="eyebrow">Knowledge Evolution</span><h2 id="evolution-heading">知识库进化过程</h2></div>
+          <BrainCircuit size={18} className="memory-panel-icon" />
+        </div>
+        <div className="evolution-timeline">
+          {buildEvolutionTimeline(task).map((node) => (
+            <div className={`evo-node ${node.status}`} key={node.id}>
+              <div className="evo-indicator">
+                {node.status === 'done' ? <CheckCircle2 size={16} /> : node.status === 'active' ? <Loader2 size={16} className="spin" /> : <Circle size={16} />}
+              </div>
+              <div className="evo-content">
+                <div className="evo-header">
+                  <node.icon size={14} />
+                  <strong>{node.title}</strong>
+                  {node.time && <time className="evo-time">{node.time}</time>}
+                </div>
+                <p className="evo-detail">{node.detail}</p>
+                {node.artifact && <code className="evo-artifact">{node.artifact}</code>}
               </div>
             </div>
           ))}

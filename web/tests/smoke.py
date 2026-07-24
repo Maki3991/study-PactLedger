@@ -66,7 +66,7 @@ with sync_playwright() as playwright:
     login(mobile, USERNAME, PASSWORD)
     mobile.get_by_title("打开导航").click()
     assert mobile.locator(".sidebar").evaluate("element => element.classList.contains('open')")
-    mobile.get_by_role("button", name="策略实验").click()
+    mobile.get_by_role("link", name="记忆库").click()
     assert not mobile.locator(".sidebar").evaluate("element => element.classList.contains('open')")
     mobile.wait_for_timeout(300)
     assert mobile.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")

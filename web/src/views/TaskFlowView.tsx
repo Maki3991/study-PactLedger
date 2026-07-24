@@ -20,6 +20,7 @@ interface FlowStep {
   status: FlowStatus
   detail: string
   doing: string
+  result?: string
   agentId?: string
 }
 
@@ -117,6 +118,52 @@ function phaseIndex(phase: TaskPhase): number {
   return PHASE_ORDER.indexOf(phase)
 }
 
+function buildStepResult(stepId: string, task: TaskSnapshot): string | undefined {
+  const candidates = task.candidates
+  const rules = task.firewallRules
+  const challengers = candidates.filter((c) => c.id !== 'v1')
+  switch (stepId) {
+    case 'input': {
+      const budget = rules[0]?.limit ?? '1,000 USDT'
+      const position = rules[1]?.limit ?? '30%'
+      const loss = rules[2]?.limit ?? '5%'
+      return `授权边界已锁定：预算 ${budget} · 亏损 ≤${loss} · 仓位 ≤${position} · 标的 ETH`
+    }
+    case 'orchestrator':
+      return `任务拆分完成，${task.agents.length} 个 Agent 子任务已分发`
+    case 'research': {
+      const agent = task.agents.find((a) => a.id === 'research')
+      return agent?.status === 'complete' ? `市场状态识别完成：${agent.detail}` : undefined
+    }
+    case 'strategy': {
+      if (challengers.length === 0) return undefined
+      const list = challengers.map((c) => `${c.name}（${c.signal}）`).join('、')
+      return `产出 ${challengers.length} 个候选策略：${list}`
+    }
+    case 'backtest': {
+      if (challengers.length === 0) return undefined
+      const metrics = challengers.map((c) => `${c.name} Sharpe ${c.sharpe.toFixed(2)} / 回撤 ${c.drawdownPct.toFixed(1)}%`).join(' · ')
+      return `126 日样本外回测完成：${metrics}`
+    }
+    case 'risk': {
+      const rejected = task.timeline.some((e) => e.title.includes('退回'))
+      const current = rules[1]?.current
+      if (rejected && current) return `初版 40% 仓位超限被否决，修订 ${current} 后复核通过`
+      return current ? `风险复核通过：执行仓位 ${current}` : undefined
+    }
+    case 'firewall':
+      return '预算 / 仓位 / 亏损 / 白名单 4 项规则校验通过，获得一次性执行授权'
+    case 'injective':
+      return task.execution.transactionHash ? `交易已在测试网确认：${task.execution.transactionHash}` : undefined
+    case 'evolution': {
+      const winner = candidates.find((c) => c.status === 'approved')
+      return winner ? `${winner.name} 晋级新 Champion，偏差样本已归档至策略记忆` : undefined
+    }
+    default:
+      return undefined
+  }
+}
+
 function deriveSteps(task: TaskSnapshot | undefined): FlowStep[] {
   const agents = task?.agents ?? []
   const agentMap = new Map(agents.map((a) => [a.id, a] as const))
@@ -165,7 +212,8 @@ function deriveSteps(task: TaskSnapshot | undefined): FlowStep[] {
       if (agent.status === 'blocked') status = 'blocked'
     }
 
-    return { ...meta, status, detail }
+    const result = status === 'complete' ? buildStepResult(meta.id, task) : undefined
+    return { ...meta, status, detail, result }
   })
 }
 
@@ -176,6 +224,7 @@ function progressPct(steps: FlowStep[]): number {
 }
 
 interface LogEntry {
+  time?: string
   from: string
   to: string
   message: string
@@ -213,7 +262,7 @@ function buildInteractionLog(task: TaskSnapshot | undefined): LogEntry[] {
       type = type === 'veto' ? 'veto' : 'approve'
     }
 
-    return { from, to, message: `${title} · ${event.detail}`, type }
+    return { time: event.time, from, to, message: `${title} · ${event.detail}`, type }
   })
 
   return inferred
@@ -273,7 +322,11 @@ export function TaskFlowView({ task }: TaskFlowViewProps) {
                       <strong>{step.label}</strong>
                       <span className="flow-role">{step.role}</span>
                     </div>
-                    <p className="flow-step-detail">{step.detail}</p>
+                    {step.status === 'complete' && step.result ? (
+                      <p className="flow-step-result"><Check size={11} />{step.result}</p>
+                    ) : (
+                      <p className="flow-step-detail">{step.detail}</p>
+                    )}
                     <p className="flow-step-doing">{step.doing}</p>
                   </div>
                   <span className={`flow-status-label is-${step.status}`}>{statusLabelMap[step.status]}</span>
@@ -305,6 +358,7 @@ export function TaskFlowView({ task }: TaskFlowViewProps) {
         <div className="log-entries">
           {interactionLog.map((entry, index) => (
             <div className={`log-entry ${entry.type}`} key={index}>
+              <time className="log-time">{entry.time ?? '--:--:--'}</time>
               <span className="log-from">{entry.from}</span>
               <span className="log-arrow"><ArrowRight size={11} /></span>
               <span className="log-to">{entry.to}</span>
