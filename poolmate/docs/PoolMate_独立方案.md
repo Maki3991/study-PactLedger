@@ -1,0 +1,300 @@
+# PoolMate 独立方案
+
+> 状态：待执行（三工程师并行版）
+> 边界：新 PoolMate 是独立后端、独立 Telegram Bot、独立管理面板和独立数据库，全部放在顶层 `poolmate/`。
+> 约束：不修改 `web/` 中现有支付基座的代码和接口，不导入其内部 Service，不共享数据库。
+
+## 1. 结论
+
+重新建设 PoolMate，不迁移或继续扩展 `web/server/poolmate/` 中的旧实现。
+
+新 PoolMate 自己完成群组、订单、最终报价、精确分摊、逐人确认和付款编排。支付基座只被当作外部付款服务，PoolMate 通过独立 `PaymentBaseClient` 调用它，不知道其 Repository、Policy Engine 或 Settlement Adapter。
+
+当前必须承认一个阻塞：
+
+- 现有可复用接口是进程内 `PactLedgerService.process()`；
+- 当前没有供独立后端调用的通用支付 HTTP/RPC 端点；
+- `/api/demo/poolmate/checkout` 只接受固定演示场景并返回 Mock Trace，不得作为新 PoolMate 的支付接口。
+
+因此，在基座运营方提供“可远程调用且保持现有支付契约”的入口前，新 PoolMate 可完整交付到 `READY_FOR_PAYMENT`，但必须显示 `PAYMENT_BASE_UNAVAILABLE`，不得伪造 `paid`、Receipt 或链上确认。
+
+## 2. 目录与部署
+
+```text
+poolmate/
+  backend/
+    src/api/                 管理面板 API
+    src/bot/                 Telegram Bot
+    src/domain/              Order / Checkout / Confirmation
+    src/application/         用例与状态机
+    src/infrastructure/db/   PoolMate Repository
+    src/infrastructure/payment/ PaymentBaseClient
+    tests/
+  frontend/
+    src/                     独立管理面板
+  shared/
+    src/                     前后端共享 DTO
+  migrations/               PoolMate 独立数据库迁移
+  deploy/                    Docker / service / env 模板
+  docs/
+```
+
+独立性要求：
+
+- `poolmate/backend` 和 `poolmate/frontend` 分别可构建、测试和部署；
+- PoolMate 使用独立数据库/数据库账号，不读写 PactLedger 表；
+- Telegram Token、数据库密码和基座凭证只进入后端环境变量；
+- 前端只访问 PoolMate Backend，不直连支付基座。
+
+### 2.1 CodexClaw 导入基线
+
+PoolMate Backend 以下列上游作为运行时基础：
+
+```text
+repository = https://github.com/MackDing/CodexClaw.git
+branch     = main
+commit     = 263be7c8281e90bf6604a65a4f327f385df60279
+target     = poolmate/backend
+```
+
+导入是全项目的串行 Gate 0，只由工程师 A 操作：
+
+1. 将固定 commit clone 到 `poolmate/backend/`，不覆盖已有 `poolmate/docs/`。
+2. clone 完成后立即删除 `poolmate/backend/.git`，再进行任何删改或分支分工。
+3. 保存上游 URL、commit 和导入时间到非 Markdown 的 provenance 文件。
+4. 在原始代码上先运行 typecheck、lint 和 test，记录删改前基线。
+5. 删除上游的嵌套 Agent 指令、GitHub 自动化、编码助手文档和 PoolMate 不需要的模块，但保留来源记录。
+6. 建立一个可追踪的 vendor baseline，三名工程师只能从该基线开始并行。
+
+Gate 0 验收：
+
+- `find poolmate -type d -name .git` 无输出；
+- 根仓库没有新增 submodule；
+- `poolmate/docs/` 原文件未被覆盖；
+- vendor baseline 可独立安装并通过导入前质量门。
+
+GitHub 元数据当前未声明该上游的开源许可证。执行导入前，项目负责人必须确认团队拥有使用和分发该代码的权利。
+
+## 3. PoolMate 自有领域
+
+最少保存：
+
+```text
+pm_groups
+pm_orders
+pm_participants
+pm_checkout_snapshots
+pm_allocations
+pm_user_confirmations
+pm_confirmation_sets
+pm_funding_evidence
+pm_reservations
+pm_payment_requests
+pm_payment_projections
+pm_outbox
+```
+
+业务主流程：
+
+```text
+DRAFT
+  -> COLLECTING
+  -> QUOTE_PENDING
+  -> CONFIRMATION_PENDING
+  -> READY_FOR_PAYMENT
+  -> PAYMENT_SUBMITTED
+  -> PAID | DEMO_CONFIRMED | PAYMENT_FAILED | PAYMENT_UNKNOWN
+```
+
+约束：
+
+1. 份额满员只进入 `QUOTE_PENDING`，不付款。
+2. Checkout 必须有版本、hash、过期时间和已验证商户。
+3. Allocation 使用 `assetId + amountAtomic`，总额必须等于 Checkout 总额。
+4. 每名参与人只能确认同一 Checkout 版本中本人的精确金额。
+5. Checkout 改动后旧确认全部失效。
+6. 最后一人并发确认只能生成一条 `pm_payment_requests`。
+7. 只有当前部署允许的 Testnet/Live confirmed Receipt 才能将订单标记为 `PAID`；Mock 只能进入隔离的 `DEMO_CONFIRMED`。
+
+资金模式必须显式选择：
+
+- `sponsored_demo`：由演示 Treasury 付款；参与人只是 `confirmed`，不是已出资；
+- `prefunded_participants`：每名参与人必须有可验证 funding entry 和对应 Reservation。
+
+现有基座没有成员入金/预留接口，因此首期只能启用 `sponsored_demo`。`prefunded_participants` 保持不可用，不得用本地布尔状态伪造成员出资。
+
+## 4. 支付兼容层
+
+PoolMate 内部先产生精确且不受基座旧类型限制的请求：
+
+```ts
+interface PoolMatePaymentRequest {
+  orderId: string
+  checkoutId: string
+  checkoutVersion: number
+  checkoutHash: string
+  confirmationSetId: string
+  idempotencyKey: string
+  payerRef: string
+  payeeId: string
+  money: { assetId: string; amountAtomic: string }
+  expiresAt: string
+}
+```
+
+`PaymentBaseClient` 负责将它映射到现有基座契约。所有旧字段只能出现在该层：
+
+```text
+appId        = poolmate
+purpose      = merchant_pay
+protocol     = internal
+intentId     = 由 orderId + checkoutVersion 确定性生成
+tenantId     = 服务端配置，不信任 Telegram/前端输入
+payeeId      = 只来自 PoolMate Merchant Directory
+amount       = 只在可无损转换时填入旧 number 字段
+```
+
+当前基座未改动时还有以下硬限制：
+
+- PoolMate Policy 只允许 `merchant-demo` 和 `member-refund`；
+- 单笔上限为 300，预算常量为 500；
+- `amount: number` 不能作为 PoolMate 内部会计真相；
+- 基座没有成员入金、预留或汇总账本；
+- 基座不能证明跨实例只广播一次；
+- `approval_required` 没有可供独立 PoolMate 继续的远程审批接口。
+
+因此首期兼容层必须 fail closed：未知商户、超限金额、不可无损转换的资产、需审批或基座结果不确定时，都不得标记付款成功。
+
+## 5. 分阶段交付
+
+| 阶段 | 交付 | 验收 | 并行方式 |
+|---|---|---|---|
+| G0 导入基线 | CodexClaw 固定版本、无嵌套 `.git`、原始质量门 | 可追踪且不是子仓库 | 串行，仅 A |
+| P0 独立骨架 | Backend、Frontend、Bot、DB、独立构建与部署 | 不启动 `web/` 也可运行 PoolMate | A/B/C 三路并行 |
+| P1 业务链 | Order、Checkout、Allocation、ConfirmationSet | 稳定进入 `READY_FOR_PAYMENT`，不触发付款 | A/B/C 三路并行 |
+| P2 支付边界 | `PaymentBaseClient`、outbox、幂等键、失败投影 | 基座不可用时不丢单、不伪造结果 | A/B/C 三路并行 |
+| P3 基座联调 | 只调用基座已有的可远程接口 | 同一请求重放返回原 Trace，confirmed Receipt 才转 `PAID` | 等待外部条件后再排期 |
+| P4 管理面板 | 群、订单、确认、异常、付款证据 | 所有状态来自 PoolMate Backend，前端不推测资金结果 | 页面随 P0-P2 增量交付 |
+
+P3 的进入条件是支付基座已经存在可从独立进程调用的稳定接口。本方案不通过修改 `web/`、共享数据库、导入基座源码或调用 Demo 端点创造该条件。
+
+## 6. 验收门
+
+- [ ] 代码和运行配置全部位于 `poolmate/`。
+- [ ] PoolMate 不 import `web/` 内部模块，不读写其数据库表。
+- [ ] Backend（含 Bot）与 Frontend 可分别构建与部署。
+- [ ] Checkout 不完整、Allocation 不平或少一人确认时，PaymentBaseClient 调用数为 0。
+- [ ] 支付基座不可用时，订单保持 `READY_FOR_PAYMENT/PAYMENT_UNKNOWN`，不自动重复付款。
+- [ ] 相同 order/checkout version 只生成一个本地 Payment Request 和一个稳定幂等键。
+- [ ] 没有可接受的 Testnet/Live confirmed Receipt 时，Bot、API 和管理面板都不显示“已付款”。
+- [ ] Mock、Testnet 和真实成员出资在数据和 UI 中不混淆。
+- [ ] 首期不声明已使用 A2A 或 AP2。
+
+## 7. 首个实现包：P0 三工程师版
+
+P0 不接 A2A、AP2、Testnet，也不调用现有 Demo 支付端点。P0 不是从第一分钟就三路同时写代码，而是先完成两个短串行 Gate，再进入稳定的三路并行。
+
+### 7.1 Gate 0：串行导入
+
+由工程师 A 完成第 2.1 节的 CodexClaw 导入、`.git` 删除、原始质量门和 vendor baseline。在基线完成前，B/C 不在 `poolmate/backend/` 中写代码。
+
+### 7.2 Gate 1：契约冻结
+
+三人共同评审，由工程师 A 落地第一版共享契约：
+
+- Backend health 响应；
+- config status 脱敏响应；
+- Bot `disabled/configured` 状态；
+- 稳定错误结构和错误码；
+- Frontend API base URL 和超时规则；
+- P0 环境变量清单；
+- 数据库连接和迁移状态表达。
+
+契约写入 `poolmate/shared/`。并行窗口内不得单方修改；必须由 A 更新契约和版本，B/C 再同步。
+
+### 7.3 Window 1：P0 三路并行
+
+| 工程师 | 负责范围 | 主要输出 | 禁止越界 |
+|---|---|---|---|
+| A：Backend / Contract | `backend/src/api/`、`backend/src/domain/`、`backend/src/application/`、`backend/src/infrastructure/db/`、`shared/`、`migrations/` | Fastify 组装、health/config status、独立 DB、首个 migration、API 测试 | 不修改 Bot 文案和 Frontend |
+| B：Runtime / Bot | `backend/src/agent/`、`backend/src/bot/`、`backend/src/runtime/` 及对应测试 | CodexClaw 删改、AgentRuntime、Telegraf 初始化、Bot disabled/configured 状态 | 不修改 shared 契约、DB schema 和 API 路由 |
+| C：Frontend / Delivery | `frontend/`、`deploy/`、前端与 E2E 测试 | 真实状态面板、错误/加载/空状态、Docker/service/env 模板 | 不制作演示付款数据，不直连基座或 DB |
+
+Window 1 期间可以同时开工，因为三路只通过 Gate 1 冻结的 DTO 交互，不共同修改同一业务文件。
+
+### 7.4 Gate 2：P0 汇合
+
+合并顺序固定为：
+
+```text
+shared contract / backend skeleton
+  -> runtime and bot
+  -> frontend and deploy
+  -> integrated verification
+```
+
+Gate 2 必须同时通过：
+
+1. Backend 在不启动 `web/` 时可运行。
+2. Bot 未配置 Token 时为 `disabled`，配置完整时为 `configured`，不回传 Token。
+3. Frontend 只展示 Backend 真实响应，Backend 不可用时显示明确错误。
+4. Backend、Frontend 分别通过 lint、typecheck、test 和 build。
+5. migration 可在空数据库执行，重复执行不损坏现有状态。
+6. Docker 验收通过，且无 `web/` import、无嵌套 `.git`、无前端秘密。
+
+## 8. P1-P2 三工程师并行方案
+
+### 8.1 固定所有权
+
+P0 之后继续使用相同所有权：
+
+- A 是 Domain、Application Service、API contract、DB schema、migration 编号和 `shared/` 的唯一所有者。
+- B 是 Agent Runtime、Telegram Adapter、Merchant/Payment 外部 Adapter 和 Bot 文案的唯一所有者。
+- C 是 Frontend、浏览器 E2E、容器与部署模板的唯一所有者。
+- `backend/package.json` 和后端锁文件只由 A 修改；B 如需依赖，提交明确的依赖需求由 A 统一落地。
+- `frontend/package.json` 和前端锁文件只由 C 修改。
+
+### 8.2 Window 2：P1 业务链并行
+
+进入条件：Gate 2 通过，Order/Checkout/Confirmation DTO 已冻结。
+
+| 工程师 | 并行任务 | 交付证据 |
+|---|---|---|
+| A | Order/Participant 状态机、份额锁定、不可变 Checkout、canonical hash、atomic Allocation、Confirmation Round/Set、事务与并发测试 | 从 `DRAFT` 稳定到 `READY_FOR_PAYMENT`；少一人确认时 payment request 为 0 |
+| B | Telegram 创建/发布/认领/修改/退出，Structured Output 只生成 Draft Patch，固定 Mock Merchant Adapter，确认链接私聊发送 | 重复 update/callback 幂等；LLM 无法修改金额、payee 或状态 |
+| C | Trusted Confirmation Surface、订单/Checkout/确认管理页、倒计时、过期/失效/拒绝状态 | 页面不接受金额和 payee 输入；服务端 canonical 数据是唯一事实源 |
+
+P1 汇合 Gate：三名参与人可完成认领和逐人确认，最后一人并发确认只生成一个 `ConfirmationSet` 和一个稳定 payment request，订单停在 `READY_FOR_PAYMENT`。
+
+### 8.3 Window 3：P2 支付边界并行
+
+进入条件：P1 汇合 Gate 通过，`PoolMatePaymentRequest` 和 payment projection DTO 已冻结。
+
+| 工程师 | 并行任务 | 交付证据 |
+|---|---|---|
+| A | Payment Request、outbox、稳定幂等键、projection 状态机、UNKNOWN 隔离、重启恢复 | 最后一人确认、Worker 重试和进程重启均不产生第二条付款请求 |
+| B | `PaymentBaseClient` 边界、鉴权/超时/错误归一化、Bot 付款不可用/失败/未知文案 | 基座不可用、需审批、超限、资产无法无损转换时全部 fail closed |
+| C | Payment/Audit/Outbox 管理页、失败恢复可视化、Mock/Testnet/Live 标识、端到端浏览器测试 | 没有可接受 Receipt 时绝不显示“已付款”；UI 不推测资金终态 |
+
+P2 汇合 Gate：基座不可用时，订单保持 `READY_FOR_PAYMENT` 或受控进入 `PAYMENT_UNKNOWN`，本地请求不丢失、不自动换幂等键、不伪造 Receipt。
+
+### 8.4 Window 4：三路验收
+
+功能合并后再次三路并行，此时三人不再增加功能：
+
+- A：状态机、事务、幂等、故障注入、migration 和重启恢复。
+- B：三名 Telegram 测试用户、重复 callback、过期 Checkout、非白名单收款方和 Bot 文案真实性。
+- C：桌面/移动端浏览器 E2E、可访问性、容器冷启动、秘密扫描和无 `web/` 依赖检查。
+
+任一路失败都不得对外宣称完成 P2。
+
+## 9. 并行开发规则
+
+1. 三名工程师使用独立 worktree 和分支，从同一个 Gate baseline 开始；不在同一 worktree 相互覆盖。
+2. 分支建议为 `codex/poolmate-domain`、`codex/poolmate-bot`、`codex/poolmate-web`；每个并行窗口结束后重新从最新 Gate baseline 切分支。
+3. 每个任务在开始前必须写明输入契约、输出契约、所属目录、测试命令和阻塞条件。
+4. 禁止在并行窗口中跨所有权“顺手重构”；跨目录变更必须先由对应所有者接受。
+5. shared DTO、错误码、DB schema 和 migration 是合并前契约，不得以前端 mock、Bot 文案或外部 payload 反向改写业务事实。
+6. migration 只能追加，编号由 A 预留；已进入共享 Gate baseline 的 migration 不得原地重写。
+7. 合并前每路先跑自己的局部质量门；Gate 负责人再跑全量 lint、typecheck、test、build、migration smoke 和 Docker 验收。
+8. P3 不因三人空闲而提前开始。没有稳定远程支付接口时，三路都不得通过共享 DB、导入 `web/` Service 或调用 Demo 端点绕过阻塞。
