@@ -1,0 +1,8 @@
+backend/data/
+backend/node_modules/
+frontend/dist/
+frontend/node_modules/
+shared/dist/
+shared/node_modules/
+*.log
+.DS_Store

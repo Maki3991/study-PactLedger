@@ -18,10 +18,13 @@ import { PactLedgerRepository } from './pactledger/repository.js'
 import { PactLedgerService } from './pactledger/service.js'
 import { PoolMateRepository } from './poolmate/repository.js'
 import { PoolMateService } from './poolmate/service.js'
+import { KaleidoxTelegramRuntime } from './kaleidox-bot/telegram.js'
 import { PoolMateTelegramRuntime, type TelegramIdentityProbe } from './poolmate/telegram.js'
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
 import { createResearchNarrator } from './quant/researchNarrator.js'
+import { DecisionAgent } from './quant/decisionAgent.js'
+import { AgentMemory } from './quant/agentMemory.js'
 import { TaskRepository } from './repository.js'
 import { TaskEvents } from './taskEvents.js'
 import { createTaskSnapshot } from './taskDefaults.js'
@@ -48,6 +51,13 @@ interface BuildAppOptions {
   startTelegramBot?: boolean
   telegramBotToken?: string
   telegramProbe?: TelegramIdentityProbe
+  telegramUserAllowlistEnabled?: boolean
+  telegramAllowedUserIds?: readonly (string | number)[]
+  telegramApiRoot?: string
+  /** KaleidoX 指挥台 bot。与 PoolMate bot 必须用不同 token。 */
+  kaleidoxTelegramBotToken?: string
+  /** `<telegramUserId>:<kaleidoxUserId>` 逗号分隔，空则该 bot 不启动。 */
+  kaleidoxTelegramOperators?: string
 }
 
 interface AuthBody {
@@ -74,9 +84,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const pandaStatus = getPandaConfigStatus(pandaConfig)
   const pandaModelConfig = options.pandaModelConfig ?? readPandaModelConfig()
   const pandaModelStatus = getPandaModelStatus(pandaModelConfig)
+  const agentMemory = new AgentMemory(options.databasePool)
+  await agentMemory.initialize()
+  const researchNarrator = createResearchNarrator(pandaModelConfig)
+  const decisionAgent = new DecisionAgent(researchNarrator, agentMemory)
   const quantResearch = options.quantResearch ?? new QuantResearchService(
     createMarketDataProvider(pandaConfig),
-    createResearchNarrator(pandaModelConfig),
+    researchNarrator,
+    decisionAgent,
   )
   const pactLedger = new PactLedgerService(
     pactLedgerRepository,
@@ -93,6 +108,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     options.telegramBotToken?.trim() || undefined,
     poolMateService,
     options.telegramProbe,
+    {
+      userAllowlistEnabled: options.telegramUserAllowlistEnabled,
+      allowedUserIds: options.telegramAllowedUserIds,
+      apiRoot: options.telegramApiRoot,
+    },
   )
   const orchestrator = new TaskOrchestrator(
     repository,
@@ -180,6 +200,30 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return snapshot
   }
 
+  const kaleidoxBot = new KaleidoxTelegramRuntime(
+    options.kaleidoxTelegramBotToken?.trim() || undefined,
+    {
+      createTask: (input, ownerId) => createAndStartTask(input, ownerId),
+      findTask: (id) => repository.findById(id),
+      findTasksByUser: (userId) => repository.findByUser(userId),
+      approveTask: (id) => orchestrator.approve(id),
+      executeTask: (id) => orchestrator.execute(id),
+      getAuditLog: (tenantId) => treasury.getAuditLog(tenantId),
+      subscribeTask: (taskId, listener) => events.subscribe(taskId, listener),
+      getInjectiveStatus: () => injectiveStatus,
+    },
+    {
+      operators: options.kaleidoxTelegramOperators,
+      apiRoot: options.telegramApiRoot,
+    },
+  )
+
+  if (options.startTelegramBot) {
+    app.addHook('onReady', async () => {
+      await kaleidoxBot.start()
+    })
+  }
+
   app.get('/api/health', async () => ({
     status: 'ok',
     service: 'pactledger-api',
@@ -189,6 +233,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       injective: injectiveStatus.executionState,
       database: options.databaseStatus?.provider ?? (options.databasePool ? 'postgresql' : 'memory-test'),
       poolmateBot: poolMateBot.getStatus().running ? 'running' : poolMateBot.getStatus().configured ? 'configured' : 'disabled',
+      kaleidoxBot: kaleidoxBot.getStatus().running
+        ? 'running'
+        : kaleidoxBot.getStatus().reasonCode ?? 'disabled',
     },
   }))
 
@@ -309,6 +356,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/config/injective', async () => injectiveStatus)
   app.get('/api/config/panda', async () => pandaStatus)
   app.get('/api/config/panda/model', async () => pandaModelStatus)
+
+  // ── Agent Knowledge Base ──
+  app.get<{ Querystring: { symbol?: string; limit?: string } }>('/api/public/knowledge-base', async (request) => {
+    const symbol = request.query.symbol
+    const limit = Math.min(Number(request.query.limit || 20), 50)
+    if (symbol) {
+      const records = await agentMemory.findBySymbol(symbol)
+      return { records: records.slice(0, limit), total: records.length }
+    }
+    // 无 symbol 时返回统计摘要
+    const count = await agentMemory.count()
+    const recentContext = await agentMemory.getRecentContext(90)
+    return { totalRecords: count, recentContext, hint: '使用 ?symbol=000001.SZ 查询特定股票的决策记录' }
+  })
 
   app.post<{ Body: { scenario?: 'approved' | 'blocked'; intentId?: string } }>('/api/demo/poolmate/checkout', async (request, reply) => {
     const scenario = request.body?.scenario
@@ -449,6 +510,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   })
 
   app.addHook('onClose', async () => {
+    await kaleidoxBot.stop()
     await poolMateBot.stop()
     orchestrator.close()
     await options.databasePool?.end()

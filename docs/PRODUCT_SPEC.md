@@ -2,7 +2,7 @@
 
 > 文档角色：产品、架构、演示与下一步开发的唯一事实源（Source of Truth）
 >
-> 更新时间：2026-07-24
+> 更新时间：2026-07-25
 >
 > 当前阶段：AdventureX 黑客松 MVP
 >
@@ -13,6 +13,8 @@
 > 运行时基线：lint / build / API tests `42/42` 已通过
 >
 > 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
+>
+> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base 和管理面板；本地 Backend tests `100/100`、Frontend tests `29/29`，远程支付基座契约与真实链上结算仍未接通
 
 ---
 
@@ -418,6 +420,9 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 | A2A Agent Card / 任务协议 | 已实现 | Fastify Agent Card、REST 任务、JSON-RPC 与 API-key 保护均已通过本地测试；待生产重新部署与公网 Smoke Test |
 | x402 / ACP / AP2 | 原型 | 当前主要作为协议标签；尚无完整握手、鉴权和支付 Connector |
 | Telegram 群机器人 | 已实现 | Bot、会话与状态端点已迁入 `web/server/` Fastify；群消息可形成持久化拼单和标准 `AgentPaymentIntent -> Policy -> Mock Receipt`，陌生收款人产生真实拒绝 Trace；尚未配置生产 Token，明确为 `Mock · No Chain`，也不满足 Photon iMessage 门槛 |
+| PoolMate 独立参考应用 | 已实现 | 顶层 `poolmate/` 已从固定 CodexClaw commit 导入并移除嵌套 `.git`；独立 Fastify / SQLite / React / grammY 实现订单、不可变 Checkout、原子金额分摊、Telegram WebApp 逐人确认、payment projection/outbox、幂等与只读恢复；Telegram user allowlist 默认关闭、可显式 fail closed 开启；Backend tests `100/100`、Frontend tests `29/29`、空 volume Docker 及桌面/移动浏览器检查通过 |
+| PoolMate 本地 Mock Payment Base | 已实现 | `PAYMENT_SETTLEMENT_MODE=mock` 无需远程 URL/Key；白名单、资产、正原子金额、有效期和 operation identity 经 Policy 检查后，operation/decision/Mock Receipt 追加写入独立 SQLite；重试和重启只恢复原 operation，只能进入 `DEMO_CONFIRMED`，API 不返回 tx hash 或 Explorer |
+| PoolMate 独立远程 Payment Base 联调 | 实现中 | Testnet/Live HTTPS Client、稳定 operation ID、服务端鉴权、超时和错误归一化已实现；因 PactLedger 尚未发布稳定远端支付 API，远程模式默认 fail closed 为 `PAYMENT_BASE_UNAVAILABLE`，未调用 Demo 端点、未产生真实 Injective Receipt |
 | 链上 Treasury 合约 | 待实现 | 仓库当前无可验证部署 Manifest |
 
 ### 7.1 源码完成度与生产部署必须分开判断
@@ -779,6 +784,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - **产品门**：PactLedger 已统一为主产品。
 - **基座门**：通用 Policy / Trace、Receipt 持久化与幂等已通过 API tests。
 - **复用门**：PoolMate 已调用同一 Fastify 基座 API，合法与拒绝 Trace 均可复现。
+- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4 已完成本地验收，本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
 
 从当前提交继续时，严格按以下顺序：
 
@@ -820,7 +826,8 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 ### P1：提升完整度
 
 - 统一 Protocol Router Connector 接口。
-- 配置生产 Telegram Bot Token，完成真实群聊收发与 Mock Trace 证据固化。
+- 使用已配置的生产 Telegram Bot 完成真实群聊收发，并固化本地 Mock Receipt 与拒绝 Policy 证据。
+- 为独立 PoolMate 发布并冻结非 Demo 的远端支付提交/按 operation ID 查询契约，再配置 `PAYMENT_BASE_URL`、提交路径、恢复路径和服务端凭证完成 P3。
 - Receipt 总账页同时展示两个应用。
 - Policy 管理界面和人工审批队列。
 - 真实退款 / 退差。

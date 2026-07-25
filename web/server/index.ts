@@ -24,6 +24,14 @@ const app = await buildApp({
   databaseStatus,
   startTelegramBot: true,
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+  telegramUserAllowlistEnabled: process.env.TELEGRAM_USER_ALLOWLIST_ENABLED === 'true',
+  telegramAllowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean),
+  telegramApiRoot: process.env.TELEGRAM_API_ROOT,
+  kaleidoxTelegramBotToken: process.env.KALEIDOX_TELEGRAM_BOT_TOKEN,
+  kaleidoxTelegramOperators: process.env.KALEIDOX_TELEGRAM_OPERATORS,
 })
 
 if (process.env.KALEIDOX_SERVE_WEB !== 'false' && existsSync(staticRoot)) {

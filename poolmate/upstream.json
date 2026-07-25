@@ -1,0 +1,40 @@
+{
+  "source": {
+    "repository": "https://github.com/MackDing/CodexClaw.git",
+    "branch": "main",
+    "commit": "263be7c8281e90bf6604a65a4f327f385df60279",
+    "importedAt": "2026-07-24T19:13:10Z",
+    "license": null
+  },
+  "baseline": {
+    "node": "v26.0.0",
+    "npm": "11.12.1",
+    "install": "passed",
+    "typecheck": "passed",
+    "lint": "passed",
+    "tests": {
+      "status": "passed",
+      "passed": 111,
+      "failed": 0
+    },
+    "formatCheck": {
+      "status": "failed",
+      "files": [
+        ".github/dependabot.yml",
+        ".github/workflows/gitleaks.yml",
+        "SECURITY.md"
+      ]
+    },
+    "healthcheck": {
+      "status": "configuration_required",
+      "reason": "ALLOWED_USER_IDS is required by the upstream runtime"
+    },
+    "audit": {
+      "total": 17,
+      "low": 4,
+      "moderate": 4,
+      "high": 9,
+      "critical": 0
+    }
+  }
+}

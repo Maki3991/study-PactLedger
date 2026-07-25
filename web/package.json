@@ -28,6 +28,7 @@
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "^7.18.1",
+    "viem": "^2.55.8",
     "vite": "latest"
   },
   "devDependencies": {

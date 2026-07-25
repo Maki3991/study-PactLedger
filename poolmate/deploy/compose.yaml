@@ -1,0 +1,65 @@
+name: poolmate
+
+services:
+  backend:
+    # SQLite is intentionally deployed as a single backend replica.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      POOLMATE_HOST: 0.0.0.0
+      POOLMATE_PORT: 8788
+      POOLMATE_DATABASE_PATH: /app/backend/data/poolmate.sqlite
+      POOLMATE_MIGRATIONS_DIR: /app/migrations
+      POOLMATE_PUBLIC_BASE_URL: ${POOLMATE_PUBLIC_BASE_URL:-https://poolmate.example.invalid}
+      POOLMATE_ADMIN_API_KEY: ${POOLMATE_ADMIN_API_KEY:-}
+      POOLMATE_SPONSORED_PAYER_REF: ${POOLMATE_SPONSORED_PAYER_REF:-poolmate-sponsored-demo}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_USER_ALLOWLIST_ENABLED: ${TELEGRAM_USER_ALLOWLIST_ENABLED:-false}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      TELEGRAM_API_ROOT: ${TELEGRAM_API_ROOT:-https://api.telegram.org}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
+      PAYMENT_BASE_URL: ${PAYMENT_BASE_URL:-}
+      PAYMENT_BASE_API_KEY: ${PAYMENT_BASE_API_KEY:-}
+      PAYMENT_SETTLEMENT_MODE: ${PAYMENT_SETTLEMENT_MODE:-disabled}
+      PAYMENT_BASE_SUBMIT_PATH: ${PAYMENT_BASE_SUBMIT_PATH:-}
+      PAYMENT_BASE_RECOVER_PATH: ${PAYMENT_BASE_RECOVER_PATH:-}
+      PAYMENT_BASE_TIMEOUT_MS: ${PAYMENT_BASE_TIMEOUT_MS:-10000}
+    ports:
+      - "${POOLMATE_BACKEND_PORT:-8788}:8788"
+    volumes:
+      - poolmate-data:/app/backend/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8788/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        VITE_POOLMATE_API_BASE_URL: ${VITE_POOLMATE_API_BASE_URL:-}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${POOLMATE_FRONTEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  poolmate-data:

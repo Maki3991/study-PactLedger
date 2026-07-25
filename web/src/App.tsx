@@ -197,6 +197,9 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
         </div>
         <ViewSwitch view={view} onChange={changeView} />
         <div className="kx-nav-actions">
+          <a className="kx-nav-link" href="/knowledge-base.html" title="Agent 知识库">
+            <Database size={14} />
+          </a>
           <StatusPill
             label={pandaPresentation.label}
             tone={pandaPresentation.tone}
