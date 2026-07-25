@@ -42,9 +42,8 @@ export class PoolMateTelegramRuntime {
 
   async start(): Promise<void> {
     if (!this.token || this.running) return
-    try {
-      this.identity = await this.probeIdentity(this.token)
-    } catch {
+    this.identity = await this.probeIdentityWithRetry()
+    if (!this.identity) {
       this.reasonCode = 'BOT_UNREACHABLE'
       return
     }
@@ -76,6 +75,19 @@ export class PoolMateTelegramRuntime {
       this.reasonCode = 'BOT_POLLING_STOPPED'
       console.error('[poolmate-bot] polling stopped')
     })
+  }
+
+  private async probeIdentityWithRetry(): Promise<TelegramIdentity | undefined> {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.probeIdentity(this.token!)
+      } catch {
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
+      }
+    }
+    return undefined
   }
 
   async stop(): Promise<void> {

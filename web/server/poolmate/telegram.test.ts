@@ -88,6 +88,24 @@ test('命令菜单注册失败不阻断 Bot 启动', async () => {
   assert.equal(status.running, true, 'setMyCommands 失败后 Bot 应仍在运行')
 })
 
+test('Telegram 身份探针瞬时失败后会重试并启动 Bot', async () => {
+  const { fetch } = stubTelegramApi()
+  let attempts = 0
+  const flakyProbe = async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('temporary network failure')
+    return { username: 'poolmate_bot', firstName: 'PoolMate' }
+  }
+  const runtime = new PoolMateTelegramRuntime('test-token', service, flakyProbe, { fetch })
+
+  await runtime.start()
+  const status = runtime.getStatus()
+  await runtime.stop()
+
+  assert.equal(attempts, 2)
+  assert.equal(status.running, true)
+})
+
 test('未配置 token 时不发起任何 Telegram 请求', async () => {
   const { calls, fetch } = stubTelegramApi()
   const runtime = new PoolMateTelegramRuntime(undefined, service, probe, { fetch })
