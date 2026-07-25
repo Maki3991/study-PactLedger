@@ -548,11 +548,32 @@ test("claim and leave replies identify the Telegram actor by @username", async (
     .filter((call) => call.method === "sendMessage")
     .map((call) => String(call.payload.text).split("\n", 1)[0]);
   assert.deepEqual(replies, [
-    "@alice updated their claim.",
-    "@alice left the pool.",
-    "@alice updated their claim.",
-    "@alice left the pool."
+    "<b>@alice 已更新认领</b>",
+    "<b>@alice 已退出拼单</b>",
+    "<b>@alice 已更新认领</b>",
+    "<b>@alice 已退出拼单</b>"
   ]);
+  assert.equal(
+    apiCalls
+      .filter((call) => call.method === "sendMessage")
+      .every((call) => call.payload.parse_mode === "HTML"),
+    true
+  );
+});
+
+test("rich order cards escape user-provided Telegram HTML", async () => {
+  const { useCases } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(commandUpdate(115, "/pool_new 3 <b>Free</b> & fruit"));
+
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.equal(reply?.payload.parse_mode, "HTML");
+  assert.match(
+    String(reply?.payload.text),
+    /&lt;b&gt;Free&lt;\/b&gt; &amp; fruit/
+  );
+  assert.doesNotMatch(String(reply?.payload.text), /<b>Free<\/b>/);
 });
 
 test("pool_test command adds and removes deterministic virtual participants", async () => {
@@ -753,49 +774,42 @@ test("natural language accepts exact username text and Telegram bot mention enti
   const processingReplies = apiCalls.filter(
     (call) =>
       call.method === "sendMessage" &&
-      /拼单请求处理中/.test(String(call.payload.text))
+      /PoolMate 正在创建拼单/.test(String(call.payload.text))
   );
   assert.equal(processingReplies.length, 3);
-  assert.match(
-    String(processingReplies[0]?.payload.text),
-    /Started by: @alice/
-  );
-  assert.match(String(processingReplies[0]?.payload.text), /Started at:/);
+  assert.match(String(processingReplies[0]?.payload.text), /发起人 · @alice/);
+  assert.match(String(processingReplies[0]?.payload.text), /发起时间 · /);
+  assert.equal(processingReplies[0]?.payload.parse_mode, "HTML");
   const reply = apiCalls.find(
     (call) =>
       call.method === "editMessageText" &&
-      /Pool is open for claims/.test(String(call.payload.text))
+      /<code>COLLECTING<\/code>/.test(String(call.payload.text))
   );
-  assert.match(String(reply?.payload.text), /State: COLLECTING/);
-  assert.match(String(reply?.payload.text), /Requested item: 可乐/);
-  assert.match(String(reply?.payload.text), /Requested quantity: 3 瓶/);
+  assert.match(String(reply?.payload.text), /商品 · 可乐 × 3 瓶/);
+  assert.match(String(reply?.payload.text), /渠道 · 美团外卖/);
+  assert.match(String(reply?.payload.text), /店铺 · xx店铺名/);
   assert.match(
     String(reply?.payload.text),
-    /Purchase channel preference: 美团外卖/
+    /链接 · <code>https:\/\/example\.test\/item<\/code>/
   );
-  assert.match(String(reply?.payload.text), /Store hint: xx店铺名/);
-  assert.match(
-    String(reply?.payload.text),
-    /Merchant link hint: https:\/\/example\.test\/item/
-  );
-  assert.match(String(reply?.payload.text), /Demo Merchant \(Mock\)/);
-  assert.match(String(reply?.payload.text), /no live channel integration/);
-  assert.match(String(reply?.payload.text), /verified Checkout/);
-  assert.match(
-    String(reply?.payload.text),
-    /fewer, exact, or more claimed units/
-  );
+  assert.match(String(reply?.payload.text), /Demo Merchant · Mock · No Chain/);
+  assert.match(String(reply?.payload.text), /不代表已接入真实商户/);
+  assert.match(String(reply?.payload.text), /只来自可信 Checkout/);
+  assert.match(String(reply?.payload.text), /按当前实际份额请求最终报价/);
+  assert.equal(reply?.payload.parse_mode, "HTML");
   const keyboard = reply?.payload.reply_markup as {
-    inline_keyboard: Array<Array<{ callback_data: string }>>;
+    inline_keyboard: Array<Array<{ callback_data: string; text: string }>>;
   };
   assert.equal(
     keyboard.inline_keyboard[0][0]?.callback_data,
     claimCallbackData("order-1", 1)
   );
+  assert.equal(keyboard.inline_keyboard[0][0]?.text, "➕ 认领 1 份");
   assert.equal(
     keyboard.inline_keyboard[1][0]?.callback_data,
     quoteCallbackData("order-1")
   );
+  assert.equal(keyboard.inline_keyboard[1][0]?.text, "🧾 请求最终报价");
 });
 
 test("natural-language mention calls general_help instead of order draft extraction", async () => {
@@ -988,7 +1002,7 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
   assert.equal(first.calls.create.length, 0);
   assert.match(
     String(firstHarness.apiCalls[0]?.payload.text),
-    /拼单请求处理中/
+    /PoolMate 正在创建拼单/
   );
   const missingReply = firstHarness.apiCalls.find((call) =>
     /target quantity/.test(String(call.payload.text))
@@ -1093,11 +1107,9 @@ test("close callback calls the owner-only use case and reports no receipt", asyn
     }
   ]);
   const reply = apiCalls.find((call) => call.method === "sendMessage");
-  assert.match(
-    String(reply?.payload.text),
-    /No settlement receipt was created/
-  );
-  assert.match(String(reply?.payload.text), /State: CANCELED/);
+  assert.match(String(reply?.payload.text), /未提交付款或生成结算凭证/);
+  assert.match(String(reply?.payload.text), /<code>CANCELED<\/code>/);
+  assert.equal(reply?.payload.parse_mode, "HTML");
 });
 
 test("quote reports private delivery failures without another business call", async () => {
@@ -1133,12 +1145,10 @@ test("quote reports private delivery failures without another business call", as
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(groupReply?.payload.text), /delivered: 1\/2/);
-  assert.match(String(groupReply?.payload.text), /Delivery failed for: Bob/);
-  assert.match(
-    String(groupReply?.payload.text),
-    /No payment status was changed/
-  );
+  assert.match(String(groupReply?.payload.text), /1 \/ 2 已送达/);
+  assert.match(String(groupReply?.payload.text), /发送失败 · Bob/);
+  assert.match(String(groupReply?.payload.text), /不会改变订单或付款状态/);
+  assert.equal(groupReply?.payload.parse_mode, "HTML");
   const privateReply = apiCalls.find(
     (call) =>
       call.method === "sendMessage" &&
@@ -1147,10 +1157,14 @@ test("quote reports private delivery failures without another business call", as
   const button = (
     privateReply?.payload.reply_markup as {
       inline_keyboard: Array<
-        Array<{ web_app?: { url?: string }; url?: string }>
+        Array<{ text: string; web_app?: { url?: string }; url?: string }>
       >;
     }
   ).inline_keyboard[0][0];
+  assert.equal(privateReply?.payload.parse_mode, "HTML");
+  assert.match(String(privateReply?.payload.text), /最终报价待你确认/);
+  assert.match(String(privateReply?.payload.text), /95000000 atomic USDC/);
+  assert.equal(button.text, "🔐 查看并确认");
   assert.equal(
     button.web_app?.url,
     "https://poolmate.example/confirm#token=token-a"
@@ -1313,8 +1327,8 @@ test("quote summary reports declined confirmation without implying payment", asy
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(summary?.payload.text), /1 declined/);
-  assert.match(String(summary?.payload.text), /not ready for payment/);
+  assert.match(String(summary?.payload.text), /1 已拒绝/);
+  assert.match(String(summary?.payload.text), /不会进入付款/);
   assert.doesNotMatch(String(summary?.payload.text), /payment confirmed/i);
 });
 
@@ -1353,5 +1367,5 @@ test("confirmation delivery accepts only HTTPS WebApp fragment links", async () 
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(summary?.payload.text), /delivered: 0\/2/);
+  assert.match(String(summary?.payload.text), /0 \/ 2 已送达/);
 });

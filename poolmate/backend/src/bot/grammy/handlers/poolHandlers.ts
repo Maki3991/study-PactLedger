@@ -57,13 +57,104 @@ function actor(context: PoolMateContext): PoolMateBotActor {
   };
 }
 
+function escapeTelegramHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function compactText(value: string, maximumLength = 800): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maximumLength
+    ? normalized
+    : `${normalized.slice(0, maximumLength - 1)}…`;
+}
+
+function formatCardTime(value: string): string {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return `${parsed.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+function orderUnit(order: OrderDetailView): string {
+  return compactText(order.intent?.items[0]?.unit ?? "份", 20);
+}
+
+function progressBar(claimed: number, expected: number): string {
+  const width = 8;
+  const ratio = expected > 0 ? Math.min(Math.max(claimed / expected, 0), 1) : 0;
+  const filled = Math.round(ratio * width);
+  return `${"▰".repeat(filled)}${"▱".repeat(width - filled)}`;
+}
+
+function orderStateLabel(state: OrderDetailView["state"]): string {
+  const labels: Record<OrderDetailView["state"], string> = {
+    DRAFT: "⚪ 草稿",
+    COLLECTING: "🟢 认领中",
+    QUOTE_PENDING: "🟡 报价中",
+    CONFIRMATION_PENDING: "🟠 待确认",
+    READY_FOR_PAYMENT: "🔵 待付款",
+    PAYMENT_SUBMITTED: "🔵 已提交待确认",
+    PAID: "✅ 商户已收款",
+    DEMO_CONFIRMED: "🧪 Mock 已完成",
+    PAYMENT_FAILED: "🔴 付款失败",
+    PAYMENT_UNKNOWN: "🟠 结果待确认",
+    CANCELED: "⚫ 已关闭"
+  };
+  return `${labels[state]} · <code>${state}</code>`;
+}
+
+function quantityStatus(order: OrderDetailView): string {
+  const delta = order.claimedUnits - order.targetUnits;
+  const unit = orderUnit(order);
+  if (delta === 0) return "已达到期望数量";
+  if (delta < 0) return `距离期望还差 ${Math.abs(delta)} ${unit}`;
+  return `已超过期望 ${delta} ${unit}`;
+}
+
+function participantLines(order: OrderDetailView): string[] {
+  const unit = escapeTelegramHtml(orderUnit(order));
+  if (order.participants.length === 0) {
+    return ["👥 <b>参与人</b>", "<i>暂无人认领</i>"];
+  }
+  const visible = order.participants.slice(0, 6).map((participant) => {
+    const name = escapeTelegramHtml(compactText(participant.displayName, 48));
+    return `· ${name} — <b>${participant.units} ${unit}</b>`;
+  });
+  const remaining = order.participants.length - visible.length;
+  return [
+    `👥 <b>参与人</b> · ${order.participantCount} 人`,
+    ...visible,
+    ...(remaining > 0 ? [`· 另有 ${remaining} 人`] : [])
+  ];
+}
+
+function orderMetaLine(order: OrderDetailView): string {
+  return `${orderStateLabel(order.state)} · 单号 <code>${escapeTelegramHtml(order.id)}</code>`;
+}
+
+function progressLines(order: OrderDetailView, note?: string): string[] {
+  const unit = escapeTelegramHtml(orderUnit(order));
+  return [
+    `${progressBar(order.claimedUnits, order.targetUnits)} <b>${order.claimedUnits} / ${order.targetUnits} ${unit}</b>`,
+    `<i>${escapeTelegramHtml(quantityStatus(order))}${note ? ` · ${escapeTelegramHtml(note)}` : ""}</i>`
+  ];
+}
+
 function orderMessage(prefix: string, order: OrderDetailView): string {
   return [
-    prefix,
-    `Order: ${order.id}`,
-    `Title: ${order.title}`,
-    `State: ${order.state}`,
-    `Claims: ${order.claimedUnits}/${order.targetUnits}`
+    `<b>${escapeTelegramHtml(prefix)}</b>`,
+    "",
+    `🛒 <b>${escapeTelegramHtml(compactText(order.title, 120))}</b>`,
+    orderMetaLine(order),
+    "",
+    ...progressLines(order),
+    "",
+    ...participantLines(order),
+    "",
+    "<blockquote>🔒 认领只记录份额，不代表付款确认。</blockquote>"
   ].join("\n");
 }
 
@@ -108,9 +199,17 @@ function removableVirtualSlots(
 }
 
 function collectingKeyboardOptions(order: OrderDetailView) {
-  return order.state === "COLLECTING"
-    ? { reply_markup: collectingOrderKeyboard(order.id) }
-    : {};
+  return cardMessageOptions(
+    order.state === "COLLECTING" ? collectingOrderKeyboard(order.id) : undefined
+  );
+}
+
+function cardMessageOptions(replyMarkup?: InlineKeyboard) {
+  return {
+    parse_mode: "HTML" as const,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    link_preview_options: { is_disabled: true }
+  };
 }
 
 function orderIntent(
@@ -148,25 +247,26 @@ function orderIntent(
   };
 }
 
-function intentQuantity(order: OrderDetailView): string {
-  const intent = order.intent;
-  const item = intent?.items[0];
-  return item
-    ? `${item.quantity}${item.unit ? ` ${item.unit}` : " units"}`
-    : `${order.targetUnits} units`;
-}
-
 function purchaseIntentLines(order: OrderDetailView): string[] {
   const intent = order.intent;
   const item = intent?.items[0];
+  const itemName = compactText(item?.name ?? order.title, 120);
+  const unit = compactText(item?.unit ?? orderUnit(order), 20);
+  const channel = compactText(intent?.purchaseChannelHint ?? "未指定", 120);
+  const store = compactText(intent?.storeNameHint ?? "未指定", 120);
+  const link = compactText(intent?.merchantLinkHint ?? "未提供", 240);
+  const price = compactText(intent?.userPriceHint ?? "未提供", 80);
   return [
-    `Requested item: ${item?.name ?? order.title}`,
-    `Requested quantity: ${intentQuantity(order)}`,
-    `Purchase channel preference: ${intent?.purchaseChannelHint ?? "Not specified"}`,
-    `Store hint: ${intent?.storeNameHint ?? "Not specified"}`,
-    `Merchant link hint: ${intent?.merchantLinkHint ?? "Not specified"}`,
-    `User price reference: ${intent?.userPriceHint ?? "Not specified"}`
+    "🧭 <b>采购意图</b> · 用户提供",
+    `· 商品 · ${escapeTelegramHtml(itemName)} × ${item?.quantity ?? order.targetUnits} ${escapeTelegramHtml(unit)}`,
+    `· 渠道 · ${escapeTelegramHtml(channel)} ｜ 店铺 · ${escapeTelegramHtml(store)}`,
+    `· 参考价 · ${escapeTelegramHtml(price)}`,
+    `· 链接 · <code>${escapeTelegramHtml(link)}</code>`
   ];
+}
+
+function originLine(actorRef: string, startedAt: string): string {
+  return `👤 ${escapeTelegramHtml(actorRef)} · 发起时间 · ${escapeTelegramHtml(formatCardTime(startedAt))}`;
 }
 
 function processingCardMessage(input: {
@@ -175,12 +275,15 @@ function processingCardMessage(input: {
   requestText: string;
 }): string {
   return [
-    "拼单请求处理中 / PoolMate request processing.",
-    `Started by: ${input.actorRef}`,
-    `Started at: ${input.startedAt}`,
-    `Request: ${input.requestText}`,
-    "LLM is extracting item, expected quantity, channel, store, and link.",
-    "No checkout, confirmation, or payment exists yet."
+    "⏳ <b>PoolMate 正在创建拼单</b>",
+    `<code>PARSING</code> · 已收到群内请求 · 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
+    `🕒 发起时间 · ${escapeTelegramHtml(formatCardTime(input.startedAt))}`,
+    "",
+    `<blockquote>${escapeTelegramHtml(compactText(input.requestText))}</blockquote>`,
+    "",
+    "▰▰▰▱▱▱▱▱ 正在识别商品、数量、渠道、店铺与链接…",
+    "",
+    "<i>🔒 资金状态 · 无 Checkout · 无付款确认 · 无扣款</i>"
   ].join("\n");
 }
 
@@ -190,23 +293,39 @@ function collectingCardMessage(input: {
   startedAt: string;
 }): string {
   const { order } = input;
-  const delta = order.claimedUnits - order.targetUnits;
-  const quantityStatus =
-    delta === 0
-      ? "at expected quantity"
-      : delta < 0
-        ? `${Math.abs(delta)} under expected`
-        : `${delta} over expected`;
   return [
-    orderMessage("Pool is open for claims.", order),
-    `Started by: ${input.actorRef}`,
-    `Started at: ${input.startedAt}`,
+    `🛒 <b>${escapeTelegramHtml(compactText(order.title, 120))}</b>`,
+    orderMetaLine(order),
+    originLine(input.actorRef, input.startedAt),
+    "",
+    ...progressLines(order, "期望数量不是付款硬门槛"),
+    "",
     ...purchaseIntentLines(order),
-    `Claimed now: ${order.claimedUnits}/${order.targetUnits} units (${quantityStatus}).`,
-    "Current execution mode: Demo Merchant (Mock).",
-    "The requested channel is preserved as user intent, but no live channel integration is implied.",
-    "Other group members can claim now. The owner can request the final quote with fewer, exact, or more claimed units.",
-    "Final merchant, payee, and amount will come only from a verified Checkout."
+    "",
+    ...participantLines(order),
+    "",
+    "<blockquote expandable>🧪 Demo Merchant · Mock · No Chain\n" +
+      "渠道、店铺与链接仅作为用户意图保存，不代表已接入真实商户。\n" +
+      "🔒 当前仅开放认领；最终商户、收款方和金额只来自可信 Checkout。\n" +
+      "发起人可随时按当前实际份额请求最终报价。</blockquote>"
+  ].join("\n");
+}
+
+function draftIssueCard(input: {
+  kind: "missing" | "failed";
+  actorRef: string;
+  startedAt: string;
+  detail: string;
+}): string {
+  const failed = input.kind === "failed";
+  return [
+    failed ? "❌ <b>暂时无法创建拼单</b>" : "⚠️ <b>还差一点信息</b>",
+    `<code>${failed ? "PARSE_FAILED" : "NEEDS_INFO"}</code> · 未创建订单 · 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
+    `🕒 发起时间 · ${escapeTelegramHtml(formatCardTime(input.startedAt))}`,
+    "",
+    `<blockquote>${escapeTelegramHtml(compactText(input.detail, 600))}</blockquote>`,
+    "",
+    "<i>🔒 无订单 · 无 Checkout · 无付款确认 · 无扣款</i>"
   ].join("\n");
 }
 
@@ -300,10 +419,7 @@ async function editStatusCard(
   text: string,
   replyMarkup?: InlineKeyboard
 ): Promise<void> {
-  const options = {
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    link_preview_options: { is_disabled: true }
-  };
+  const options = cardMessageOptions(replyMarkup);
   try {
     await context.api.editMessageText(
       message.chat.id,
@@ -373,14 +489,30 @@ async function deliverConfirmationLinks(
     }
 
     try {
+      const allocation = result.order.checkout?.allocations.find(
+        (item) => item.participantId === delivery.participantId
+      );
+      const exactAmount = allocation
+        ? `${escapeTelegramHtml(allocation.money.amountAtomic)} atomic ${escapeTelegramHtml(allocation.money.assetId)}`
+        : "请在确认页核对";
       await context.api.sendMessage(
         delivery.telegramUserId,
-        `PoolMate checkout is ready for ${result.order.title}.`,
+        [
+          "🧾 <b>最终报价待你确认</b>",
+          `单号 <code>${escapeTelegramHtml(result.order.id)}</code> · Checkout v${result.order.checkout?.version ?? "?"}`,
+          "",
+          `🛒 <b>${escapeTelegramHtml(compactText(result.order.title, 120))}</b>`,
+          `💰 你的精确应付 · <b>${exactAmount}</b>`,
+          "",
+          "<blockquote>🔐 请在安全确认页核对商品、分摊与最终金额。\n" +
+            "只有你明确确认后，这一份才会进入付款前置条件。</blockquote>"
+        ].join("\n"),
         {
           reply_markup: new InlineKeyboard().webApp(
-            "Review and confirm",
+            "🔐 查看并确认",
             url.toString()
           ),
+          parse_mode: "HTML",
           link_preview_options: { is_disabled: true }
         }
       );
@@ -401,29 +533,36 @@ async function deliverConfirmationLinks(
     { confirmed: 0, pending: 0, declined: 0 }
   );
 
+  const confirmationTotal =
+    confirmationCounts.confirmed +
+    confirmationCounts.pending +
+    confirmationCounts.declined;
   const summary = [
     deliveryKind === "quote"
-      ? `Final quote v${result.order.checkout?.version ?? "unknown"} is ready.`
-      : `Confirmation reminder v${result.order.checkout?.version ?? "unknown"} processed.`,
-    `Confirmation links delivered: ${delivered}/${result.confirmationDeliveries.length}.`,
-    `Confirmations: ${confirmationCounts.confirmed} confirmed, ${confirmationCounts.pending} pending, ${confirmationCounts.declined} declined.`,
-    `Order state: ${result.order.state}.`
+      ? "🧾 <b>最终报价已生成</b>"
+      : "🔔 <b>确认提醒已发送</b>",
+    `单号 <code>${escapeTelegramHtml(result.order.id)}</code> · Checkout v${result.order.checkout?.version ?? "?"} · ${orderStateLabel(result.order.state)}`,
+    "",
+    `${progressBar(confirmationCounts.confirmed, confirmationTotal)} <b>${confirmationCounts.confirmed} / ${confirmationTotal} 已确认</b>`,
+    `✅ ${confirmationCounts.confirmed} 已确认 · ⏳ ${confirmationCounts.pending} 待确认 · ✕ ${confirmationCounts.declined} 已拒绝`,
+    "",
+    `📨 <b>私聊确认入口</b> · ${delivered} / ${result.confirmationDeliveries.length} 已送达`
   ];
   if (failures.length) {
     summary.push(
-      `Delivery failed for: ${failures.join(", ")}.`,
-      "No payment status was changed by the delivery failure."
+      `⚠️ 发送失败 · ${escapeTelegramHtml(failures.join("、"))}（发送失败不会改变订单或付款状态）`
     );
   }
   if (skipped.length) {
-    summary.push(`Not pending, so no link was sent to: ${skipped.join(", ")}.`);
+    summary.push(`ℹ️ 无需重复发送 · ${escapeTelegramHtml(skipped.join("、"))}`);
   }
   if (confirmationCounts.declined > 0) {
     summary.push(
-      "At least one participant declined. This order is not ready for payment."
+      "",
+      "<blockquote>🔒 至少一名参与人已拒绝，当前订单不会进入付款。</blockquote>"
     );
   }
-  await context.reply(summary.join("\n"));
+  await context.reply(summary.join("\n"), cardMessageOptions());
 }
 
 async function handleCallbackAction(
@@ -457,10 +596,10 @@ async function handleCallbackAction(
     await context.answerCallbackQuery({ text: "Claim recorded" });
     await context.reply(
       orderMessage(
-        `${actorReference(context, currentActor)} updated their claim.`,
+        `${actorReference(context, currentActor)} 已更新认领`,
         order
       ),
-      { reply_markup: collectingOrderKeyboard(order.id) }
+      cardMessageOptions(collectingOrderKeyboard(order.id))
     );
     return;
   }
@@ -475,10 +614,10 @@ async function handleCallbackAction(
     await context.answerCallbackQuery({ text: "Claim removed" });
     await context.reply(
       orderMessage(
-        `${actorReference(context, currentActor)} left the pool.`,
+        `${actorReference(context, currentActor)} 已退出拼单`,
         order
       ),
-      { reply_markup: collectingOrderKeyboard(order.id) }
+      cardMessageOptions(collectingOrderKeyboard(order.id))
     );
     return;
   }
@@ -492,10 +631,8 @@ async function handleCallbackAction(
     });
     await context.answerCallbackQuery({ text: "Pool closed" });
     await context.reply(
-      orderMessage(
-        "Pool closed before payment submission. No settlement receipt was created.",
-        order
-      )
+      orderMessage("拼单已安全关闭 · 未提交付款或生成结算凭证", order),
+      cardMessageOptions()
     );
     return;
   }
@@ -508,9 +645,10 @@ async function handleCallbackAction(
       actor: currentActor
     });
     await context.answerCallbackQuery({ text: "Draft published" });
-    await context.reply(orderMessage("Pool published.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage("拼单已发布", order),
+      cardMessageOptions(collectingOrderKeyboard(order.id))
+    );
     return;
   }
 
@@ -523,10 +661,8 @@ async function handleCallbackAction(
     });
     await context.answerCallbackQuery({ text: "Draft discarded" });
     await context.reply(
-      orderMessage(
-        "Draft discarded. No checkout, confirmation, or payment was created.",
-        order
-      )
+      orderMessage("草稿已放弃 · 未创建 Checkout、确认或付款", order),
+      cardMessageOptions()
     );
     return;
   }
@@ -572,9 +708,10 @@ export function registerPoolHandlers(
         targetUnits: command.targetUnits
       })
     });
-    await context.reply(orderMessage("Pool created.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage("拼单已创建", order),
+      cardMessageOptions(collectingOrderKeyboard(order.id))
+    );
   });
 
   bot.command("pool_claim", async (context) => {
@@ -601,10 +738,10 @@ export function registerPoolHandlers(
     });
     await context.reply(
       orderMessage(
-        `${actorReference(context, currentActor)} updated their claim.`,
+        `${actorReference(context, currentActor)} 已更新认领`,
         order
       ),
-      { reply_markup: collectingOrderKeyboard(order.id) }
+      cardMessageOptions(collectingOrderKeyboard(order.id))
     );
   });
 
@@ -693,10 +830,10 @@ export function registerPoolHandlers(
     });
     await context.reply(
       orderMessage(
-        `${actorReference(context, currentActor)} left the pool.`,
+        `${actorReference(context, currentActor)} 已退出拼单`,
         order
       ),
-      { reply_markup: collectingOrderKeyboard(order.id) }
+      cardMessageOptions(collectingOrderKeyboard(order.id))
     );
   });
 
@@ -724,10 +861,8 @@ export function registerPoolHandlers(
       actor: actor(context)
     });
     await context.reply(
-      orderMessage(
-        "Pool closed before payment submission. No settlement receipt was created.",
-        order
-      )
+      orderMessage("拼单已安全关闭 · 未提交付款或生成结算凭证", order),
+      cardMessageOptions()
     );
   });
 
@@ -867,7 +1002,7 @@ export function registerPoolHandlers(
       const startedAt = messageStartedAt(context);
       const processingCard = await context.reply(
         processingCardMessage({ actorRef, startedAt, requestText }),
-        { link_preview_options: { is_disabled: true } }
+        cardMessageOptions()
       );
 
       try {
@@ -888,13 +1023,12 @@ export function registerPoolHandlers(
           await editStatusCard(
             context,
             processingCard,
-            [
-              "PoolMate needs more information before opening this pool.",
-              `Started by: ${actorRef}`,
-              `Started at: ${startedAt}`,
-              `Missing or ambiguous: ${fieldNames(unresolved)}.`,
-              "No order, checkout, confirmation, or payment was created."
-            ].join("\n")
+            draftIssueCard({
+              kind: "missing",
+              actorRef,
+              startedAt,
+              detail: `需要补充或确认：${fieldNames(unresolved)}。`
+            })
           );
           return;
         }
@@ -937,13 +1071,12 @@ export function registerPoolHandlers(
           await editStatusCard(
             context,
             processingCard,
-            [
-              "PoolMate could not open this pool.",
-              `Started by: ${actorRef}`,
-              `Started at: ${startedAt}`,
-              message,
-              "No order, checkout, confirmation, or payment was created."
-            ].join("\n")
+            draftIssueCard({
+              kind: "failed",
+              actorRef,
+              startedAt,
+              detail: message
+            })
           );
           return;
         }
