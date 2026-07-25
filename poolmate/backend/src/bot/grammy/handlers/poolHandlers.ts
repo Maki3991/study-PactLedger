@@ -9,7 +9,10 @@ import {
   formatSkillHelp,
   invokeCommandSkill
 } from "../../help/commandSkillHelp.js";
-import type { CommandSkillInvoker } from "../../help/commandSkillInvoker.js";
+import {
+  CommandSkillInvokerError,
+  type CommandSkillInvoker
+} from "../../help/commandSkillInvoker.js";
 import {
   parsePoolMateCallbackData,
   type PoolMateCallbackData
@@ -823,7 +826,16 @@ export function registerPoolHandlers(
           locale: context.from?.language_code,
           surface: "telegram_mention"
         });
-      } catch {
+      } catch (error) {
+        if (
+          error instanceof CommandSkillInvokerError &&
+          error.code === "LLM_DISABLED"
+        ) {
+          await context.reply(
+            "Natural-language command skill calling is not configured. Set AIPING_API_KEY, DEEPSEEK_API_KEY, or POOLMATE_LLM_API_KEY, then run poolmate/scripts/poolmate.sh update."
+          );
+          return;
+        }
         await context.reply(
           "Natural-language command skill calling is unavailable. Use /help or /pool_new <targetUnits> <title>."
         );

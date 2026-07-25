@@ -168,6 +168,50 @@ backend_port() {
   printf '8788\n'
 }
 
+env_value() {
+  local key="$1"
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s\n' "${!key}"
+    return
+  fi
+  if [[ -f "$env_file" ]]; then
+    awk -F '=' -v key="$key" '
+      $1 == key {
+        value=$2
+        sub(/#.*/, "", value)
+        gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value)
+        print value
+        exit
+      }
+    ' "$env_file"
+  fi
+}
+
+validate_runtime_env() {
+  case "$action" in
+    up|update|rebuild|restart) ;;
+    *) return 0 ;;
+  esac
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Env file not found: $env_file" >&2
+    exit 1
+  fi
+
+  if [[ -z "$(env_value TELEGRAM_BOT_TOKEN)" ]]; then
+    echo "TELEGRAM_BOT_TOKEN is required in $env_file." >&2
+    exit 1
+  fi
+
+  if [[ -z "$(env_value AIPING_API_KEY)" \
+    && -z "$(env_value DEEPSEEK_API_KEY)" \
+    && -z "$(env_value POOLMATE_LLM_API_KEY)" ]]; then
+    echo "One LLM API key is required in $env_file: AIPING_API_KEY, DEEPSEEK_API_KEY, or POOLMATE_LLM_API_KEY." >&2
+    echo "Refusing to start a Telegram bot that cannot perform command skill calling." >&2
+    exit 1
+  fi
+}
+
 wait_for_backend() {
   local port
   local url
@@ -190,6 +234,8 @@ wait_for_backend() {
   docker compose "${compose_args[@]}" logs --tail 120 backend >&2 || true
   exit 1
 }
+
+validate_runtime_env
 
 case "$action" in
   up)

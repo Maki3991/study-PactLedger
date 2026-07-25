@@ -876,6 +876,32 @@ test("natural-language mention calls general_help even when draft extraction is 
   );
 });
 
+test("natural-language mention reports command skill calling as not configured", async () => {
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run without skill calling");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor
+  );
+
+  await bot.handleUpdate(textUpdate(117, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(
+    String(reply?.payload.text),
+    /command skill calling is not configured/
+  );
+  assert.doesNotMatch(String(reply?.payload.text), /could not decide/);
+});
+
 test("missing natural-language fields and disabled LLM never create drafts", async () => {
   const createPoolSkillInvoker: CommandSkillInvoker = {
     getStatus: () => "configured",
@@ -945,7 +971,10 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
   );
   assert.equal(second.calls.draft.length, 0);
   assert.equal(second.calls.create.length, 0);
-  assert.match(String(secondHarness.apiCalls[0]?.payload.text), /\/pool_new/);
+  assert.match(
+    String(secondHarness.apiCalls[0]?.payload.text),
+    /command skill calling is not configured/
+  );
 });
 
 test("callback data is stable and repeated callbacks reuse one idempotency key", async () => {

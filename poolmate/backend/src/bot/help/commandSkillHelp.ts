@@ -4,6 +4,7 @@ import {
   findPoolMateHelpSkill
 } from "./poolMateHelpCatalog.js";
 import type { CommandSkillInvoker } from "./commandSkillInvoker.js";
+import { CommandSkillInvokerError } from "./commandSkillInvoker.js";
 
 export function helpCommandPayload(text: string): string {
   return text
@@ -61,7 +62,12 @@ export async function invokeCommandSkill(
     surface: "telegram_command" | "telegram_mention";
   }
 ): Promise<PoolMateHelpSkill | undefined> {
-  if (!invoker || invoker.getStatus() === "disabled") return undefined;
+  if (!invoker || invoker.getStatus() === "disabled") {
+    throw new CommandSkillInvokerError(
+      "LLM_DISABLED",
+      "LLM command skill invocation is disabled."
+    );
+  }
   const result = await invoker.invoke(input);
   return result.confidence >= 0.6 && result.skillId !== "unknown"
     ? findPoolMateHelpSkill(result.skillId)
