@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DecisionRecord, QuantEvidence, StrategyProposal } from '../../src/domain/trading.js'
+import type { DecisionRecord } from '../../src/domain/trading.js'
 import { AgentMemory } from './agentMemory.js'
 
 function makeRecord(overrides: Partial<DecisionRecord> = {}): DecisionRecord {

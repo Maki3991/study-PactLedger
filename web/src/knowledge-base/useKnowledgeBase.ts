@@ -27,8 +27,11 @@ export function useKnowledgeBase(symbol?: string) {
 
   useEffect(() => {
     let active = true
-    setLoading(true)
-    setError(undefined)
+    queueMicrotask(() => {
+      if (!active) return
+      setLoading(true)
+      setError(undefined)
+    })
     fetchKnowledgeBase(symbol)
       .then((data) => {
         if (!active) return

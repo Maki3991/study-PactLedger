@@ -34,7 +34,7 @@ export class PandaModelResearchNarrator implements ResearchNarrator {
     }
     const prompt = createProposePrompt(context)
     const text = await this.callDeepSeek(prompt, 0.5, 2_048)
-    return parseProposals(text, context.symbol, context.dateRange.start)
+    return parseProposals(text, context.symbol)
   }
 
   async evaluateCandidates(
@@ -103,7 +103,6 @@ export class TemplateResearchNarrator implements ResearchNarrator {
 
   async evaluateCandidates(
     candidates: StrategyCandidate[],
-    _context: { marketRegime: string; symbol: string },
   ): Promise<{ ranking: string[]; recommendation: string }> {
     const sorted = [...candidates].sort((a, b) => b.sharpe - a.sharpe)
     return {
@@ -188,7 +187,7 @@ function createEvaluatePrompt(
 
 // ── Parsing Helpers ──
 
-function parseProposals(text: string, symbol: string, date: string): StrategyProposal[] {
+function parseProposals(text: string, symbol: string): StrategyProposal[] {
   const cleaned = text.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim()
   const jsonStart = cleaned.indexOf('[')
   const jsonEnd = cleaned.lastIndexOf(']') + 1

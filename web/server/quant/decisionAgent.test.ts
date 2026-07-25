@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DecisionContext, QuantEvidence, StrategyCandidate, StrategyProposal } from '../../src/domain/trading.js'
+import type { QuantEvidence, StrategyCandidate } from '../../src/domain/trading.js'
 import { AgentMemory } from './agentMemory.js'
 import { DecisionAgent } from './decisionAgent.js'
 import type { ResearchNarrator } from './researchNarrator.js'

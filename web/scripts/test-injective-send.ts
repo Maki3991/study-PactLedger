@@ -93,15 +93,19 @@ async function main() {
     console.log('🎉 PactLedger 核心论证成立！')
     console.log('   Agent Intent → Policy → Settlement → Receipt')
     console.log('═══════════════════════════════════════════')
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    const details = typeof error === 'object' && error !== null
+      ? error as { code?: unknown; retryable?: unknown }
+      : {}
     console.log('')
     console.log('═══════════════════════════════════════════')
     console.log('❌ 交易失败')
     console.log('═══════════════════════════════════════════')
-    console.log('Error Code:     ', error.code)
-    console.log('Error Message:  ', error.message)
-    if (error.retryable !== undefined) {
-      console.log('Retryable:      ', error.retryable)
+    console.log('Error Code:     ', details.code ?? 'UNKNOWN')
+    console.log('Error Message:  ', failure.message)
+    if (details.retryable !== undefined) {
+      console.log('Retryable:      ', details.retryable)
     }
     console.log('')
     console.log('提示：请检查余额是否充足，网络是否可达。')

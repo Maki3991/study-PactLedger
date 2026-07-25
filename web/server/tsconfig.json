@@ -8,5 +8,8 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["./**/*.ts", "../src/domain/*.ts"]
+  "include": ["./**/*.ts", "../src/domain/*.ts"],
+  "exclude": [
+    "./treasury-integration/**/*.ts"
+  ]
 }

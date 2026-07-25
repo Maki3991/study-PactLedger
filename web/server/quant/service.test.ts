@@ -7,6 +7,8 @@ import { QuantResearchService } from './service.js'
 test('model failure fallback always includes the required investment risk disclaimer', async () => {
   const failingNarrator: ResearchNarrator = {
     summarize: async () => { throw new Error('provider unavailable') },
+    proposeStrategies: async () => [],
+    evaluateCandidates: async () => ({ ranking: [], recommendation: '' }),
   }
   const service = new QuantResearchService(new ReplayMarketDataProvider(), failingNarrator)
   const result = await service.analyze({
