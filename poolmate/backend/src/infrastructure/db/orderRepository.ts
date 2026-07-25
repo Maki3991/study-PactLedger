@@ -1109,6 +1109,20 @@ export class OrderTransaction {
   }
 
   private assertPaymentState(update: PaymentStateUpdate): void {
+    if (update.projectionStatus === "DEMO_CONFIRMED") {
+      const receipt = update.receipt;
+      if (
+        update.settlementMode !== "mock" ||
+        !receipt?.receiptId ||
+        receipt.transactionHash !== "" ||
+        receipt.explorerUrl !== "" ||
+        !Number.isFinite(new Date(receipt.confirmedAt).getTime()) ||
+        update.requestStatus !== "demo_confirmed" ||
+        update.orderState !== "DEMO_CONFIRMED"
+      ) {
+        throw new Error("Mock payment evidence is incomplete.");
+      }
+    }
     if (update.projectionStatus === "CONFIRMED") {
       const receipt = update.receipt;
       let explorerIsHttps = false;

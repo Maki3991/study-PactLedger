@@ -8,12 +8,18 @@ export interface PoolMateStatusView {
 
 function hasVerifiableReceipt(
   projection: NonNullable<OrderDetailView["paymentProjection"]>
-): boolean {
+): projection is NonNullable<OrderDetailView["paymentProjection"]> & {
+  receipt: Extract<
+    NonNullable<OrderDetailView["paymentProjection"]>["receipt"],
+    { kind: "chain" }
+  >;
+} {
   const receipt = projection.receipt;
   if (
     (projection.settlementMode !== "testnet" &&
       projection.settlementMode !== "live") ||
-    !receipt?.receiptId.trim() ||
+    receipt?.kind !== "chain" ||
+    !receipt.receiptId.trim() ||
     !receipt.transactionHash.trim() ||
     !Number.isFinite(new Date(receipt.confirmedAt).getTime())
   ) {
@@ -125,7 +131,7 @@ export function formatPaymentStatus(order: OrderDetailView): string {
       "PoolMate cannot show the merchant as paid without a verifiable settlement receipt."
     ].join("\n");
   }
-  const receipt = projection.receipt!;
+  const receipt = projection.receipt;
   return [
     heading,
     "Merchant paid with a verified settlement receipt.",

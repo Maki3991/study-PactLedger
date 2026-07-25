@@ -55,6 +55,7 @@ function order(status?: PaymentProjectionStatus): OrderDetailView {
             ...(status === "CONFIRMED"
               ? {
                   receipt: {
+                    kind: "chain" as const,
                     receiptId: "receipt-1",
                     transactionHash: "0xabc",
                     explorerUrl: "https://explorer.example/tx/0xabc",

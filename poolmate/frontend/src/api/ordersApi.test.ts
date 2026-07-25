@@ -136,9 +136,8 @@ describe("orders API", () => {
         status: "DEMO_CONFIRMED" as const,
         settlementMode: "mock" as const,
         receipt: {
+          kind: "mock" as const,
           receiptId: "mock-receipt-1",
-          transactionHash: "mock-hash",
-          explorerUrl: "http://mock.invalid/receipt/mock-hash",
           confirmedAt: "2026-07-25T02:01:00.000Z"
         }
       },

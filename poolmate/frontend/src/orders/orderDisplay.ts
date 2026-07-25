@@ -57,13 +57,17 @@ export function formatDateTime(value: string): string {
 
 export function verifiableSettlementReceipt(
   projection: PaymentProjectionView | undefined
-): PaymentProjectionView["receipt"] | undefined {
+): Extract<
+  NonNullable<PaymentProjectionView["receipt"]>,
+  { kind: "chain" }
+> | undefined {
   const receipt = projection?.receipt;
   if (
     projection?.status !== "CONFIRMED" ||
     (projection.settlementMode !== "testnet" &&
       projection.settlementMode !== "live") ||
-    !receipt?.receiptId.trim() ||
+    receipt?.kind !== "chain" ||
+    !receipt.receiptId.trim() ||
     !receipt.transactionHash.trim() ||
     !Number.isFinite(new Date(receipt.confirmedAt).getTime())
   ) {

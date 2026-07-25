@@ -115,12 +115,19 @@ export type PaymentProjectionStatus =
   | "CONFIRMED"
   | "DEMO_CONFIRMED";
 
-export interface PaymentReceiptView {
-  receiptId: string;
-  transactionHash: string;
-  explorerUrl: string;
-  confirmedAt: string;
-}
+export type PaymentReceiptView =
+  | {
+      kind: "mock";
+      receiptId: string;
+      confirmedAt: string;
+    }
+  | {
+      kind: "chain";
+      receiptId: string;
+      transactionHash: string;
+      explorerUrl: string;
+      confirmedAt: string;
+    };
 
 export interface PaymentProjectionView {
   paymentRequestId: string;

@@ -95,6 +95,29 @@ describe("PoolMate operations dashboard", () => {
     expect(api.getConfigStatus).toHaveBeenCalledTimes(2);
   });
 
+  it("describes Mock as a local non-chain payment base", async () => {
+    const api: StatusApi = {
+      getHealth: vi.fn(async () => health),
+      getConfigStatus: vi.fn(
+        async (): Promise<ConfigStatusResponse> => ({
+          ...config,
+          paymentBase: { status: "configured", settlementMode: "mock" }
+        })
+      )
+    };
+
+    render(<App api={api} />);
+
+    expect(await screen.findByLabelText("Payment base: Mock only")).toBeVisible();
+    expect(
+      screen.getByText(/local persisted Mock Payment Base is enabled/)
+    ).toBeVisible();
+    expect(screen.getByText(/No funds move/)).toBeVisible();
+    expect(
+      screen.queryByText(/external payment base endpoint is configured/)
+    ).not.toBeInTheDocument();
+  });
+
   it("flags disagreement between health and config without guessing", async () => {
     const api: StatusApi = {
       getHealth: vi.fn(async () => health),

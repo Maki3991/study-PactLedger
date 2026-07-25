@@ -10,6 +10,11 @@ import { OrderServiceBotUseCases } from "./bot/orderServiceBotUseCases.js";
 import { TelegramWebAppIdentityVerifier } from "./api/telegramWebAppIdentityVerifier.js";
 import { PaymentOrchestrationService } from "./application/paymentOrchestrationService.js";
 import { createHttpPaymentBaseClient } from "./infrastructure/payment/httpPaymentBaseClient.js";
+import { MockPaymentBaseClient } from "./infrastructure/payment/mockPaymentBaseClient.js";
+import {
+  MOCK_MERCHANT_ASSET_ID,
+  MOCK_MERCHANT_PAYEE_ID
+} from "./infrastructure/merchant/mockMerchantAdapter.js";
 
 const config = loadConfig();
 const database = new PoolMateDatabase(
@@ -32,13 +37,20 @@ const endpointPaths =
         recover: config.paymentBase.recoverPath
       }
     : undefined;
-const paymentBaseClient = createHttpPaymentBaseClient({
-  url: config.paymentBase.url,
-  apiKey: config.paymentBase.apiKey,
-  settlementMode: config.paymentBase.settlementMode,
-  endpointPaths,
-  timeoutMs: config.paymentBase.timeoutMs
-});
+const paymentBaseClient =
+  config.paymentBase.settlementMode === "mock"
+    ? new MockPaymentBaseClient({
+        database,
+        allowedPayeeIds: [MOCK_MERCHANT_PAYEE_ID],
+        supportedAssetIds: [MOCK_MERCHANT_ASSET_ID]
+      })
+    : createHttpPaymentBaseClient({
+        url: config.paymentBase.url,
+        apiKey: config.paymentBase.apiKey,
+        settlementMode: config.paymentBase.settlementMode,
+        endpointPaths,
+        timeoutMs: config.paymentBase.timeoutMs
+      });
 const paymentOrchestrationService = new PaymentOrchestrationService({
   repository: orderRepository,
   orderService,

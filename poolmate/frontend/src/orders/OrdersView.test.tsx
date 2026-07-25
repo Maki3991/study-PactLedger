@@ -145,9 +145,8 @@ describe("orders console", () => {
         status: "DEMO_CONFIRMED",
         settlementMode: "mock",
         receipt: {
+          kind: "mock",
           receiptId: "mock-receipt-1",
-          transactionHash: "mock-hash",
-          explorerUrl: "http://mock.invalid/receipt/mock-hash",
           confirmedAt: "2026-07-25T02:01:00.000Z"
         }
       },
@@ -161,6 +160,9 @@ describe("orders console", () => {
 
     expect(await screen.findByText("Demo confirmed")).toBeVisible();
     expect(screen.getByText(/No chain payment occurred/)).toBeVisible();
+    expect(screen.getByText("mock-receipt-1")).toBeVisible();
+    expect(screen.getByText("None - Mock only")).toBeVisible();
+    expect(screen.getByText("None - no chain transaction")).toBeVisible();
     expect(screen.queryByText("Paid / verified")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Open receipt" })).not.toBeInTheDocument();
   });

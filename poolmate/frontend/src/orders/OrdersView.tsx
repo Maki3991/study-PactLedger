@@ -233,6 +233,11 @@ function OrderDetail({
   const projection = order.paymentProjection;
   const outbox = order.paymentOutbox;
   const receipt = verifiableSettlementReceipt(projection);
+  const mockReceipt =
+    projection?.status === "DEMO_CONFIRMED" &&
+    projection.settlementMode === "mock"
+      ? projection.receipt
+      : undefined;
   const fundingLabel =
     order.fundingMode === "sponsored_demo"
       ? "Sponsored demo / participants not funded"
@@ -434,6 +439,26 @@ function OrderDetail({
                     Open receipt <ExternalLink size={13} aria-hidden="true" />
                   </a>
                 </dd>
+              </div>
+            </dl>
+          ) : null}
+          {mockReceipt ? (
+            <dl className="detail-facts detail-facts--payment receipt-facts">
+              <div>
+                <dt>Mock Receipt ID</dt>
+                <dd className="mono-value">{mockReceipt.receiptId}</dd>
+              </div>
+              <div>
+                <dt>Recorded</dt>
+                <dd>{formatDateTime(mockReceipt.confirmedAt)}</dd>
+              </div>
+              <div>
+                <dt>Transaction hash</dt>
+                <dd>None - Mock only</dd>
+              </div>
+              <div>
+                <dt>Explorer</dt>
+                <dd>None - no chain transaction</dd>
               </div>
             </dl>
           ) : null}

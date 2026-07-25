@@ -10,6 +10,7 @@ import { loadConfig } from "../src/config.js";
 import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
 import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
 import { MockMerchantAdapter } from "../src/infrastructure/merchant/index.js";
+import { MockPaymentBaseClient } from "../src/infrastructure/payment/mockPaymentBaseClient.js";
 import type { ConfirmationIdentityVerifier } from "../src/api/telegramWebAppIdentityVerifier.js";
 
 function fixture() {
@@ -411,6 +412,71 @@ test("payment submit and recover APIs require admin and expose stable results", 
   assert.equal(invalidRecovery.statusCode, 400);
   assert.equal(invalidRecovery.json().error.code, "INVALID_REQUEST");
   assert.deepEqual(recoverCalls, [operationId]);
+
+  await app.close();
+  current.database.close();
+});
+
+test("payment submit API executes the persisted local Mock boundary", async () => {
+  const current = fixture();
+  const group = current.orderService.createGroup({
+    telegramChatId: "-10004",
+    title: "Mock payments group"
+  });
+  const draft = current.orderService.createOrder({
+    groupId: group.id,
+    ownerUserId: "100",
+    title: "Mock payment checkout",
+    targetUnits: 1
+  });
+  current.orderService.publishOrder(draft.id);
+  current.orderService.claimOrder(draft.id, {
+    userId: "101",
+    displayName: "Ada",
+    units: 1
+  });
+  const checkout = await current.orderService.finalizeCheckout(draft.id, {
+    merchantId: "merchant-demo"
+  });
+  const token = new URLSearchParams(
+    new URL(checkout.confirmationLinks[0]!.url).hash.slice(1)
+  ).get("token")!;
+  current.orderService.confirm(token, "101");
+
+  const paymentOrchestrationService = new PaymentOrchestrationService({
+    repository: new OrderRepository(current.database),
+    orderService: current.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: current.database,
+      allowedPayeeIds: ["payee-demo"],
+      supportedAssetIds: ["USDC"],
+      now: () => new Date("2026-07-25T12:01:00.000Z")
+    }),
+    now: () => new Date("2026-07-25T12:01:00.000Z")
+  });
+  const app = await createServer({
+    ...current,
+    paymentOrchestrationService,
+    getBotStatus: () => "disabled",
+    logger: false
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/payment/submit`,
+    headers: { authorization: "Bearer admin-secret" },
+    payload: {}
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().state, "DEMO_CONFIRMED");
+  assert.notEqual(response.json().state, "PAID");
+  assert.deepEqual(response.json().paymentProjection.receipt, {
+    kind: "mock",
+    receiptId: response.json().paymentProjection.receipt.receiptId,
+    confirmedAt: "2026-07-25T12:01:00.000Z"
+  });
+  assert.equal(response.body.includes("transactionHash"), false);
+  assert.equal(response.body.includes("explorerUrl"), false);
 
   await app.close();
   current.database.close();

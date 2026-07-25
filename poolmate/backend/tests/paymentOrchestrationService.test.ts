@@ -13,6 +13,7 @@ import type { MerchantQuoteProvider } from "../src/application/ports/merchantQuo
 import { DomainError } from "../src/domain/domainError.js";
 import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
 import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
+import { MockPaymentBaseClient } from "../src/infrastructure/payment/mockPaymentBaseClient.js";
 
 const NOW = new Date("2026-07-25T12:00:00.000Z");
 
@@ -303,38 +304,85 @@ test("a late submit result cannot overwrite a recovered terminal result", async 
   current.database.close();
 });
 
-test("mock confirmation is isolated and invalid chain evidence never becomes paid", async () => {
-  for (const scenario of [
-    { mode: "mock" as const, expected: "DEMO_CONFIRMED" },
-    { mode: "testnet" as const, expected: "PAYMENT_UNKNOWN" }
-  ]) {
-    const current = openFixture();
-    const ready = await createReadyOrder(current.orderService);
-    const client = new StubPaymentClient(
-      scenario.mode,
-      ready.paymentProjection!.operationId
-    );
-    client.submitResult = {
-      status: "confirmed",
-      operationId: ready.paymentProjection!.operationId,
-      settlementMode: scenario.mode,
-      receiptId: "receipt",
-      transactionHash: "hash",
-      explorerUrl: "http://insecure.example/tx/hash",
-      confirmedAt: "2026-07-25T12:01:00.000Z"
-    };
-    const service = new PaymentOrchestrationService({
-      repository: current.repository,
-      orderService: current.orderService,
-      paymentBaseClient: client,
-      now: () => NOW
-    });
+test("local Mock confirmation persists a Demo trace and never becomes paid", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: current.database,
+      allowedPayeeIds: ["merchant-payee"],
+      supportedAssetIds: ["USDC"],
+      now: () => new Date("2026-07-25T12:01:00.000Z")
+    }),
+    now: () => new Date("2026-07-25T12:01:00.000Z")
+  });
 
-    const result = await service.submit(ready.id);
-    assert.equal(result.state, scenario.expected);
-    assert.notEqual(result.state, "PAID");
-    current.database.close();
-  }
+  const result = await service.submit(ready.id);
+  assert.equal(result.state, "DEMO_CONFIRMED");
+  assert.notEqual(result.state, "PAID");
+  assert.equal(result.paymentProjection?.receipt?.kind, "mock");
+  current.database.close();
+});
+
+test("invalid chain evidence never becomes paid", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const client = new StubPaymentClient(
+    "testnet",
+    ready.paymentProjection!.operationId
+  );
+  client.submitResult = {
+    status: "confirmed",
+    operationId: ready.paymentProjection!.operationId,
+    settlementMode: "testnet",
+    receiptId: "receipt",
+    transactionHash: "hash",
+    explorerUrl: "http://insecure.example/tx/hash",
+    confirmedAt: "2026-07-25T12:01:00.000Z"
+  };
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: client,
+    now: () => NOW
+  });
+
+  const result = await service.submit(ready.id);
+  assert.equal(result.state, "PAYMENT_UNKNOWN");
+  assert.notEqual(result.state, "PAID");
+  current.database.close();
+});
+
+test("mock confirmation with fabricated chain evidence is isolated as unknown", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const client = new StubPaymentClient(
+    "mock",
+    ready.paymentProjection!.operationId
+  );
+  client.submitResult = {
+    status: "confirmed",
+    operationId: ready.paymentProjection!.operationId,
+    settlementMode: "mock",
+    receiptId: "mock-receipt",
+    transactionHash: "fake-chain-hash",
+    explorerUrl: "https://explorer.example/tx/fake-chain-hash",
+    confirmedAt: "2026-07-25T12:01:00.000Z"
+  };
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: client,
+    now: () => NOW
+  });
+
+  const result = await service.submit(ready.id);
+  assert.equal(result.state, "PAYMENT_UNKNOWN");
+  assert.equal(result.paymentProjection?.status, "UNKNOWN");
+  assert.equal(result.paymentProjection?.receipt, undefined);
+  current.database.close();
 });
 
 test("a settlement-mode mismatch is isolated instead of accepted", async () => {
@@ -554,6 +602,67 @@ test("recovery scan queries eligible operations and never submits ready payments
   assert.deepEqual(client.recoverCalls, [operationId]);
   assert.equal(current.orderService.getOrder(ready.id).state, "PAYMENT_FAILED");
   current.database.close();
+});
+
+test("restart recovers a persisted Mock receipt after the projection update is interrupted", async () => {
+  const first = openFixture();
+  const ready = await createReadyOrder(first.orderService);
+  const operationId = ready.paymentProjection!.operationId;
+  const submittedAt = new Date("2026-07-25T12:01:00.000Z");
+  const client = new MockPaymentBaseClient({
+    database: first.database,
+    allowedPayeeIds: ["merchant-payee"],
+    supportedAssetIds: ["USDC"],
+    now: () => submittedAt
+  });
+  const claim = first.repository.immediate((transaction) =>
+    transaction.claimPaymentSubmission(
+      ready.paymentRequest!.id,
+      "mock",
+      new Date(submittedAt.getTime() + 30_000).toISOString(),
+      submittedAt.toISOString()
+    )
+  );
+  assert.equal(claim, "claimed");
+  const persisted = await client.submit(ready.paymentRequest!, operationId);
+  assert.equal(persisted.status, "confirmed");
+  first.database.close();
+
+  const restarted = openFixture(first.databasePath);
+  const recoveredAt = new Date("2026-07-25T12:02:00.000Z");
+  const service = new PaymentOrchestrationService({
+    repository: restarted.repository,
+    orderService: restarted.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: restarted.database,
+      allowedPayeeIds: ["merchant-payee"],
+      supportedAssetIds: ["USDC"],
+      now: () => recoveredAt
+    }),
+    now: () => recoveredAt
+  });
+
+  assert.deepEqual(await service.recoverPending(), {
+    attempted: 1,
+    succeeded: 1,
+    failed: 0
+  });
+  const final = restarted.orderService.getOrder(ready.id);
+  assert.equal(final.state, "DEMO_CONFIRMED");
+  assert.equal(
+    final.paymentProjection?.receipt?.receiptId,
+    persisted.status === "confirmed" ? persisted.receiptId : undefined
+  );
+  const operationCount = restarted.database.read(
+    (connection) =>
+      (
+        connection
+          .prepare("SELECT COUNT(*) AS count FROM pm_mock_payment_operations")
+          .get() as { count: number }
+      ).count
+  );
+  assert.equal(operationCount, 1);
+  restarted.database.close();
 });
 
 test("expired payment requests never call the payment base", async () => {

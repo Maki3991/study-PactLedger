@@ -1,6 +1,6 @@
 # PoolMate 独立方案
 
-> 状态：G0 / P0 / P1 / P2 / P4 已实现并完成本地验收；P3 等待支付基座发布稳定远端契约
+> 状态：G0 / P0 / P1 / P2 / P4 和本地 Mock Payment Base 已实现并完成本地验收；P3 远程联调等待支付基座发布稳定契约
 > 边界：新 PoolMate 是独立后端、独立 Telegram Bot、独立管理面板和独立数据库，全部放在顶层 `poolmate/`。
 > 约束：不修改 `web/` 中现有支付基座的代码和接口，不导入其内部 Service，不共享数据库。
 > 验收时间：2026-07-25
@@ -9,15 +9,15 @@
 
 重新建设 PoolMate，不迁移或继续扩展 `web/server/poolmate/` 中的旧实现。
 
-新 PoolMate 自己完成群组、订单、最终报价、精确分摊、逐人确认和付款编排。支付基座只被当作外部付款服务，PoolMate 通过独立 `PaymentBaseClient` 调用它，不知道其 Repository、Policy Engine 或 Settlement Adapter。
+新 PoolMate 自己完成群组、订单、最终报价、精确分摊、逐人确认和付款编排。`PaymentBaseClient` 是唯一支付边界：本地 Mock 实现负责可验证的模拟闭环，远程 HTTP 实现负责未来 Testnet/Live 联调；PoolMate 不知道 PactLedger 的 Repository、Policy Engine 或 Settlement Adapter。
 
-当前必须承认一个阻塞：
+真实 Testnet/Live 仍有一个必须承认的阻塞：
 
 - 现有可复用接口是进程内 `PactLedgerService.process()`；
 - 当前没有供独立后端调用的通用支付 HTTP/RPC 端点；
 - `/api/demo/poolmate/checkout` 只接受固定演示场景并返回 Mock Trace，不得作为新 PoolMate 的支付接口。
 
-因此，在基座运营方提供“可远程调用且保持现有支付契约”的入口前，新 PoolMate 可完整交付到 `READY_FOR_PAYMENT`，但必须显示 `PAYMENT_BASE_UNAVAILABLE`，不得伪造 `paid`、Receipt 或链上确认。
+本地 Mock 不再受该远程接口阻塞。`PAYMENT_SETTLEMENT_MODE=mock` 会走独立 `PaymentBaseClient`，依次持久化 operation、PolicyDecision 与 Mock Receipt，并将订单推进到 `DEMO_CONFIRMED`。它不移动资金，不提供交易哈希或 Explorer，也不能进入 `PAID`。Testnet/Live 在远端契约发布前仍必须显示 `PAYMENT_BASE_UNAVAILABLE`，不得伪造链上确认。
 
 ## 2. 目录与部署
 
@@ -213,6 +213,7 @@ amount       = 只在可无损转换时填入旧 number 字段
 | P2 契约冻结 | 已完成 | 共享支付请求、projection、outbox、settlement mode 和错误契约 | `f8b9314` |
 | P2 持久化编排 | 已完成 | 稳定 operation ID、单次 claim、lease、UNKNOWN 隔离、只读恢复和持久化 Receipt 门 | `e21ddf9` |
 | P2 外部边界 | 已完成 | HTTPS PaymentBaseClient、服务端鉴权、超时/错误归一化、真实 Bot 文案和恢复定时器 | `82f9385` |
+| P2 本地 Mock Base | 已完成 | Policy 白名单/资产/金额/有效期/幂等校验、追加写 operation/decision/receipt、重试与重启恢复、`DEMO_CONFIRMED` 证据隔离 | 当前阶段提交 |
 | P3 基座联调 | 外部阻塞 | 仍无可从独立进程调用的稳定支付接口；未调用 Demo 端点、未修改 `web/`、未宣称真实付款 | 待基座发布契约 |
 | P4 管理面板 | 已完成 | 展示订单、确认、payment projection、outbox、恢复入口和 Receipt 证据；Mock 证据边界由 `1b8f132` 加固 | `82f9385`、`1b8f132` |
 
@@ -232,12 +233,13 @@ P3 的进入条件是支付基座已经存在可从独立进程调用的稳定�
 
 ### 6.1 2026-07-25 验收证据
 
-- Backend CI：typecheck、lint、format、`89/89` tests、build、空库 healthcheck、生产依赖 audit 全部通过。
-- Frontend：lint、typecheck、`28/28` tests 和 build 全部通过；shared typecheck/build 通过。
-- Docker 从独立空 volume 冷启动成功，`/health` 与 `/health/ready` 报告 5 个 migration，Bot 和 Payment Base 未配置时如实显示 `disabled`。
+- Backend CI：typecheck、lint、format、`100/100` tests、build 和空库 healthcheck 通过；上一阶段 production dependency audit 为 0 个 high/critical。
+- Frontend：lint、typecheck、`29/29` tests 和 build 全部通过；shared typecheck/build 通过。
+- Docker 从独立 volume 升级到 7 个 migration；Mock 模式在没有远程 URL/Key/path 时报告 `configured`，disabled 模式仍如实报告未配置。
 - 真实浏览器检查覆盖桌面 `1440 x 900` 与移动 `390 x 844`：运行时页和管理员 gate 无横向溢出或控件重叠，浏览器控制台无 warning/error；未生成持久化截图文件。
 - 静态边界检查无嵌套 `.git`、无 submodule、无 Telegraf production import、无 `web/` import；grammY 类型未进入 Domain、Application、shared DTO 或数据库 schema。
 - Telegram user allowlist 由 `TELEGRAM_USER_ALLOWLIST_ENABLED` 显式控制，默认关闭；只有开启时空名单才会让 Bot fail closed。
+- 本地 Mock API 集成测试证明只能返回 `DEMO_CONFIRMED`；Mock Receipt DTO 使用 `kind=mock`，不包含交易哈希或 Explorer 字段，管理页单独显示其 receipt ID 与记录时间。
 - 未执行真实 Telegram 群聊、外部 HTTPS Mini App 或 Injective Testnet/Live 付款，这些不属于已完成证据。
 
 ## 7. 首个实现包：P0 三工程师版

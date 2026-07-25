@@ -501,6 +501,8 @@ export class PaymentOrchestrationService {
     if (confirmed.settlementMode === "mock") {
       if (
         !confirmed.receiptId.trim() ||
+        confirmed.transactionHash !== "" ||
+        confirmed.explorerUrl !== "" ||
         !Number.isFinite(new Date(confirmed.confirmedAt).getTime())
       ) {
         return this.updateUnknown(

@@ -9,6 +9,16 @@ function fixtureDirectory(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "poolmate-migrations-"));
 }
 
+function openMigratedDatabase(): PoolMateDatabase {
+  const directory = fixtureDirectory();
+  const database = new PoolMateDatabase(
+    path.join(directory, "poolmate.sqlite"),
+    path.resolve("../migrations")
+  );
+  database.migrate();
+  return database;
+}
+
 test("migration runner rejects a missing migration directory", () => {
   const directory = fixtureDirectory();
   const database = new PoolMateDatabase(
@@ -480,5 +490,77 @@ test("0005 backfills one stable projection and outbox per payment request", () =
       null
     );
   });
+  database.close();
+});
+
+test("0006 rejects Mock confirmation with fabricated chain evidence", () => {
+  const database = openMigratedDatabase();
+  const now = "2026-07-25T12:00:00.000Z";
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups
+         (id, telegram_chat_id, title, created_at, updated_at)
+         VALUES ('group-mock', '-10006', 'Mock group', ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode,
+          target_units, created_at, updated_at)
+         VALUES ('order-mock', 'group-mock', '100', 'Mock order',
+                 'DRAFT', 'sponsored_demo', 1, ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_checkout_snapshots
+         (id, order_id, version, hash, merchant_id, merchant_display_name,
+          payee_id, hash_algorithm, canonicalization_version, is_canonical,
+          items_json, asset_id, goods_amount_atomic, shipping_amount_atomic,
+          discount_amount_atomic, fee_amount_atomic, total_amount_atomic,
+          expires_at, quote_reference, created_at)
+         VALUES ('checkout-mock', 'order-mock', 1, 'hash', 'merchant-demo',
+                 'Merchant', 'payee-demo', 'SHA-256',
+                 'poolmate-checkout-json-v1', 1, '[]', 'USDC', '1', '0',
+                 '0', '0', '1', '2026-07-25T12:10:00.000Z', 'quote', ?)`
+      )
+      .run(now);
+    connection
+      .prepare(
+        `INSERT INTO pm_confirmation_sets
+         (id, order_id, checkout_id, created_at)
+         VALUES ('set-mock', 'order-mock', 'checkout-mock', ?)`
+      )
+      .run(now);
+    connection
+      .prepare(
+        `INSERT INTO pm_payment_requests
+         (id, order_id, checkout_id, checkout_version, checkout_hash,
+          confirmation_set_id, idempotency_key, payer_ref, payee_id, asset_id,
+          amount_atomic, expires_at, status, created_at, updated_at)
+         VALUES ('request-mock', 'order-mock', 'checkout-mock', 1, 'hash',
+                 'set-mock', 'key-mock', 'payer', 'payee-demo', 'USDC', '1',
+                 '2026-07-25T12:10:00.000Z', 'ready', ?, ?)`
+      )
+      .run(now, now);
+  });
+
+  assert.throws(() =>
+    database.immediate((connection) =>
+      connection
+        .prepare(
+          `INSERT INTO pm_payment_projections
+           (payment_request_id, operation_id, status, settlement_mode,
+            receipt_id, transaction_hash, explorer_url, confirmed_at,
+            attempts, created_at, updated_at)
+           VALUES ('request-mock', 'operation-mock', 'DEMO_CONFIRMED', 'mock',
+                   'receipt-mock', 'fake-hash', 'https://explorer.example/fake',
+                   ?, 0, ?, ?)`
+        )
+        .run(now, now, now)
+    )
+  );
   database.close();
 });

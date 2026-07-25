@@ -267,17 +267,22 @@ function isPaymentProjection(value: unknown): value is PaymentProjectionView {
   }
   if (
     !isRecord(value.receipt) ||
+    !isOneOf(value.receipt.kind, ["mock", "chain"] as const) ||
     !isNonEmptyString(value.receipt.receiptId) ||
-    typeof value.receipt.transactionHash !== "string" ||
-    typeof value.receipt.explorerUrl !== "string" ||
     !isIsoDate(value.receipt.confirmedAt)
   ) {
     return false;
   }
   if (value.status === "DEMO_CONFIRMED") {
-    return value.settlementMode === "mock";
+    return (
+      value.settlementMode === "mock" &&
+      value.receipt.kind === "mock" &&
+      !("transactionHash" in value.receipt) &&
+      !("explorerUrl" in value.receipt)
+    );
   }
   return (
+    value.receipt.kind === "chain" &&
     isNonEmptyString(value.receipt.transactionHash) &&
     isNonEmptyString(value.receipt.explorerUrl) &&
     value.receipt.explorerUrl.startsWith("https://") &&

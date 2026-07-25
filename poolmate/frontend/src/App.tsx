@@ -245,13 +245,13 @@ function paymentDisplay(
         : "warning";
     const detail = invalidCombination
       ? "Settlement is enabled without a configured payment base."
-      : `${paymentBaseDetails[status]} ${
-          settlementMode === "mock"
-            ? "Mock mode is not chain settlement."
-            : settlementMode === "disabled"
+      : settlementMode === "mock"
+        ? "The local persisted Mock Payment Base is enabled. No funds move and no chain transaction is created."
+        : `${paymentBaseDetails[status]} ${
+            settlementMode === "disabled"
               ? "Settlement is disabled."
               : "Configuration is not settlement evidence."
-        }`;
+          }`;
     return {
       label: invalidCombination
         ? "Configuration mismatch"

@@ -36,7 +36,7 @@ test("health reports real database and grammY status", async () => {
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().database, {
     status: "ready",
-    appliedMigrations: 5,
+    appliedMigrations: 7,
     pendingMigrations: 0
   });
   assert.deepEqual(response.json().bot, {
@@ -102,6 +102,29 @@ test("config status never returns configured secrets", async () => {
     headers: { authorization: "Bearer admin-secret" }
   });
   assert.equal(protectedResponse.statusCode, 200);
+
+  await app.close();
+  fixture.database.close();
+});
+
+test("local Mock payment base is configured without remote credentials", async () => {
+  const fixture = createFixture();
+  fixture.config.paymentBase.settlementMode = "mock";
+  const app = await createServer({
+    ...fixture,
+    getBotStatus: () => "disabled",
+    logger: false
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/public/config-status"
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().paymentBase, {
+    status: "configured",
+    settlementMode: "mock"
+  });
 
   await app.close();
   fixture.database.close();

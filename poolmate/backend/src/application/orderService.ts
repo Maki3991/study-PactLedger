@@ -275,7 +275,10 @@ function publicPaymentProjection(
   row: PaymentProjectionRow
 ): PaymentProjectionView {
   const hasReceipt =
-    row.receiptId && row.transactionHash && row.explorerUrl && row.confirmedAt;
+    row.receiptId &&
+    row.confirmedAt &&
+    (row.status === "DEMO_CONFIRMED" ||
+      (row.transactionHash && row.explorerUrl));
   return {
     paymentRequestId: row.paymentRequestId,
     operationId: row.operationId,
@@ -285,12 +288,20 @@ function publicPaymentProjection(
     ...(row.errorMessage ? { errorMessage: row.errorMessage } : {}),
     ...(hasReceipt
       ? {
-          receipt: {
-            receiptId: row.receiptId!,
-            transactionHash: row.transactionHash!,
-            explorerUrl: row.explorerUrl!,
-            confirmedAt: row.confirmedAt!
-          }
+          receipt:
+            row.status === "DEMO_CONFIRMED"
+              ? {
+                  kind: "mock" as const,
+                  receiptId: row.receiptId!,
+                  confirmedAt: row.confirmedAt!
+                }
+              : {
+                  kind: "chain" as const,
+                  receiptId: row.receiptId!,
+                  transactionHash: row.transactionHash!,
+                  explorerUrl: row.explorerUrl!,
+                  confirmedAt: row.confirmedAt!
+                }
         }
       : {}),
     attempts: row.attempts,
