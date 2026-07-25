@@ -38,18 +38,7 @@ function checkout(): CheckoutHashInput {
     feeAmountAtomic: "5",
     totalAmountAtomic: "100",
     expiresAt: "2026-07-25T12:10:00.000Z",
-    allocations: [
-      {
-        participantId: "participant-b",
-        units: 1,
-        money: { assetId: "USDC", amountAtomic: "40" }
-      },
-      {
-        participantId: "participant-a",
-        units: 2,
-        money: { assetId: "USDC", amountAtomic: "60" }
-      }
-    ]
+    sourceProtocol: "MOCK"
   };
 }
 
@@ -62,12 +51,11 @@ test("checkout hash exposes its algorithm and canonicalization version", () => {
 
   const reordered = checkout();
   reordered.items.reverse();
-  reordered.allocations.reverse();
   assert.equal(canonicalCheckout(reordered), canonicalCheckout(input));
   assert.equal(hashCheckout(reordered).value, hash.value);
 });
 
-test("checkout hash binds identity, item, fee, and allocation facts", () => {
+test("checkout hash binds only canonical merchant checkout facts", () => {
   const base = checkout();
   const baseHash = hashCheckout(base).value;
   const mutations: CheckoutHashInput[] = [
@@ -80,18 +68,17 @@ test("checkout hash binds identity, item, fee, and allocation facts", () => {
       ]
     },
     { ...checkout(), shippingAmountAtomic: "11", totalAmountAtomic: "101" },
-    {
-      ...checkout(),
-      allocations: [
-        {
-          ...checkout().allocations[0]!,
-          money: { assetId: "USDC", amountAtomic: "41" }
-        },
-        checkout().allocations[1]!
-      ]
-    }
+    { ...checkout(), version: 2 },
+    { ...checkout(), sourceProtocol: "A2A" }
   ];
   for (const mutation of mutations) {
     assert.notEqual(hashCheckout(mutation).value, baseHash);
   }
+  assert.equal(
+    hashCheckout({
+      ...checkout(),
+      merchant: { ...checkout().merchant, displayName: "Localized label" }
+    }).value,
+    baseHash
+  );
 });

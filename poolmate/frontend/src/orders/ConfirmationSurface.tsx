@@ -7,7 +7,7 @@ import {
   ShieldCheck,
   Store,
   WalletCards,
-  X
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConfirmationResult } from "@poolmate/shared";
@@ -18,7 +18,7 @@ import {
   confirmationStateMeta,
   formatAtomicMoney,
   formatDateTime,
-  orderStateMeta
+  orderStateMeta,
 } from "./orderDisplay";
 import { StateBadge } from "./StateBadge";
 
@@ -40,28 +40,28 @@ type SubmissionState =
 function normalizeError(error: unknown): ApiRequestError {
   return error instanceof ApiRequestError
     ? error
-    : new ApiRequestError("Confirmation could not be recorded.", "UNKNOWN_ERROR");
+    : new ApiRequestError(
+        "Confirmation could not be recorded.",
+        "UNKNOWN_ERROR",
+      );
 }
 
-export function ConfirmationSurface({
-  token,
-  api
-}: ConfirmationSurfaceProps) {
+export function ConfirmationSurface({ token, api }: ConfirmationSurfaceProps) {
   const ordersApi = useMemo(() => api ?? createOrdersApi(), [api]);
   const [telegramInitData] = useState(
-    () => window.Telegram?.WebApp?.initData?.trim() ?? ""
+    () => window.Telegram?.WebApp?.initData?.trim() ?? "",
   );
   const loadConfirmation = useCallback(
     (signal: AbortSignal) => ordersApi.getConfirmation(token ?? "", signal),
-    [ordersApi, token]
+    [ordersApi, token],
   );
   const { resource, reload } = useApiResource(
     loadConfirmation,
     `confirmation:${token ?? "missing"}`,
-    Boolean(token)
+    Boolean(token),
   );
   const [submission, setSubmission] = useState<SubmissionState>({
-    state: "idle"
+    state: "idle",
   });
   const [clock, setClock] = useState(() => Date.now());
   const confirmation =
@@ -182,15 +182,24 @@ export function ConfirmationSurface({
               </div>
             </section>
 
-            <section className="locked-allocation" aria-labelledby="amount-heading">
+            <section
+              className="locked-allocation"
+              aria-labelledby="amount-heading"
+            >
               <p className="section-kicker">Your locked allocation</p>
               <h3 id="amount-heading">
                 {formatAtomicMoney(confirmation.money)}
               </h3>
-              <span>Exact atomic amount from Checkout v{confirmation.checkoutVersion}</span>
+              <span>
+                Exact atomic amount from Checkout v
+                {confirmation.checkoutVersion}
+              </span>
             </section>
 
-            <section className="confirmation-items" aria-labelledby="items-heading">
+            <section
+              className="confirmation-items"
+              aria-labelledby="items-heading"
+            >
               <div className="detail-section__heading">
                 <div>
                   <p className="section-kicker">Canonical checkout</p>
@@ -218,7 +227,8 @@ export function ConfirmationSurface({
                         <td className="mono-value">{item.sku}</td>
                         <td>{item.quantity}</td>
                         <td className="mono-value">
-                          {item.unitAmountAtomic} {confirmation.money.assetId} atomic
+                          {item.unitAmountAtomic} {confirmation.money.assetId}{" "}
+                          atomic
                         </td>
                       </tr>
                     ))}
@@ -227,27 +237,27 @@ export function ConfirmationSurface({
               </div>
               <dl
                 className="amount-breakdown"
-                aria-label="Checkout amount breakdown"
+                aria-label="Participant payment allocation breakdown"
               >
                 <div>
-                  <dt>Goods</dt>
+                  <dt>Your goods allocation</dt>
                   <dd>{formatAtomicMoney(confirmation.goods)}</dd>
                 </div>
                 <div>
-                  <dt>Shipping</dt>
+                  <dt>Your shipping allocation</dt>
                   <dd>{formatAtomicMoney(confirmation.shipping)}</dd>
                 </div>
                 <div>
-                  <dt>Discount</dt>
+                  <dt>Your discount allocation</dt>
                   <dd>-{formatAtomicMoney(confirmation.discount)}</dd>
                 </div>
                 <div>
-                  <dt>Fee</dt>
+                  <dt>Your fee allocation</dt>
                   <dd>{formatAtomicMoney(confirmation.fee)}</dd>
                 </div>
                 <div className="amount-breakdown__total">
-                  <dt>Order total</dt>
-                  <dd>{formatAtomicMoney(confirmation.orderTotal)}</dd>
+                  <dt>Your exact total</dt>
+                  <dd>{formatAtomicMoney(confirmation.money)}</dd>
                 </div>
               </dl>
             </section>
@@ -269,12 +279,36 @@ export function ConfirmationSurface({
                 <dd className="mono-value">{confirmation.merchant.payeeId}</dd>
               </div>
               <div>
+                <dt>Checkout ID</dt>
+                <dd className="mono-value">{confirmation.checkoutId}</dd>
+              </div>
+              <div>
                 <dt>Checkout version</dt>
                 <dd>{confirmation.checkoutVersion}</dd>
               </div>
               <div>
+                <dt>Order total</dt>
+                <dd>{formatAtomicMoney(confirmation.orderTotal)}</dd>
+              </div>
+              <div>
+                <dt>Allocation</dt>
+                <dd className="mono-value">{confirmation.allocationId}</dd>
+              </div>
+              <div>
+                <dt>Allocation strategy</dt>
+                <dd className="mono-value">
+                  {confirmation.allocationStrategy}
+                </dd>
+              </div>
+              <div>
+                <dt>Allocation status</dt>
+                <dd className="mono-value">{confirmation.allocationStatus}</dd>
+              </div>
+              <div>
                 <dt>Checkout hash</dt>
-                <dd className="mono-value">{confirmation.checkoutHash.value}</dd>
+                <dd className="mono-value">
+                  {confirmation.checkoutHash.value}
+                </dd>
               </div>
               <div>
                 <dt>Hash algorithm</dt>
@@ -301,7 +335,10 @@ export function ConfirmationSurface({
             </dl>
 
             {submission.state === "error" ? (
-              <div className="inline-warning inline-warning--error" role="alert">
+              <div
+                className="inline-warning inline-warning--error"
+                role="alert"
+              >
                 <AlertTriangle size={16} aria-hidden="true" />
                 <span>{submission.error.message}</span>
               </div>
@@ -320,8 +357,8 @@ export function ConfirmationSurface({
                     {submission.action === "decline"
                       ? "The allocation was declined. No payment request was created from this action."
                       : submission.result.paymentRequestCreated
-                      ? "All confirmations are complete and one local payment request was created. No settlement Receipt is present."
-                      : "The allocation is confirmed. The order is still waiting for other required confirmations."}
+                        ? "All confirmations are complete and one local payment request was created. No settlement Receipt is present."
+                        : "The allocation is confirmed. The order is still waiting for other required confirmations."}
                   </p>
                   <StateBadge
                     label={orderStateMeta[submission.result.orderState].label}
@@ -382,7 +419,11 @@ export function ConfirmationSurface({
                     onClick={() => void submit("confirm")}
                   >
                     {submission.state === "submitting" ? (
-                      <RefreshCw className="spin" size={17} aria-hidden="true" />
+                      <RefreshCw
+                        className="spin"
+                        size={17}
+                        aria-hidden="true"
+                      />
                     ) : (
                       <Check size={17} aria-hidden="true" />
                     )}

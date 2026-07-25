@@ -21,6 +21,7 @@ test("MockMerchantAdapter returns the verified demo merchant and exact USDC amou
     { ...quote, checkoutId: "stable-for-test" },
     {
       checkoutId: "stable-for-test",
+      sourceProtocol: "MOCK",
       merchant: {
         id: "merchant-demo",
         displayName: "Demo Merchant #001",

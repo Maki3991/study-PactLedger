@@ -19,6 +19,7 @@ class QuoteProvider implements MerchantQuoteProvider {
   async getQuote(request: MerchantQuoteRequest): Promise<MerchantQuote> {
     return {
       checkoutId: `checkout-${request.orderId}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: request.merchantId,
         displayName: "Verified Merchant",

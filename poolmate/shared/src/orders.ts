@@ -65,10 +65,28 @@ export type AllocationConfirmationStatus =
   | "superseded"
   | "expired";
 
+export type AllocationStrategy = "BY_QUANTITY" | "EQUAL_SPLIT";
+
+export type PaymentAllocationStatus =
+  | "CALCULATED"
+  | "CONFIRMATION_PENDING"
+  | "CONFIRMED"
+  | "CAPTURED"
+  | "FAILED"
+  | "INVALIDATED";
+
 export interface AllocationView {
+  id: string;
   participantId: string;
   displayName: string;
   units: number;
+  strategy: AllocationStrategy;
+  status: PaymentAllocationStatus;
+  goods: AtomicMoney;
+  shipping: AtomicMoney;
+  discount: AtomicMoney;
+  fee: AtomicMoney;
+  total: AtomicMoney;
   money: AtomicMoney;
   confirmationStatus: AllocationConfirmationStatus;
   confirmedAt?: string;
@@ -86,6 +104,7 @@ export interface CheckoutView {
   fee: AtomicMoney;
   total: AtomicMoney;
   expiresAt: string;
+  sourceProtocol: "A2A" | "MOCK";
   createdAt: string;
   allocations: AllocationView[];
 }
@@ -187,12 +206,16 @@ export interface OrderDetailView extends OrderSummaryView {
 export interface ConfirmationView {
   orderId: string;
   orderTitle: string;
+  checkoutId: string;
   participantDisplayName: string;
   checkoutVersion: number;
   checkoutHash: CheckoutHashView;
   merchant: MerchantView;
   items: CheckoutItemView[];
   participantUnits: number;
+  allocationId: string;
+  allocationStrategy: AllocationStrategy;
+  allocationStatus: PaymentAllocationStatus;
   goods: AtomicMoney;
   shipping: AtomicMoney;
   discount: AtomicMoney;

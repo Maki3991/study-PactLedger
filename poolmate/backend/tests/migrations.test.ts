@@ -612,3 +612,125 @@ test("0008 adds append-only cancellation evidence without breaking foreign keys"
   });
   database.close();
 });
+
+test("0009 separates canonical checkout identity and invalidates legacy allocations", () => {
+  const directory = fixtureDirectory();
+  const migrationsDir = path.join(directory, "migrations");
+  const sourceMigrations = path.resolve("../migrations");
+  fs.mkdirSync(migrationsDir);
+  for (const filename of fs
+    .readdirSync(sourceMigrations)
+    .filter(
+      (filename) => filename.endsWith(".sql") && !filename.startsWith("0009")
+    )) {
+    fs.copyFileSync(
+      path.join(sourceMigrations, filename),
+      path.join(migrationsDir, filename)
+    );
+  }
+  const database = new PoolMateDatabase(
+    path.join(directory, "poolmate.sqlite"),
+    migrationsDir
+  );
+  database.migrate();
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups VALUES
+         ('group-9', '-10009', 'Canonical group', ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode, target_units,
+          created_at, updated_at)
+         VALUES ('order-9', 'group-9', 'owner-9', 'Canonical order',
+          'CONFIRMATION_PENDING', 'sponsored_demo', 1, ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_participants
+         VALUES ('participant-9', 'order-9', 'user-9', 'Ada', 1, ?, ?)`
+      )
+      .run("2026-07-25T12:01:00.000Z", "2026-07-25T12:01:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_checkout_snapshots
+         (id, order_id, version, hash, merchant_id, merchant_display_name,
+          payee_id, asset_id, total_amount_atomic, expires_at, quote_reference,
+          created_at, hash_algorithm, canonicalization_version, is_canonical,
+          items_json, goods_amount_atomic, shipping_amount_atomic,
+          discount_amount_atomic, fee_amount_atomic)
+         VALUES ('legacy-checkout-9', 'order-9', 1, 'legacy-hash-9',
+          'merchant-demo', 'Merchant', 'payee-demo', 'USDC', '95', ?,
+          'legacy-quote-9', ?, 'SHA-256', 'poolmate-checkout-json-v1', 1,
+          '[{"sku":"unit","name":"Unit","quantity":"1","unitAmountAtomic":"89"}]',
+          '89', '6', '0', '0')`
+      )
+      .run("2026-07-25T12:20:00.000Z", "2026-07-25T12:02:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_allocations
+         VALUES ('allocation-9', 'legacy-checkout-9', 'participant-9', 'USDC',
+          '95', ?)`
+      )
+      .run("2026-07-25T12:02:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_user_confirmations
+         (id, checkout_id, participant_id, token_hash, status, created_at, updated_at)
+         VALUES ('confirmation-9', 'legacy-checkout-9', 'participant-9',
+          'token-9', 'pending', ?, ?)`
+      )
+      .run("2026-07-25T12:02:00.000Z", "2026-07-25T12:02:00.000Z");
+  });
+  fs.copyFileSync(
+    path.join(sourceMigrations, "0009_canonical_checkout_allocations.sql"),
+    path.join(migrationsDir, "0009_canonical_checkout_allocations.sql")
+  );
+  database.migrate();
+  database.read((connection) => {
+    assert.deepEqual(
+      connection
+        .prepare(
+          `SELECT checkout_id, source_protocol, is_canonical
+           FROM pm_checkout_snapshots WHERE id = 'legacy-checkout-9'`
+        )
+        .get(),
+      {
+        checkout_id: "legacy-checkout-9",
+        source_protocol: "MOCK",
+        is_canonical: 0
+      }
+    );
+    assert.deepEqual(
+      connection
+        .prepare(
+          `SELECT strategy, status, goods_amount_atomic, shipping_amount_atomic,
+                  discount_amount_atomic, fee_amount_atomic
+           FROM pm_allocations WHERE id = 'allocation-9'`
+        )
+        .get(),
+      {
+        strategy: "BY_QUANTITY",
+        status: "INVALIDATED",
+        goods_amount_atomic: "0",
+        shipping_amount_atomic: "0",
+        discount_amount_atomic: "0",
+        fee_amount_atomic: "0"
+      }
+    );
+    assert.equal(
+      (
+        connection
+          .prepare("SELECT state FROM pm_orders WHERE id = 'order-9'")
+          .get() as { state: string }
+      ).state,
+      "QUOTE_PENDING"
+    );
+    assert.deepEqual(connection.pragma("foreign_key_check"), []);
+  });
+  database.close();
+});

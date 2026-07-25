@@ -88,6 +88,7 @@ export const checkoutSnapshots = sqliteTable(
   "pm_checkout_snapshots",
   {
     id: text("id").primaryKey(),
+    checkoutId: text("checkout_id").notNull(),
     orderId: text("order_id")
       .notNull()
       .references(() => orders.id),
@@ -110,11 +111,16 @@ export const checkoutSnapshots = sqliteTable(
     shippingAmountAtomic: text("shipping_amount_atomic").notNull(),
     discountAmountAtomic: text("discount_amount_atomic").notNull(),
     feeAmountAtomic: text("fee_amount_atomic").notNull(),
-    requestHash: text("request_hash")
+    requestHash: text("request_hash"),
+    sourceProtocol: text("source_protocol").notNull()
   },
   (table) => [
     uniqueIndex("pm_checkout_order_version_unique_idx").on(
       table.orderId,
+      table.version
+    ),
+    uniqueIndex("pm_checkout_identity_version_idx").on(
+      table.checkoutId,
       table.version
     ),
     index("pm_checkout_order_version_idx").on(table.orderId, table.version)
@@ -133,6 +139,12 @@ export const allocations = sqliteTable(
       .references(() => participants.id),
     assetId: text("asset_id").notNull(),
     amountAtomic: text("amount_atomic").notNull(),
+    strategy: text("strategy").notNull(),
+    status: text("status").notNull(),
+    goodsAmountAtomic: text("goods_amount_atomic").notNull(),
+    shippingAmountAtomic: text("shipping_amount_atomic").notNull(),
+    discountAmountAtomic: text("discount_amount_atomic").notNull(),
+    feeAmountAtomic: text("fee_amount_atomic").notNull(),
     createdAt: text("created_at").notNull()
   },
   (table) => [

@@ -23,6 +23,7 @@ class BotQuoteProvider implements MerchantQuoteProvider {
     ).toString();
     return {
       checkoutId: `merchant-checkout-${request.orderId}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: request.merchantId,
         displayName: "Demo Merchant #001",

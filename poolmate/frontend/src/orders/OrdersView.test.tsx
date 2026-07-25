@@ -82,8 +82,10 @@ describe("orders console", () => {
     expect(screen.getByText("DUMPLING-BOX")).toBeVisible();
     expect(screen.getByText("1500 inj atomic", { selector: ".amount-breakdown__total dd" })).toBeVisible();
     expect(screen.getAllByText("1500 inj atomic")).toHaveLength(3);
-    expect(screen.getAllByText("500 inj atomic")).toHaveLength(2);
-    expect(screen.getByText("1000 inj atomic")).toBeVisible();
+    expect(screen.getAllByText("500 inj atomic")).toHaveLength(3);
+    expect(screen.getAllByText("1000 inj atomic")).toHaveLength(2);
+    expect(screen.getByText("allocation-1")).toBeVisible();
+    expect(screen.getAllByText("BY_QUANTITY").length).toBeGreaterThan(0);
     expect(screen.getByText("Sponsored demo / participants not funded")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Payment operation" })).toBeVisible();
     expect(screen.getByText("pmop_poolmate-order-1-checkout-1-v1")).toBeVisible();
@@ -338,7 +340,8 @@ describe("trusted confirmation surface", () => {
       await screen.findByRole("heading", { name: "500 inj atomic" })
     ).toBeVisible();
     expect(screen.getByText("Dumpling box")).toBeVisible();
-    expect(screen.getByText("1500 inj atomic", { selector: ".amount-breakdown__total dd" })).toBeVisible();
+    expect(screen.getByText("500 inj atomic", { selector: ".amount-breakdown__total dd" })).toBeVisible();
+    expect(screen.getByText("1500 inj atomic", { selector: ".confirmation-facts dd" })).toBeVisible();
     expect(screen.getByText("SHA-256")).toBeVisible();
     expect(screen.getByText("poolmate-checkout-json-v1")).toBeVisible();
     expect(screen.getByText("Sponsored demo")).toBeVisible();

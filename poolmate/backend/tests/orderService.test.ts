@@ -24,6 +24,7 @@ class ExactQuoteProvider implements MerchantQuoteProvider {
     this.calls += 1;
     return {
       checkoutId: `checkout:${request.orderId}:${this.calls}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: request.merchantId,
         displayName: "Verified Merchant",
@@ -303,7 +304,7 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
   database.immediate((connection) => {
     connection
       .prepare(
-        "UPDATE pm_checkout_snapshots SET request_hash = NULL WHERE id = ?"
+        "UPDATE pm_checkout_snapshots SET request_hash = NULL WHERE checkout_id = ?"
       )
       .run(first.order.checkout!.id);
   });
@@ -321,7 +322,7 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
         (
           connection
             .prepare(
-              "SELECT request_hash FROM pm_checkout_snapshots WHERE id = ?"
+              "SELECT request_hash FROM pm_checkout_snapshots WHERE checkout_id = ?"
             )
             .get(first.order.checkout!.id) as { request_hash: string | null }
         ).request_hash?.length

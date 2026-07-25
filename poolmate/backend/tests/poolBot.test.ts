@@ -113,19 +113,36 @@ const quotedOrder: OrderDetailView = {
       amountAtomic: "285000000"
     },
     expiresAt: "2026-07-25T10:20:00.000Z",
+    sourceProtocol: "MOCK",
     createdAt: "2026-07-25T10:10:00.000Z",
     allocations: [
       {
+        id: "allocation-1",
         participantId: "participant-1",
         displayName: "Alice",
         units: 1,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMATION_PENDING",
+        goods: { assetId: "USDC", amountAtomic: "89000000" },
+        shipping: { assetId: "USDC", amountAtomic: "6000000" },
+        discount: { assetId: "USDC", amountAtomic: "0" },
+        fee: { assetId: "USDC", amountAtomic: "0" },
+        total: { assetId: "USDC", amountAtomic: "95000000" },
         money: { assetId: "USDC", amountAtomic: "95000000" },
         confirmationStatus: "pending"
       },
       {
+        id: "allocation-2",
         participantId: "participant-2",
         displayName: "Bob",
         units: 2,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMATION_PENDING",
+        goods: { assetId: "USDC", amountAtomic: "178000000" },
+        shipping: { assetId: "USDC", amountAtomic: "12000000" },
+        discount: { assetId: "USDC", amountAtomic: "0" },
+        fee: { assetId: "USDC", amountAtomic: "0" },
+        total: { assetId: "USDC", amountAtomic: "190000000" },
         money: { assetId: "USDC", amountAtomic: "190000000" },
         confirmationStatus: "pending"
       }
@@ -825,6 +842,7 @@ test("quote summary reports declined confirmation without implying payment", asy
         allocation.participantId === "participant-1"
           ? {
               ...allocation,
+              status: "FAILED",
               confirmationStatus: "declined"
             }
           : allocation

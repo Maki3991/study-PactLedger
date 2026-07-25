@@ -1,11 +1,13 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import type {
+  AllocationStrategy,
   CheckoutItemView,
   FundingMode,
   OrderCancellationView,
   OrderDetailView,
   OrderState,
   PaymentOutboxView,
+  PaymentAllocationStatus,
   PaymentProjectionStatus,
   SettlementMode
 } from "@poolmate/shared";
@@ -60,6 +62,7 @@ export interface ParticipantRow {
 
 export interface CheckoutRow {
   id: string;
+  checkoutId: string;
   orderId: string;
   version: number;
   hash: string;
@@ -80,15 +83,23 @@ export interface CheckoutRow {
   quoteReference: string;
   sourceIdempotencyKey: string | null;
   requestHash: string | null;
+  sourceProtocol: "A2A" | "MOCK";
   createdAt: string;
 }
 
 export interface AllocationRow {
+  id: string;
   participantId: string;
   userId: string;
   displayName: string;
   units: number;
   assetId: string;
+  strategy: AllocationStrategy;
+  status: PaymentAllocationStatus;
+  goodsAmountAtomic: string;
+  shippingAmountAtomic: string;
+  discountAmountAtomic: string;
+  feeAmountAtomic: string;
   amountAtomic: string;
   confirmationStatus:
     | "pending"
@@ -103,6 +114,7 @@ export interface AllocationRow {
 export interface PaymentRequestRow {
   id: string;
   orderId: string;
+  checkoutSnapshotId: string;
   checkoutId: string;
   checkoutVersion: number;
   checkoutHash: string;
@@ -163,6 +175,13 @@ export interface ConfirmationLookupRow extends CheckoutRow {
   confirmationStatus: AllocationRow["confirmationStatus"];
   confirmedAt: string | null;
   declinedAt: string | null;
+  allocationId: string;
+  allocationStrategy: AllocationStrategy;
+  allocationStatus: PaymentAllocationStatus;
+  allocationGoodsAmountAtomic: string;
+  allocationShippingAmountAtomic: string;
+  allocationDiscountAmountAtomic: string;
+  allocationFeeAmountAtomic: string;
   allocationAmountAtomic: string;
 }
 
@@ -188,6 +207,12 @@ interface NewCheckout extends CheckoutRow {
     id: string;
     participantId: string;
     assetId: string;
+    strategy: AllocationStrategy;
+    status: PaymentAllocationStatus;
+    goodsAmountAtomic: string;
+    shippingAmountAtomic: string;
+    discountAmountAtomic: string;
+    feeAmountAtomic: string;
     amountAtomic: string;
     confirmationId: string;
     tokenHash: string;
@@ -268,6 +293,7 @@ function mapParticipant(row: ParticipantRecord): ParticipantRow {
 function mapCheckout(row: CheckoutRecord): CheckoutRow {
   return {
     id: row.id,
+    checkoutId: row.checkoutId,
     orderId: row.orderId,
     version: row.version,
     hash: row.hash,
@@ -289,15 +315,20 @@ function mapCheckout(row: CheckoutRecord): CheckoutRow {
     quoteReference: row.quoteReference,
     sourceIdempotencyKey: row.sourceIdempotencyKey,
     requestHash: row.requestHash,
+    sourceProtocol: row.sourceProtocol as "A2A" | "MOCK",
     createdAt: row.createdAt
   };
 }
 
-function mapPaymentRequest(row: PaymentRequestRecord): PaymentRequestRow {
+function mapPaymentRequest(
+  row: PaymentRequestRecord,
+  merchantCheckoutId: string
+): PaymentRequestRow {
   return {
     id: row.id,
     orderId: row.orderId,
-    checkoutId: row.checkoutId,
+    checkoutSnapshotId: row.checkoutId,
+    checkoutId: merchantCheckoutId,
     checkoutVersion: row.checkoutVersion,
     checkoutHash: row.checkoutHash,
     confirmationSetId: row.confirmationSetId,
@@ -649,6 +680,21 @@ export class OrderTransaction {
         )
       )
       .run();
+    this.connection
+      .update(allocationTable)
+      .set({ status: "INVALIDATED" })
+      .where(
+        and(
+          inArray(allocationTable.checkoutId, checkoutIds),
+          inArray(allocationTable.status, [
+            "CALCULATED",
+            "CONFIRMATION_PENDING",
+            "CONFIRMED",
+            "FAILED"
+          ])
+        )
+      )
+      .run();
   }
 
   insertCheckout(row: NewCheckout): void {
@@ -656,6 +702,7 @@ export class OrderTransaction {
       .insert(checkoutSnapshots)
       .values({
         id: row.id,
+        checkoutId: row.checkoutId,
         orderId: row.orderId,
         version: row.version,
         hash: row.hash,
@@ -676,6 +723,7 @@ export class OrderTransaction {
         quoteReference: row.quoteReference,
         sourceIdempotencyKey: row.sourceIdempotencyKey,
         requestHash: row.requestHash,
+        sourceProtocol: row.sourceProtocol,
         createdAt: row.createdAt
       })
       .run();
@@ -687,6 +735,12 @@ export class OrderTransaction {
           checkoutId: row.id,
           participantId: allocation.participantId,
           assetId: allocation.assetId,
+          strategy: allocation.strategy,
+          status: allocation.status,
+          goodsAmountAtomic: allocation.goodsAmountAtomic,
+          shippingAmountAtomic: allocation.shippingAmountAtomic,
+          discountAmountAtomic: allocation.discountAmountAtomic,
+          feeAmountAtomic: allocation.feeAmountAtomic,
           amountAtomic: allocation.amountAtomic,
           createdAt: row.createdAt
         })
@@ -729,11 +783,18 @@ export class OrderTransaction {
       .orderBy(asc(participantTable.joinedAt), asc(participantTable.id))
       .all()
       .map(({ participant, allocation, confirmation }) => ({
+        id: allocation.id,
         participantId: participant.id,
         userId: participant.userId,
         displayName: participant.displayName,
         units: participant.units,
         assetId: allocation.assetId,
+        strategy: allocation.strategy as AllocationStrategy,
+        status: allocation.status as PaymentAllocationStatus,
+        goodsAmountAtomic: allocation.goodsAmountAtomic,
+        shippingAmountAtomic: allocation.shippingAmountAtomic,
+        discountAmountAtomic: allocation.discountAmountAtomic,
+        feeAmountAtomic: allocation.feeAmountAtomic,
         amountAtomic: allocation.amountAtomic,
         confirmationStatus:
           confirmation.status as AllocationRow["confirmationStatus"],
@@ -744,7 +805,7 @@ export class OrderTransaction {
 
   paymentRequest(orderId: string): PaymentRequestRow | undefined {
     const row = this.connection
-      .select({ request: paymentRequests })
+      .select({ request: paymentRequests, checkout: checkoutSnapshots })
       .from(paymentRequests)
       .innerJoin(
         checkoutSnapshots,
@@ -759,16 +820,24 @@ export class OrderTransaction {
       .orderBy(desc(paymentRequests.createdAt))
       .limit(1)
       .get();
-    return row ? mapPaymentRequest(row.request) : undefined;
+    return row
+      ? mapPaymentRequest(row.request, row.checkout.checkoutId)
+      : undefined;
   }
 
   paymentRequestById(id: string): PaymentRequestRow | undefined {
     const row = this.connection
-      .select()
+      .select({ request: paymentRequests, checkout: checkoutSnapshots })
       .from(paymentRequests)
+      .innerJoin(
+        checkoutSnapshots,
+        eq(checkoutSnapshots.id, paymentRequests.checkoutId)
+      )
       .where(eq(paymentRequests.id, id))
       .get();
-    return row ? mapPaymentRequest(row) : undefined;
+    return row
+      ? mapPaymentRequest(row.request, row.checkout.checkoutId)
+      : undefined;
   }
 
   paymentProjection(
@@ -878,11 +947,26 @@ export class OrderTransaction {
         .status as ConfirmationLookupRow["confirmationStatus"],
       confirmedAt: row.confirmation.confirmedAt,
       declinedAt: row.confirmation.declinedAt,
+      allocationId: row.allocation.id,
+      allocationStrategy: row.allocation.strategy as AllocationStrategy,
+      allocationStatus: row.allocation.status as PaymentAllocationStatus,
+      allocationGoodsAmountAtomic: row.allocation.goodsAmountAtomic,
+      allocationShippingAmountAtomic: row.allocation.shippingAmountAtomic,
+      allocationDiscountAmountAtomic: row.allocation.discountAmountAtomic,
+      allocationFeeAmountAtomic: row.allocation.feeAmountAtomic,
       allocationAmountAtomic: row.allocation.amountAtomic
     };
   }
 
   expireConfirmation(id: string, now: string): void {
+    const confirmation = this.connection
+      .select({
+        checkoutId: userConfirmations.checkoutId,
+        participantId: userConfirmations.participantId
+      })
+      .from(userConfirmations)
+      .where(eq(userConfirmations.id, id))
+      .get();
     this.connection
       .update(userConfirmations)
       .set({ status: "expired", updatedAt: now })
@@ -893,10 +977,31 @@ export class OrderTransaction {
         )
       )
       .run();
+    if (confirmation) {
+      this.connection
+        .update(allocationTable)
+        .set({ status: "FAILED" })
+        .where(
+          and(
+            eq(allocationTable.checkoutId, confirmation.checkoutId),
+            eq(allocationTable.participantId, confirmation.participantId),
+            eq(allocationTable.status, "CONFIRMATION_PENDING")
+          )
+        )
+        .run();
+    }
   }
 
   confirm(id: string, actorUserId: string, now: string): boolean {
-    return (
+    const confirmation = this.connection
+      .select({
+        checkoutId: userConfirmations.checkoutId,
+        participantId: userConfirmations.participantId
+      })
+      .from(userConfirmations)
+      .where(eq(userConfirmations.id, id))
+      .get();
+    const changed =
       this.connection
         .update(userConfirmations)
         .set({
@@ -912,12 +1017,33 @@ export class OrderTransaction {
             eq(userConfirmations.status, "pending")
           )
         )
-        .run().changes > 0
-    );
+        .run().changes > 0;
+    if (changed && confirmation) {
+      this.connection
+        .update(allocationTable)
+        .set({ status: "CONFIRMED" })
+        .where(
+          and(
+            eq(allocationTable.checkoutId, confirmation.checkoutId),
+            eq(allocationTable.participantId, confirmation.participantId),
+            eq(allocationTable.status, "CONFIRMATION_PENDING")
+          )
+        )
+        .run();
+    }
+    return changed;
   }
 
   decline(id: string, actorUserId: string, now: string): boolean {
-    return (
+    const confirmation = this.connection
+      .select({
+        checkoutId: userConfirmations.checkoutId,
+        participantId: userConfirmations.participantId
+      })
+      .from(userConfirmations)
+      .where(eq(userConfirmations.id, id))
+      .get();
+    const changed =
       this.connection
         .update(userConfirmations)
         .set({
@@ -933,8 +1059,21 @@ export class OrderTransaction {
             eq(userConfirmations.status, "pending")
           )
         )
-        .run().changes > 0
-    );
+        .run().changes > 0;
+    if (changed && confirmation) {
+      this.connection
+        .update(allocationTable)
+        .set({ status: "FAILED" })
+        .where(
+          and(
+            eq(allocationTable.checkoutId, confirmation.checkoutId),
+            eq(allocationTable.participantId, confirmation.participantId),
+            eq(allocationTable.status, "CONFIRMATION_PENDING")
+          )
+        )
+        .run();
+    }
+    return changed;
   }
 
   rotateConfirmationToken(
@@ -1055,7 +1194,23 @@ export class OrderTransaction {
     return (
       this.connection
         .insert(paymentRequests)
-        .values(row)
+        .values({
+          id: row.id,
+          orderId: row.orderId,
+          checkoutId: row.checkoutSnapshotId,
+          checkoutVersion: row.checkoutVersion,
+          checkoutHash: row.checkoutHash,
+          confirmationSetId: row.confirmationSetId,
+          idempotencyKey: row.idempotencyKey,
+          payerRef: row.payerRef,
+          payeeId: row.payeeId,
+          assetId: row.assetId,
+          amountAtomic: row.amountAtomic,
+          expiresAt: row.expiresAt,
+          status: row.status,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt
+        })
         .onConflictDoNothing()
         .run().changes > 0
     );
@@ -1075,6 +1230,7 @@ export class OrderTransaction {
     if (
       request.idempotencyKey !== input.paymentRequest.idempotencyKey ||
       request.orderId !== input.paymentRequest.orderId ||
+      request.checkoutSnapshotId !== input.paymentRequest.checkoutSnapshotId ||
       request.checkoutId !== input.paymentRequest.checkoutId
     ) {
       throw new Error("Payment request identity conflict.");
@@ -1290,6 +1446,27 @@ export class OrderTransaction {
       })
       .where(eq(outbox.paymentRequestId, paymentRequestId))
       .run();
+    if (update.projectionStatus === "CONFIRMED") {
+      this.connection
+        .update(allocationTable)
+        .set({ status: "CAPTURED" })
+        .where(eq(allocationTable.checkoutId, request.checkoutSnapshotId))
+        .run();
+    } else if (update.projectionStatus === "FAILED") {
+      this.connection
+        .update(allocationTable)
+        .set({ status: "FAILED" })
+        .where(
+          and(
+            eq(allocationTable.checkoutId, request.checkoutSnapshotId),
+            inArray(allocationTable.status, [
+              "CONFIRMATION_PENDING",
+              "CONFIRMED"
+            ])
+          )
+        )
+        .run();
+    }
     this.updateOrderState(request.orderId, update.orderState, update.now);
   }
 

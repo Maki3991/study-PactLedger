@@ -14,6 +14,7 @@ export type {
 
 export type {
   AllocationConfirmationStatus,
+  AllocationStrategy,
   AllocationView,
   AtomicMoney,
   CheckoutView,
@@ -34,6 +35,7 @@ export type {
   OrderState,
   OrderSummaryView,
   ParticipantView,
+  PaymentAllocationStatus,
   PaymentOutboxView,
   PaymentProjectionStatus,
   PaymentProjectionView,

@@ -65,6 +65,7 @@ function openFixture(databasePath?: string) {
     async getQuote(request) {
       return {
         checkoutId: `checkout-${request.orderId}`,
+        sourceProtocol: "MOCK" as const,
         merchant: {
           id: "merchant-demo",
           displayName: "Verified Merchant",

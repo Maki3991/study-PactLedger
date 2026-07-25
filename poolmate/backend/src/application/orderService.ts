@@ -19,7 +19,7 @@ import type {
   PoolMatePaymentRequest,
   UpdateClaimRequest
 } from "@poolmate/shared";
-import { allocateExactly, parseAtomicAmount } from "../domain/allocation.js";
+import { allocateCheckout, parseAtomicAmount } from "../domain/allocation.js";
 import { hashCheckout } from "../domain/checkoutHash.js";
 import { DomainError } from "../domain/domainError.js";
 import type {
@@ -128,6 +128,13 @@ function validateQuote(
     "quoteReference",
     256
   );
+  if (quote.sourceProtocol !== "A2A" && quote.sourceProtocol !== "MOCK") {
+    throw new DomainError(
+      "INVALID_CHECKOUT",
+      "The merchant quote source protocol is unsupported.",
+      422
+    );
+  }
   const merchant = {
     id: requireText(quote.merchant.id, "merchantId", 64),
     displayName: requireText(
@@ -223,6 +230,7 @@ function validateQuote(
 
   return {
     checkoutId,
+    sourceProtocol: quote.sourceProtocol,
     merchant,
     items,
     assetId,
@@ -719,8 +727,15 @@ export class OrderService {
           "Participant claims changed before checkout was saved."
         );
       }
-      const allocations = allocateExactly(
-        { assetId: quote.assetId, amountAtomic: quote.totalAmountAtomic },
+      const allocations = allocateCheckout(
+        {
+          assetId: quote.assetId,
+          goodsAmountAtomic: quote.goodsAmountAtomic,
+          shippingAmountAtomic: quote.shippingAmountAtomic,
+          discountAmountAtomic: quote.discountAmountAtomic,
+          feeAmountAtomic: quote.feeAmountAtomic,
+          totalAmountAtomic: quote.totalAmountAtomic
+        },
         participants.map((participant) => ({
           id: participant.id,
           units: participant.units
@@ -741,13 +756,17 @@ export class OrderService {
         feeAmountAtomic: quote.feeAmountAtomic,
         totalAmountAtomic: quote.totalAmountAtomic,
         expiresAt: quote.expiresAt,
-        allocations
+        sourceProtocol: quote.sourceProtocol
       });
       const now = this.now().toISOString();
-      const checkoutId = quote.checkoutId;
+      const checkoutSnapshotId = stableId(
+        "pmco",
+        `${order.id}:${version}:${quote.checkoutId}`
+      );
       transaction.supersedeConfirmations(order.id, now);
       transaction.insertCheckout({
-        id: checkoutId,
+        id: checkoutSnapshotId,
+        checkoutId: quote.checkoutId,
         orderId: order.id,
         version,
         hash: hash.value,
@@ -768,6 +787,7 @@ export class OrderService {
         quoteReference: quote.quoteReference,
         sourceIdempotencyKey: normalizedSourceKey,
         requestHash,
+        sourceProtocol: quote.sourceProtocol,
         createdAt: now,
         allocations: allocations.map((allocation) => {
           const token = tokenByParticipant.get(allocation.participantId);
@@ -781,6 +801,12 @@ export class OrderService {
             id: this.createId(),
             participantId: allocation.participantId,
             assetId: allocation.money.assetId,
+            strategy: allocation.strategy,
+            status: allocation.status,
+            goodsAmountAtomic: allocation.goodsAmountAtomic,
+            shippingAmountAtomic: allocation.shippingAmountAtomic,
+            discountAmountAtomic: allocation.discountAmountAtomic,
+            feeAmountAtomic: allocation.feeAmountAtomic,
             amountAtomic: allocation.money.amountAtomic,
             confirmationId: this.createId(),
             tokenHash: tokenHash(token)
@@ -1191,7 +1217,8 @@ export class OrderService {
             paymentRequest: {
               id: paymentRequestId,
               orderId: row.orderId,
-              checkoutId: row.id,
+              checkoutSnapshotId: row.id,
+              checkoutId: row.checkoutId,
               checkoutVersion: row.version,
               checkoutHash: row.hash,
               confirmationSetId,
@@ -1373,7 +1400,7 @@ export class OrderService {
     checkout: CheckoutRow
   ): CheckoutView {
     return {
-      id: checkout.id,
+      id: checkout.checkoutId,
       version: checkout.version,
       hash: {
         algorithm: checkout.hashAlgorithm,
@@ -1408,11 +1435,35 @@ export class OrderService {
         amountAtomic: checkout.totalAmountAtomic
       },
       expiresAt: checkout.expiresAt,
+      sourceProtocol: checkout.sourceProtocol,
       createdAt: checkout.createdAt,
       allocations: transaction.allocations(checkout.id).map((allocation) => ({
+        id: allocation.id,
         participantId: allocation.participantId,
         displayName: allocation.displayName,
         units: allocation.units,
+        strategy: allocation.strategy,
+        status: allocation.status,
+        goods: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.goodsAmountAtomic
+        },
+        shipping: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.shippingAmountAtomic
+        },
+        discount: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.discountAmountAtomic
+        },
+        fee: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.feeAmountAtomic
+        },
+        total: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.amountAtomic
+        },
         money: {
           assetId: allocation.assetId,
           amountAtomic: allocation.amountAtomic
@@ -1432,8 +1483,12 @@ export class OrderService {
     return {
       orderId: row.orderId,
       orderTitle: row.orderTitle,
+      checkoutId: row.checkoutId,
       participantDisplayName: row.participantDisplayName,
       participantUnits: row.participantUnits,
+      allocationId: row.allocationId,
+      allocationStrategy: row.allocationStrategy,
+      allocationStatus: row.allocationStatus,
       checkoutVersion: row.version,
       checkoutHash: {
         algorithm: row.hashAlgorithm,
@@ -1449,19 +1504,19 @@ export class OrderService {
       items: row.items,
       goods: {
         assetId: row.assetId,
-        amountAtomic: row.goodsAmountAtomic
+        amountAtomic: row.allocationGoodsAmountAtomic
       },
       shipping: {
         assetId: row.assetId,
-        amountAtomic: row.shippingAmountAtomic
+        amountAtomic: row.allocationShippingAmountAtomic
       },
       discount: {
         assetId: row.assetId,
-        amountAtomic: row.discountAmountAtomic
+        amountAtomic: row.allocationDiscountAmountAtomic
       },
       fee: {
         assetId: row.assetId,
-        amountAtomic: row.feeAmountAtomic
+        amountAtomic: row.allocationFeeAmountAtomic
       },
       orderTotal: {
         assetId: row.assetId,

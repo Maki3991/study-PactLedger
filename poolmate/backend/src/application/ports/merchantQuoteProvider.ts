@@ -8,6 +8,7 @@ export interface MerchantQuoteRequest {
 
 export interface MerchantQuote {
   checkoutId: string;
+  sourceProtocol: "A2A" | "MOCK";
   merchant: MerchantView;
   items: CheckoutItemView[];
   assetId: string;
