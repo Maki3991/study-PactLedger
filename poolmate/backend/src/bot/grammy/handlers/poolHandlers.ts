@@ -86,7 +86,7 @@ function progressBar(claimed: number, expected: number): string {
   const width = 8;
   const ratio = expected > 0 ? Math.min(Math.max(claimed / expected, 0), 1) : 0;
   const filled = Math.round(ratio * width);
-  return `${"▰".repeat(filled)}${"▱".repeat(width - filled)}`;
+  return `${"●".repeat(filled)}${"○".repeat(width - filled)}`;
 }
 
 function orderStateLabel(state: OrderDetailView["state"]): string {
@@ -103,7 +103,11 @@ function orderStateLabel(state: OrderDetailView["state"]): string {
     PAYMENT_UNKNOWN: "🟠 结果待确认",
     CANCELED: "⚫ 已关闭"
   };
-  return `${labels[state]} · <code>${state}</code>`;
+  const label = labels[state];
+  const separator = label.indexOf(" ");
+  const emoji = label.slice(0, separator);
+  const text = label.slice(separator + 1);
+  return `${emoji} <b>${text}</b> · <code>${state}</code>`;
 }
 
 function quantityStatus(order: OrderDetailView): string {
@@ -121,7 +125,7 @@ function participantLines(order: OrderDetailView): string[] {
   }
   const visible = order.participants.slice(0, 6).map((participant) => {
     const name = escapeTelegramHtml(compactText(participant.displayName, 48));
-    return `· ${name} — <b>${participant.units} ${unit}</b>`;
+    return `· ${name} · <b>${participant.units} ${unit}</b>`;
   });
   const remaining = order.participants.length - visible.length;
   return [
@@ -259,14 +263,15 @@ function purchaseIntentLines(order: OrderDetailView): string[] {
   return [
     "🧭 <b>采购意图</b> · 用户提供",
     `· 商品 · ${escapeTelegramHtml(itemName)} × ${item?.quantity ?? order.targetUnits} ${escapeTelegramHtml(unit)}`,
-    `· 渠道 · ${escapeTelegramHtml(channel)} ｜ 店铺 · ${escapeTelegramHtml(store)}`,
+    `· 渠道 · ${escapeTelegramHtml(channel)}`,
+    `· 店铺 · ${escapeTelegramHtml(store)}`,
     `· 参考价 · ${escapeTelegramHtml(price)}`,
     `· 链接 · <code>${escapeTelegramHtml(link)}</code>`
   ];
 }
 
 function originLine(actorRef: string, startedAt: string): string {
-  return `👤 ${escapeTelegramHtml(actorRef)} · 发起时间 · ${escapeTelegramHtml(formatCardTime(startedAt))}`;
+  return `👤 ${escapeTelegramHtml(actorRef)} · 🕒 ${escapeTelegramHtml(formatCardTime(startedAt))}`;
 }
 
 function processingCardMessage(input: {
@@ -275,15 +280,15 @@ function processingCardMessage(input: {
   requestText: string;
 }): string {
   return [
-    "⏳ <b>PoolMate 正在创建拼单</b>",
-    `<code>PARSING</code> · 已收到群内请求 · 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
+    "⏳ <b>PoolMate 正在创建拼单</b> · <code>PARSING</code>",
+    `👤 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
     `🕒 发起时间 · ${escapeTelegramHtml(formatCardTime(input.startedAt))}`,
     "",
     `<blockquote>${escapeTelegramHtml(compactText(input.requestText))}</blockquote>`,
     "",
-    "▰▰▰▱▱▱▱▱ 正在识别商品、数量、渠道、店铺与链接…",
+    "●●●○○○○○○ 正在识别商品、数量、渠道、店铺与链接…",
     "",
-    "<i>🔒 资金状态 · 无 Checkout · 无付款确认 · 无扣款</i>"
+    "<i>🔒 无 Checkout · 无付款确认 · 无扣款</i>"
   ].join("\n");
 }
 
@@ -319,8 +324,10 @@ function draftIssueCard(input: {
 }): string {
   const failed = input.kind === "failed";
   return [
-    failed ? "❌ <b>暂时无法创建拼单</b>" : "⚠️ <b>还差一点信息</b>",
-    `<code>${failed ? "PARSE_FAILED" : "NEEDS_INFO"}</code> · 未创建订单 · 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
+    failed
+      ? "❌ <b>暂时无法创建拼单</b> · <code>PARSE_FAILED</code>"
+      : "⚠️ <b>还差一点信息</b> · <code>NEEDS_INFO</code>",
+    `👤 发起人 · ${escapeTelegramHtml(input.actorRef)}`,
     `🕒 发起时间 · ${escapeTelegramHtml(formatCardTime(input.startedAt))}`,
     "",
     `<blockquote>${escapeTelegramHtml(compactText(input.detail, 600))}</blockquote>`,
@@ -541,7 +548,8 @@ async function deliverConfirmationLinks(
     deliveryKind === "quote"
       ? "🧾 <b>最终报价已生成</b>"
       : "🔔 <b>确认提醒已发送</b>",
-    `单号 <code>${escapeTelegramHtml(result.order.id)}</code> · Checkout v${result.order.checkout?.version ?? "?"} · ${orderStateLabel(result.order.state)}`,
+    `单号 <code>${escapeTelegramHtml(result.order.id)}</code> · Checkout v${result.order.checkout?.version ?? "?"}`,
+    orderStateLabel(result.order.state),
     "",
     `${progressBar(confirmationCounts.confirmed, confirmationTotal)} <b>${confirmationCounts.confirmed} / ${confirmationTotal} 已确认</b>`,
     `✅ ${confirmationCounts.confirmed} 已确认 · ⏳ ${confirmationCounts.pending} 待确认 · ✕ ${confirmationCounts.declined} 已拒绝`,

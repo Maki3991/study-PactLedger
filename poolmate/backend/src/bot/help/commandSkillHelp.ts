@@ -13,13 +13,23 @@ export function helpCommandPayload(text: string): string {
 }
 
 export function formatGeneralHelp(): string {
+  const regular = POOLMATE_HELP_SKILLS.filter((skill) => !skill.debug);
+  const debug = POOLMATE_HELP_SKILLS.filter((skill) => skill.debug);
+  const formatSkill = (skill: PoolMateHelpSkill): string =>
+    `${skill.command}\n${skill.description}`;
   return [
     "PoolMate help",
     "Use natural language by mentioning @PoolMate, or use commands directly.",
     "",
-    ...POOLMATE_HELP_SKILLS.map(
-      (skill) => `${skill.command}\n${skill.description}`
-    ),
+    regular.map(formatSkill).join("\n\n"),
+    ...(debug.length > 0
+      ? [
+          "",
+          "Debug commands (demo only):",
+          "",
+          debug.map(formatSkill).join("\n\n")
+        ]
+      : []),
     "",
     "Ask /pool_help <what you want to do> and PoolMate will call the matching command skill."
   ].join("\n");
@@ -34,7 +44,9 @@ export function formatSkillHelp(
     skill.command,
     "",
     skill.description,
-    `Examples: ${skill.examples.join(" | ")}`
+    "",
+    "Examples:",
+    ...skill.examples.map((example) => `- ${example}`)
   ].join("\n");
 }
 

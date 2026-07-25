@@ -34,9 +34,9 @@ function hasVerifiableReceipt(
 
 export function formatPoolMateStatus(view: PoolMateStatusView): string {
   return [
-    "PoolMate status",
-    `Bot: ${view.bot}`,
-    `Natural-language drafts: ${view.llm}`
+    "🤖 PoolMate status",
+    `· Bot: ${view.bot}`,
+    `· Natural-language drafts: ${view.llm}`
   ].join("\n");
 }
 
