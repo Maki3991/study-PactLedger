@@ -602,20 +602,23 @@ interface OrderDraftExtraction {
   targetUnits: number | null;
   unit: string | null;
   purchaseChannelHint: string | null;
+  storeNameHint: string | null;
+  merchantLinkHint: string | null;
   userPriceHint: string | null;
-  missingFields: Array<"title" | "itemName" | "targetUnits">;
+  missingFields: Array<"itemName" | "targetUnits">;
   ambiguousFields: Array<
-    | "title"
     | "itemName"
     | "targetUnits"
     | "unit"
     | "purchaseChannelHint"
+    | "storeNameHint"
+    | "merchantLinkHint"
     | "userPriceHint"
   >;
 }
 ```
 
-采购渠道和用户参考价只是不可信业务意图。任何 merchant、payee、asset、final amount、Checkout、确认、付款、状态等额外字段，以及拒绝、超时、非 2xx、无效 JSON、必填字段缺失或歧义，都会 fail closed。LLM 输出只创建 `DRAFT`；只有发起人点击 `Confirm & publish` 才进入 `COLLECTING`。`Discard draft` 使用确定性取消服务并留下持久化取消证据。
+自然语言的必填字段只有 `itemName` 和 `targetUnits`。`title` 只是展示字段，用户未明确提供时由服务端根据商品名确定性生成，例如“可乐拼单”，不得作为缺失或歧义字段阻止创建。采购渠道、店铺、链接和用户参考价只是不可信业务意图。任何 merchant、payee、asset、final amount、Checkout、确认、付款、状态等额外字段，以及拒绝、超时、非 2xx、无效 JSON、必填字段缺失或歧义，都会 fail closed。LLM 输出只创建 `DRAFT`；只有发起人点击 `Confirm & publish` 才进入 `COLLECTING`。`Discard draft` 使用确定性取消服务并留下持久化取消证据。
 
 ---
 
@@ -630,13 +633,15 @@ interface OrderDraftExtraction {
   targetUnits: number | null;
   unit: string | null;
   purchaseChannelHint: string | null;
+  storeNameHint: string | null;
+  merchantLinkHint: string | null;
   userPriceHint: string | null;
-  missingFields: Array<"title" | "itemName" | "targetUnits">;
+  missingFields: Array<"itemName" | "targetUnits">;
   ambiguousFields: string[];
 }
 ```
 
-模型输出只生成 Draft Patch。它可以保留用户明确说出的渠道偏好和参考价，但不能生成可信商户、资产、最终金额、payee、确认或状态。
+模型输出只生成 Draft Patch。它可以保留用户明确说出的渠道偏好、店铺、链接和参考价，但不能生成可信商户、资产、最终金额、payee、确认或状态。展示标题不属于用户必填意图，缺失时由服务端派生。
 
 应用收到结果后必须执行 Zod 校验。
 

@@ -148,6 +148,54 @@ test("extractor accepts explicit missing fields without inventing an order", asy
   });
 });
 
+test("extractor derives a display title instead of requiring it from the user", async () => {
+  const extractor = createOrderDraftExtractor({
+    enabled: true,
+    provider: "deepseek",
+    baseUrl: "https://aiping.cn/api/v1",
+    apiKey: "provider-secret",
+    model: "DeepSeek-V3.2",
+    transport: {
+      async send() {
+        return {
+          status: 200,
+          body: chatCompletionWithDraft({
+            title: null,
+            itemName: "可乐",
+            targetUnits: 2,
+            unit: "瓶",
+            purchaseChannelHint: "淘宝外卖",
+            storeNameHint: null,
+            merchantLinkHint: null,
+            userPriceHint: null,
+            missingFields: ["title"],
+            ambiguousFields: []
+          })
+        };
+      }
+    }
+  });
+
+  assert.deepEqual(
+    await extractor.extract({
+      text: "我们要2瓶可乐，淘宝外卖",
+      locale: "zh"
+    }),
+    {
+      title: "可乐拼单",
+      itemName: "可乐",
+      targetUnits: 2,
+      unit: "瓶",
+      purchaseChannelHint: "淘宝外卖",
+      storeNameHint: null,
+      merchantLinkHint: null,
+      userPriceHint: null,
+      missingFields: [],
+      ambiguousFields: []
+    }
+  );
+});
+
 test("OpenAI-compatible chat completions preserve purchase-channel intent", async () => {
   let captured: OrderDraftHttpTransportRequest | undefined;
   const extractor = createOrderDraftExtractor({

@@ -1,10 +1,6 @@
 import type { LlmStatus } from "@poolmate/shared";
 
-export const ORDER_DRAFT_REQUIRED_FIELDS = [
-  "title",
-  "itemName",
-  "targetUnits"
-] as const;
+export const ORDER_DRAFT_REQUIRED_FIELDS = ["itemName", "targetUnits"] as const;
 
 export const ORDER_DRAFT_OPTIONAL_FIELDS = [
   "unit",

@@ -168,7 +168,7 @@ Bot 立即发送一张处理中卡片，不等待 LLM 完成，也不创建付�
 
 1. grammY Adapter 验证消息位于群聊，并且 Telegram `mention` entity 明确指向当前 Bot。
 2. Bot 先发送可编辑的处理卡，并记录发起人、发起时间、原始文本和 Telegram message/update id。
-3. 设置 `AIPING_API_KEY` 后，直接 HTTPS LLM Adapter 自动使用 `DeepSeek-V3.2`，提取标题、商品、期望数量、单位、采购渠道偏好、店铺名、可选链接和用户参考价。
+3. 设置 `AIPING_API_KEY` 后，直接 HTTPS LLM Adapter 自动使用 `DeepSeek-V3.2`，提取可选展示标题、商品、期望数量、单位、采购渠道偏好、店铺名、可选链接和用户参考价。自然语言只要求商品和期望数量；未明确展示标题时，服务端按商品生成，例如“可乐拼单”。
 4. Structured Output 经过 strict JSON Schema 和 Zod 校验；任何 merchant/payee/final amount 等付款事实字段、缺失、歧义、拒绝或超时都会 fail closed。
 5. 使用 Telegram update ID 形成来源幂等键。
 6. 解析尚未成功前不写入 Checkout、确认或付款状态。

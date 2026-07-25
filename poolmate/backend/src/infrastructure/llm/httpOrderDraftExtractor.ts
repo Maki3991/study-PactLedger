@@ -12,7 +12,11 @@ import {
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
-const draftFieldSchema = z.enum(ORDER_DRAFT_FIELDS);
+const modelMissingFieldSchema = z.enum([
+  "title",
+  ...ORDER_DRAFT_REQUIRED_FIELDS
+]);
+const modelAmbiguousFieldSchema = z.enum(["title", ...ORDER_DRAFT_FIELDS]);
 const draftExtractionSchema = z
   .object({
     title: z.string().trim().min(1).max(120).nullable(),
@@ -24,9 +28,11 @@ const draftExtractionSchema = z
     merchantLinkHint: z.string().trim().min(1).max(512).nullable(),
     userPriceHint: z.string().trim().min(1).max(80).nullable(),
     missingFields: z
-      .array(z.enum(ORDER_DRAFT_REQUIRED_FIELDS))
-      .max(ORDER_DRAFT_REQUIRED_FIELDS.length),
-    ambiguousFields: z.array(draftFieldSchema).max(ORDER_DRAFT_FIELDS.length)
+      .array(modelMissingFieldSchema)
+      .max(ORDER_DRAFT_REQUIRED_FIELDS.length + 1),
+    ambiguousFields: z
+      .array(modelAmbiguousFieldSchema)
+      .max(ORDER_DRAFT_FIELDS.length + 1)
   })
   .strict()
   .superRefine((value, context) => {
@@ -53,7 +59,7 @@ const draftExtractionSchema = z
         });
       }
     }
-    for (const field of ORDER_DRAFT_FIELDS) {
+    for (const field of ["title", ...ORDER_DRAFT_FIELDS] as const) {
       if (ambiguous.has(field) && value[field] !== null) {
         context.addIssue({
           code: "custom",
@@ -123,7 +129,8 @@ const structuredOutputSchema = {
 
 const EXTRACTION_INSTRUCTIONS = [
   "Extract one PoolMate single-item group-purchase draft from the user's Telegram message.",
-  "The title is a short group-purchase title and itemName is the requested product.",
+  "itemName is the requested product.",
+  "The title is only a short display label, never required user input. Preserve an explicitly stated title; otherwise set title to null because the server derives it from itemName. Never list title in missingFields or ambiguousFields.",
   "targetUnits is the explicitly requested total positive integer quantity.",
   "unit is the explicitly stated quantity unit such as 瓶, 箱, 杯, 份, or null when omitted.",
   "purchaseChannelHint preserves an explicitly stated shopping channel such as 美团外卖, 饿了么, 京东到家, 盒马, or null when omitted.",
@@ -322,7 +329,10 @@ class HttpOrderDraftExtractor implements OrderDraftExtractor {
         if (response.status < 200 || response.status >= 300) {
           throw unavailable("The LLM endpoint rejected the draft request.");
         }
-        const extraction = decodeResponse(response.body);
+        const extraction = normalizeExtraction(
+          decodeResponse(response.body),
+          request.locale
+        );
         this.status = "configured";
         return extraction;
       } catch (error) {
@@ -459,7 +469,7 @@ function validateMaxInput(value: number | undefined): number {
   return maxInput;
 }
 
-function decodeResponse(body: string): OrderDraftExtraction {
+function decodeResponse(body: string): z.infer<typeof draftExtractionSchema> {
   if (Buffer.byteLength(body, "utf8") > MAX_RESPONSE_BYTES) {
     throw invalidResponse("The LLM response was too large.");
   }
@@ -486,6 +496,37 @@ function decodeResponse(body: string): OrderDraftExtraction {
     );
   }
   return parsed.data;
+}
+
+function normalizeExtraction(
+  extraction: z.infer<typeof draftExtractionSchema>,
+  locale: string | undefined
+): OrderDraftExtraction {
+  const missingFields = extraction.missingFields.filter(
+    (field): field is (typeof ORDER_DRAFT_REQUIRED_FIELDS)[number] =>
+      field !== "title"
+  );
+  const ambiguousFields = extraction.ambiguousFields.filter(
+    (field): field is (typeof ORDER_DRAFT_FIELDS)[number] => field !== "title"
+  );
+  return {
+    ...extraction,
+    title:
+      extraction.title ??
+      (extraction.itemName
+        ? defaultDraftTitle(extraction.itemName, locale)
+        : null),
+    missingFields,
+    ambiguousFields
+  };
+}
+
+function defaultDraftTitle(itemName: string, locale: string | undefined) {
+  const suffix =
+    locale?.toLowerCase().startsWith("zh") || /[\u3400-\u9fff]/u.test(itemName)
+      ? "拼单"
+      : " pool";
+  return `${itemName.slice(0, 120 - suffix.length)}${suffix}`;
 }
 
 function responseOutputText(value: Record<string, unknown>): string {

@@ -171,7 +171,7 @@ PoolMate 的 Telegram 指令说明由一个明确的 Markdown skill 维护：`po
 | 运行状态 | `/status` | 查看 Telegram Bot 与自然语言解析运行状态。 |
 | 帮助 | `/help` | 展示完整命令清单。 |
 | LLM skill calling | `/pool_help <用户请求>` | 先用 LLM 按 Markdown skill 调用用户意图对应的 command skill，再用本地关键词兜底推荐命令；不会执行高风险命令或推断订单 ID。 |
-| 创建拼单 | `@PoolMate ...` / `/pool_new <expectedUnits> <title>` | 自然语言立即展示处理中卡片，解析完成后同卡片进入认领；命令入口用于无 LLM 或解析失败时。 |
+| 创建拼单 | `@PoolMate ...` / `/pool_new <expectedUnits> <title>` | 自然语言只要求明确商品和期望数量；展示标题未明确时由服务端根据商品生成。Bot 立即展示处理中卡片，解析完成后同卡片进入认领；命令入口用于无 LLM 或解析失败时。 |
 | 认领 | `/pool_claim <orderId> [units]` | 在 `COLLECTING` 阶段认领或调整数量。 |
 | 退出 | `/pool_leave <orderId>` | 锁单前移除自己的认领。 |
 | 报价 | `/pool_quote <orderId>` | 发起人按当前实际份额锁单并请求最终 Checkout。 |
@@ -581,7 +581,7 @@ A2A 不负责定义：
 9. 支付状态未知时不得重复付款。
 10. 群内不得展示完整钱包地址、签名或敏感付款凭证。
 11. 设置服务端 `AIPING_API_KEY` 时自然语言能力自动使用普通模型 `DeepSeek-V3.2`；未设置、显式关闭或不可用时，命令流程必须继续工作。
-12. LLM 只允许返回标题、商品、期望数量、单位、采购渠道偏好、店铺/链接、用户参考价和缺失/歧义分类；任何 merchant、payee、asset、final amount、Checkout、确认、付款或状态字段都必须拒绝。
+12. LLM 只允许返回可选展示标题、商品、期望数量、单位、采购渠道偏好、店铺/链接、用户参考价和缺失/歧义分类；自然语言的用户必填信息只有商品和期望数量，展示标题缺失时由服务端根据商品确定性生成。任何 merchant、payee、asset、final amount、Checkout、确认、付款或状态字段都必须拒绝。
 13. LLM 输出不得决定可信状态；只有确定性服务在校验结果完整后，才能把处理中卡片更新为 `COLLECTING` 可认领卡片。
 14. 发起人或受保护的管理员只能在 `DRAFT`、`COLLECTING`、`QUOTE_PENDING`、`CONFIRMATION_PENDING`、`READY_FOR_PAYMENT` 且付款尚未提交时关闭拼单。
 15. 关闭拼单必须持久化取消证据、使待处理确认失效，并且不得伪造 Settlement 或 Receipt。
