@@ -113,8 +113,12 @@ detect_existing_env_file() {
 }
 
 if [[ -z "$env_file" ]]; then
-  env_file="$(detect_existing_env_file)"
-  env_file="${env_file:-$default_env_file}"
+  if [[ -f "$default_env_file" ]]; then
+    env_file="$default_env_file"
+  else
+    env_file="$(detect_existing_env_file)"
+    env_file="${env_file:-$default_env_file}"
+  fi
 elif [[ "$env_file" != /* ]]; then
   env_file="$(resolve_path "$env_file")"
 fi
