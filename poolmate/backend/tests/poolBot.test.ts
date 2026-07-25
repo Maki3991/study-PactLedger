@@ -4,15 +4,19 @@ import type { OrderDetailView } from "@poolmate/shared";
 import {
   claimCallbackData,
   closeCallbackData,
+  discardDraftCallbackData,
   leaveCallbackData,
   parsePoolMateCallbackData,
+  publishDraftCallbackData,
   quoteCallbackData
 } from "../src/bot/callbackData.js";
+import type { OrderDraftExtractor } from "../src/application/ports/orderDraftExtractor.js";
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
 import type {
   ClaimPoolFromBotInput,
   ClosePoolFromBotInput,
   CreatePoolFromBotInput,
+  DraftActionFromBotInput,
   LeavePoolFromBotInput,
   PoolMateBotUseCases,
   QuotePoolFromBotInput,
@@ -26,6 +30,9 @@ interface ApiCall {
 }
 
 interface UseCaseCalls {
+  draft: CreatePoolFromBotInput[];
+  publish: DraftActionFromBotInput[];
+  discard: DraftActionFromBotInput[];
   create: CreatePoolFromBotInput[];
   claim: ClaimPoolFromBotInput[];
   leave: LeavePoolFromBotInput[];
@@ -58,6 +65,14 @@ const baseOrder: OrderDetailView = {
       joinedAt: "2026-07-25T10:01:00.000Z"
     }
   ]
+};
+
+const draftOrder: OrderDetailView = {
+  ...baseOrder,
+  state: "DRAFT",
+  claimedUnits: 0,
+  participantCount: 0,
+  participants: []
 };
 
 const quotedOrder: OrderDetailView = {
@@ -125,6 +140,9 @@ function createUseCases(
   }
 ): { useCases: PoolMateBotUseCases; calls: UseCaseCalls } {
   const calls: UseCaseCalls = {
+    draft: [],
+    publish: [],
+    discard: [],
     create: [],
     claim: [],
     leave: [],
@@ -136,6 +154,18 @@ function createUseCases(
   return {
     calls,
     useCases: {
+      createDraft: async (input) => {
+        calls.draft.push(input);
+        return draftOrder;
+      },
+      publishDraft: async (input) => {
+        calls.publish.push(input);
+        return baseOrder;
+      },
+      discardDraft: async (input) => {
+        calls.discard.push(input);
+        return { ...draftOrder, state: "CANCELED" };
+      },
       createPool: async (input) => {
         calls.create.push(input);
         return baseOrder;
@@ -171,7 +201,8 @@ function createUseCases(
 function createHarness(
   useCases: PoolMateBotUseCases,
   failedPrivateChatId?: string,
-  privateFailureLimit = Number.POSITIVE_INFINITY
+  privateFailureLimit = Number.POSITIVE_INFINITY,
+  draftExtractor?: OrderDraftExtractor
 ) {
   const apiCalls: ApiCall[] = [];
   let privateFailures = 0;
@@ -180,6 +211,7 @@ function createHarness(
     userAllowlistEnabled: true,
     allowedUserIds: ["101"],
     getBotStatus: () => "running",
+    draftExtractor,
     useCases
   });
   bot.botInfo = {
@@ -263,6 +295,43 @@ function commandUpdate(updateId: number, text: string) {
           type: "bot_command" as const
         }
       ]
+    }
+  };
+}
+
+function textUpdate(updateId: number, text: string, mention = false) {
+  const mentionText = "@poolmate_test_bot";
+  const mentionOffset = text.indexOf(mentionText);
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1_753_405_200,
+      from: {
+        id: 101,
+        is_bot: false,
+        first_name: "Alice",
+        last_name: "Chen",
+        language_code: "zh"
+      },
+      chat: {
+        id: -500,
+        type: "group" as const,
+        title: "Friday Pool",
+        all_members_are_administrators: false
+      },
+      text,
+      ...(mention && mentionOffset >= 0
+        ? {
+            entities: [
+              {
+                offset: mentionOffset,
+                length: mentionText.length,
+                type: "mention" as const
+              }
+            ]
+          }
+        : {})
     }
   };
 }
@@ -388,6 +457,116 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
   assert.deepEqual(calls.get, [{ telegramChatId: "-500", orderId: "order-1" }]);
 });
 
+test("natural language creates only a persisted draft after an explicit mention", async () => {
+  let extracted = 0;
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract(request) {
+      extracted += 1;
+      assert.equal(request.text, "拼三箱杨梅");
+      assert.equal(request.locale, "zh");
+      return {
+        title: "杨梅拼单",
+        targetUnits: 3,
+        missingFields: [],
+        ambiguousFields: []
+      };
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor
+  );
+
+  await bot.handleUpdate(textUpdate(110, "今晚吃什么"));
+  await bot.handleUpdate(textUpdate(109, "@poolmate_test_bot 拼三箱杨梅"));
+  await bot.handleUpdate(
+    textUpdate(111, "@poolmate_test_bot 拼三箱杨梅", true)
+  );
+
+  assert.equal(extracted, 1);
+  assert.deepEqual(calls.draft, [
+    {
+      sourceIdempotencyKey: "telegram:update:v1:111",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "杨梅拼单",
+      targetUnits: 3
+    }
+  ]);
+  assert.equal(calls.create.length, 0);
+  assert.equal(calls.publish.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /State: DRAFT/);
+  assert.match(
+    String(reply?.payload.text),
+    /No checkout, confirmation, or payment/
+  );
+  const keyboard = reply?.payload.reply_markup as {
+    inline_keyboard: Array<Array<{ callback_data: string }>>;
+  };
+  assert.equal(
+    keyboard.inline_keyboard[0][0]?.callback_data,
+    publishDraftCallbackData("order-1")
+  );
+  assert.equal(
+    keyboard.inline_keyboard[0][1]?.callback_data,
+    discardDraftCallbackData("order-1")
+  );
+});
+
+test("missing natural-language fields and disabled LLM never create drafts", async () => {
+  const missing: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      return {
+        title: "Fruit",
+        targetUnits: null,
+        missingFields: ["targetUnits"],
+        ambiguousFields: []
+      };
+    }
+  };
+  const disabled: OrderDraftExtractor = {
+    getStatus: () => "disabled",
+    async extract() {
+      throw new Error("must not call disabled extractor");
+    }
+  };
+  const first = createUseCases();
+  const firstHarness = createHarness(
+    first.useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    missing
+  );
+  await firstHarness.bot.handleUpdate(
+    textUpdate(120, "@poolmate_test_bot 拼水果", true)
+  );
+  assert.equal(first.calls.draft.length, 0);
+  assert.match(
+    String(firstHarness.apiCalls[0]?.payload.text),
+    /target quantity/
+  );
+
+  const second = createUseCases();
+  const secondHarness = createHarness(
+    second.useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    disabled
+  );
+  await secondHarness.bot.handleUpdate(
+    textUpdate(121, "@poolmate_test_bot 拼三箱水果", true)
+  );
+  assert.equal(second.calls.draft.length, 0);
+  assert.match(String(secondHarness.apiCalls[0]?.payload.text), /\/pool_new/);
+});
+
 test("callback data is stable and repeated callbacks reuse one idempotency key", async () => {
   assert.deepEqual(parsePoolMateCallbackData(claimCallbackData("order-1", 2)), {
     action: "claim",
@@ -406,6 +585,14 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     action: "close",
     orderId: "order-1"
   });
+  assert.deepEqual(
+    parsePoolMateCallbackData(publishDraftCallbackData("order-1")),
+    { action: "publish", orderId: "order-1" }
+  );
+  assert.deepEqual(
+    parsePoolMateCallbackData(discardDraftCallbackData("order-1")),
+    { action: "discard", orderId: "order-1" }
+  );
 
   const { useCases, calls } = createUseCases();
   const { bot } = createHarness(useCases);
@@ -422,6 +609,24 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     calls.claim[1].sourceIdempotencyKey,
     calls.claim[0].sourceIdempotencyKey
   );
+});
+
+test("draft callbacks publish or discard through deterministic use cases", async () => {
+  const { useCases, calls } = createUseCases();
+  const { bot } = createHarness(useCases);
+
+  await bot.handleUpdate(
+    callbackUpdate(205, "callback-publish", publishDraftCallbackData("order-1"))
+  );
+  await bot.handleUpdate(
+    callbackUpdate(206, "callback-discard", discardDraftCallbackData("order-1"))
+  );
+
+  assert.equal(calls.publish.length, 1);
+  assert.equal(calls.publish[0]?.actor.userId, "101");
+  assert.equal(calls.discard.length, 1);
+  assert.equal(calls.discard[0]?.actor.userId, "101");
+  assert.equal(calls.quote.length, 0);
 });
 
 test("close callback calls the owner-only use case and reports no receipt", async () => {

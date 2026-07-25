@@ -10,18 +10,41 @@ import type {
 export class OrderServiceBotUseCases implements PoolMateBotUseCases {
   constructor(private readonly orders: OrderService) {}
 
-  async createPool(input: Parameters<PoolMateBotUseCases["createPool"]>[0]) {
+  async createDraft(input: Parameters<PoolMateBotUseCases["createDraft"]>[0]) {
     const group = this.orders.createGroup({
       telegramChatId: input.telegramChatId,
       title: input.telegramChatTitle
     });
-    const order = this.orders.createOrder({
+    return this.orders.createOrder({
       groupId: group.id,
       ownerUserId: input.actor.userId,
       title: input.title,
       targetUnits: input.targetUnits,
       sourceIdempotencyKey: input.sourceIdempotencyKey
     });
+  }
+
+  async publishDraft(
+    input: Parameters<PoolMateBotUseCases["publishDraft"]>[0]
+  ) {
+    this.requireOwnerAction(input);
+    return this.orders.publishOrder(input.orderId);
+  }
+
+  async discardDraft(
+    input: Parameters<PoolMateBotUseCases["discardDraft"]>[0]
+  ) {
+    this.requireOrderChat(input.orderId, input.telegramChatId);
+    return this.orders.cancelOrder(input.orderId, {
+      actorType: "telegram_owner",
+      actorId: input.actor.userId,
+      reasonCode: "owner_requested",
+      sourceIdempotencyKey: input.sourceIdempotencyKey
+    });
+  }
+
+  async createPool(input: Parameters<PoolMateBotUseCases["createPool"]>[0]) {
+    const order = await this.createDraft(input);
     return this.orders.publishOrder(order.id);
   }
 
@@ -117,6 +140,21 @@ export class OrderServiceBotUseCases implements PoolMateBotUseCases {
       throw new DomainError(
         "FORBIDDEN",
         "This order belongs to another Telegram group.",
+        403
+      );
+    }
+  }
+
+  private requireOwnerAction(input: {
+    orderId: string;
+    telegramChatId: string;
+    actor: { userId: string };
+  }): void {
+    this.requireOrderChat(input.orderId, input.telegramChatId);
+    if (!this.orders.isOrderOwner(input.orderId, input.actor.userId)) {
+      throw new DomainError(
+        "FORBIDDEN",
+        "Only the order owner can publish this draft.",
         403
       );
     }

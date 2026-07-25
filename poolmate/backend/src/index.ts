@@ -15,6 +15,7 @@ import {
   MOCK_MERCHANT_ASSET_ID,
   MOCK_MERCHANT_PAYEE_ID
 } from "./infrastructure/merchant/mockMerchantAdapter.js";
+import { createOrderDraftExtractor } from "./infrastructure/llm/httpOrderDraftExtractor.js";
 
 const config = loadConfig();
 const database = new PoolMateDatabase(
@@ -57,6 +58,7 @@ const paymentOrchestrationService = new PaymentOrchestrationService({
   paymentBaseClient
 });
 const botUseCases = new OrderServiceBotUseCases(orderService);
+const draftExtractor = createOrderDraftExtractor(config.llm);
 
 const botRuntime = createBotRuntime({
   // Withholding the token leaves the runtime in "disabled" state instead of
@@ -68,6 +70,7 @@ const botRuntime = createBotRuntime({
   allowedUserIds: config.telegram.allowedUserIds,
   apiRoot: config.telegram.apiRoot,
   proxyUrl: config.telegram.proxyUrl,
+  draftExtractor,
   useCases: botUseCases
 });
 const app = await createServer({
@@ -75,6 +78,7 @@ const app = await createServer({
   database,
   orderService,
   paymentOrchestrationService,
+  getLlmStatus: () => draftExtractor.getStatus(),
   identityVerifier: new TelegramWebAppIdentityVerifier({
     botToken: config.telegram.token
   }),

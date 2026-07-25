@@ -1,6 +1,10 @@
 import { InlineKeyboard, type Bot } from "grammy";
 import type { OrderDetailView } from "@poolmate/shared";
 import {
+  type OrderDraftExtractor,
+  OrderDraftExtractorError
+} from "../../../application/ports/orderDraftExtractor.js";
+import {
   parsePoolMateCallbackData,
   type PoolMateCallbackData
 } from "../../callbackData.js";
@@ -20,11 +24,12 @@ import type {
   RemindPoolFromBotResult
 } from "../../poolMateBotUseCases.js";
 import { formatPaymentStatus } from "../../formatter.js";
-import { collectingOrderKeyboard } from "../keyboards.js";
+import { collectingOrderKeyboard, draftOrderKeyboard } from "../keyboards.js";
 import type { PoolMateContext } from "../context.js";
 
 export interface PoolHandlerDependencies {
   useCases: PoolMateBotUseCases;
+  draftExtractor?: OrderDraftExtractor;
 }
 
 function actor(context: PoolMateContext): PoolMateBotActor {
@@ -59,6 +64,32 @@ function groupChatId(context: PoolMateContext): string | null {
   return chat?.type === "group" || chat?.type === "supergroup"
     ? String(chat.id)
     : null;
+}
+
+function mentionedOrderRequest(context: PoolMateContext): string | null {
+  const message = context.message;
+  const username = context.me.username;
+  if (!message?.text || !username) return null;
+  const text = message.text;
+  const expected = `@${username}`.toLowerCase();
+  const mentioned = message.entities?.some((entity) => {
+    if (entity.type !== "mention") return false;
+    return (
+      text.slice(entity.offset, entity.offset + entity.length).toLowerCase() ===
+      expected
+    );
+  });
+  if (!mentioned) return null;
+  return text
+    .replace(new RegExp(`@${username}\\b`, "gi"), " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fieldNames(fields: string[]): string {
+  return fields
+    .map((field) => (field === "targetUnits" ? "target quantity" : "title"))
+    .join(", ");
 }
 
 function trustedConfirmationUrl(value: string): URL | null {
@@ -237,6 +268,37 @@ async function handleCallbackAction(
     return;
   }
 
+  if (data.action === "publish") {
+    const order = await useCases.publishDraft({
+      sourceIdempotencyKey,
+      telegramChatId,
+      orderId: data.orderId,
+      actor: currentActor
+    });
+    await context.answerCallbackQuery({ text: "Draft published" });
+    await context.reply(orderMessage("Pool published.", order), {
+      reply_markup: collectingOrderKeyboard(order.id)
+    });
+    return;
+  }
+
+  if (data.action === "discard") {
+    const order = await useCases.discardDraft({
+      sourceIdempotencyKey,
+      telegramChatId,
+      orderId: data.orderId,
+      actor: currentActor
+    });
+    await context.answerCallbackQuery({ text: "Draft discarded" });
+    await context.reply(
+      orderMessage(
+        "Draft discarded. No checkout, confirmation, or payment was created.",
+        order
+      )
+    );
+    return;
+  }
+
   await context.answerCallbackQuery({ text: "Preparing final quote" });
   const result = await useCases.quotePool({
     sourceIdempotencyKey,
@@ -249,7 +311,7 @@ async function handleCallbackAction(
 
 export function registerPoolHandlers(
   bot: Bot<PoolMateContext>,
-  { useCases }: PoolHandlerDependencies
+  { useCases, draftExtractor }: PoolHandlerDependencies
 ): void {
   bot.command("pool_new", async (context) => {
     if (context.chat.type !== "group" && context.chat.type !== "supergroup") {
@@ -437,6 +499,77 @@ export function registerPoolHandlers(
       link_preview_options: { is_disabled: true }
     });
   });
+
+  if (draftExtractor) {
+    bot.on("message:text", async (context) => {
+      const telegramChatId = groupChatId(context);
+      if (!telegramChatId) return;
+      const requestText = mentionedOrderRequest(context);
+      if (requestText === null) return;
+      if (!requestText) {
+        await context.reply(
+          "Please include a product title and target quantity after mentioning PoolMate."
+        );
+        return;
+      }
+      if (draftExtractor.getStatus() === "disabled") {
+        await context.reply(
+          "Natural-language drafts are disabled. Use /pool_new <targetUnits> <title>."
+        );
+        return;
+      }
+
+      try {
+        const extraction = await draftExtractor.extract({
+          text: requestText,
+          locale: context.from?.language_code
+        });
+        const unresolved = [
+          ...extraction.missingFields,
+          ...extraction.ambiguousFields
+        ];
+        if (
+          unresolved.length > 0 ||
+          extraction.title === null ||
+          extraction.targetUnits === null
+        ) {
+          await context.reply(
+            `I need an unambiguous ${fieldNames(unresolved)} before creating a draft. No order was created.`
+          );
+          return;
+        }
+        const order = await useCases.createDraft({
+          sourceIdempotencyKey: telegramUpdateIdempotencyKey(
+            context.update.update_id
+          ),
+          telegramChatId,
+          telegramChatTitle: context.chat.title ?? "Telegram group",
+          actor: actor(context),
+          title: extraction.title,
+          targetUnits: extraction.targetUnits
+        });
+        await context.reply(
+          [
+            orderMessage("Draft created for review.", order),
+            "No checkout, confirmation, or payment exists yet."
+          ].join("\n"),
+          { reply_markup: draftOrderKeyboard(order.id) }
+        );
+      } catch (error) {
+        if (error instanceof OrderDraftExtractorError) {
+          const message =
+            error.code === "LLM_INVALID_INPUT"
+              ? error.message
+              : error.code === "LLM_REFUSED"
+                ? "The request could not be parsed into an order draft. No order was created."
+                : "Natural-language draft parsing is unavailable. Use /pool_new <targetUnits> <title>.";
+          await context.reply(message);
+          return;
+        }
+        throw error;
+      }
+    });
+  }
 
   bot.callbackQuery(/^pm:v1:/, async (context) => {
     const data = parsePoolMateCallbackData(context.callbackQuery.data);

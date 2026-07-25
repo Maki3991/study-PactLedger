@@ -1,6 +1,6 @@
 import { Bot, type BotConfig, type PollingOptions } from "grammy";
 import type { BotStatus } from "@poolmate/shared";
-import type { AgentRuntimeStatus } from "../../agent/agentRuntime.js";
+import type { OrderDraftExtractor } from "../../application/ports/orderDraftExtractor.js";
 import type { BotAdapter } from "../botAdapter.js";
 import type { PoolMateBotUseCases } from "../poolMateBotUseCases.js";
 import { message, resolveLocale } from "../i18n.js";
@@ -20,7 +20,7 @@ export interface CreateGrammyBotConfig {
   proxyUrl?: string;
   fetch?: NonNullable<BotConfig<PoolMateContext>["client"]>["fetch"];
   getBotStatus(): BotStatus;
-  getAgentStatus?(): AgentRuntimeStatus;
+  draftExtractor?: OrderDraftExtractor;
   useCases?: PoolMateBotUseCases;
 }
 
@@ -30,7 +30,7 @@ export interface BotRuntimeConfig {
   allowedUserIds: string[];
   apiRoot?: string;
   proxyUrl?: string;
-  getAgentStatus?(): AgentRuntimeStatus;
+  draftExtractor?: OrderDraftExtractor;
   useCases?: PoolMateBotUseCases;
 }
 
@@ -65,10 +65,13 @@ export function createPoolMateBot(
   );
   registerSystemHandlers(bot, {
     getBotStatus: config.getBotStatus,
-    getAgentStatus: config.getAgentStatus
+    getLlmStatus: () => config.draftExtractor?.getStatus() ?? "disabled"
   });
   if (config.useCases) {
-    registerPoolHandlers(bot, { useCases: config.useCases });
+    registerPoolHandlers(bot, {
+      useCases: config.useCases,
+      draftExtractor: config.draftExtractor
+    });
   }
 
   bot.catch(async ({ error, ctx }) => {
@@ -108,7 +111,7 @@ export function createBotRuntime(
           apiRoot: config.apiRoot,
           fetch: createProxyFetch(config.proxyUrl),
           getBotStatus: () => status,
-          getAgentStatus: config.getAgentStatus,
+          draftExtractor: config.draftExtractor,
           useCases: config.useCases
         })
       : null;

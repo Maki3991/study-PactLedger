@@ -14,6 +14,9 @@ test("loadConfig uses safe independent defaults", () => {
   assert.equal(config.paymentBase.settlementMode, "disabled");
   assert.equal(config.paymentBase.submitPath, undefined);
   assert.equal(config.paymentBase.timeoutMs, 10_000);
+  assert.equal(config.llm.enabled, false);
+  assert.equal(config.llm.apiKey, undefined);
+  assert.equal(config.llm.maxInputChars, 2_000);
   assert.match(config.database.path, /poolmate\.sqlite$/);
 });
 
@@ -95,7 +98,13 @@ test("loadConfig normalizes non-secret runtime settings", () => {
       PAYMENT_BASE_API_KEY: "secret",
       PAYMENT_BASE_SUBMIT_PATH: "/v1/payment-operations",
       PAYMENT_BASE_RECOVER_PATH: "/v1/payment-operations/{operationId}",
-      PAYMENT_BASE_TIMEOUT_MS: "5000"
+      PAYMENT_BASE_TIMEOUT_MS: "5000",
+      POOLMATE_LLM_ENABLED: "true",
+      POOLMATE_LLM_BASE_URL: "https://llm.example.test",
+      POOLMATE_LLM_API_KEY: "llm-secret",
+      POOLMATE_LLM_MODEL: "draft-model",
+      POOLMATE_LLM_TIMEOUT_MS: "4000",
+      POOLMATE_LLM_MAX_INPUT_CHARS: "1200"
     },
     "/tmp/poolmate-config-test"
   );
@@ -106,6 +115,35 @@ test("loadConfig normalizes non-secret runtime settings", () => {
   assert.equal(config.paymentBase.url, "https://payments.example.test");
   assert.equal(config.paymentBase.submitPath, "/v1/payment-operations");
   assert.equal(config.paymentBase.timeoutMs, 5_000);
+  assert.deepEqual(config.llm, {
+    enabled: true,
+    baseUrl: "https://llm.example.test",
+    apiKey: "llm-secret",
+    model: "draft-model",
+    timeoutMs: 4_000,
+    maxInputChars: 1_200
+  });
+});
+
+test("enabled LLM configuration requires a secure complete server-side contract", () => {
+  assert.throws(
+    () =>
+      loadConfig({ POOLMATE_LLM_ENABLED: "true" }, "/tmp/poolmate-config-test"),
+    /are required/
+  );
+  assert.throws(
+    () =>
+      loadConfig(
+        {
+          POOLMATE_LLM_ENABLED: "true",
+          POOLMATE_LLM_BASE_URL: "http://llm.example.test",
+          POOLMATE_LLM_API_KEY: "secret",
+          POOLMATE_LLM_MODEL: "draft-model"
+        },
+        "/tmp/poolmate-config-test"
+      ),
+    /HTTPS origin/
+  );
 });
 
 test("loadConfig rejects an ambiguous Telegram allowlist switch", () => {

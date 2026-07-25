@@ -45,6 +45,14 @@ export interface PoolMateConfig {
     recoverPath?: string;
     timeoutMs: number;
   };
+  llm: {
+    enabled: boolean;
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+    timeoutMs: number;
+    maxInputChars: number;
+  };
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -57,6 +65,16 @@ function parsePort(value: string | undefined, fallback: number): number {
 function parseTimeout(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60_000
+    ? parsed
+    : fallback;
+}
+
+function parseMaxInputChars(
+  value: string | undefined,
+  fallback: number
+): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 200 && parsed <= 8_000
     ? parsed
     : fallback;
 }
@@ -114,6 +132,23 @@ function normalizePublicBaseUrl(
   return url.toString().replace(/\/$/, "");
 }
 
+function normalizeLlmBaseUrl(value: string): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/"
+  ) {
+    throw new Error(
+      "POOLMATE_LLM_BASE_URL must be an HTTPS origin without credentials, path, query, or fragment."
+    );
+  }
+  return url.origin;
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd()
@@ -121,6 +156,19 @@ export function loadConfig(
   const host = optional(env.POOLMATE_HOST) ?? "127.0.0.1";
   const port = parsePort(env.POOLMATE_PORT, 8788);
   const telegramToken = optional(env.TELEGRAM_BOT_TOKEN);
+  const llmEnabled = parseBoolean(
+    env.POOLMATE_LLM_ENABLED,
+    false,
+    "POOLMATE_LLM_ENABLED"
+  );
+  const llmBaseUrl = optional(env.POOLMATE_LLM_BASE_URL);
+  const llmApiKey = optional(env.POOLMATE_LLM_API_KEY);
+  const llmModel = optional(env.POOLMATE_LLM_MODEL);
+  if (llmEnabled && (!llmBaseUrl || !llmApiKey || !llmModel)) {
+    throw new Error(
+      "POOLMATE_LLM_BASE_URL, POOLMATE_LLM_API_KEY, and POOLMATE_LLM_MODEL are required when POOLMATE_LLM_ENABLED=true."
+    );
+  }
   const publicBaseUrl = normalizePublicBaseUrl(
     env.POOLMATE_PUBLIC_BASE_URL,
     `http://${host}:${port}`
@@ -183,6 +231,14 @@ export function loadConfig(
       submitPath: optional(env.PAYMENT_BASE_SUBMIT_PATH),
       recoverPath: optional(env.PAYMENT_BASE_RECOVER_PATH),
       timeoutMs: parseTimeout(env.PAYMENT_BASE_TIMEOUT_MS, 10_000)
+    },
+    llm: {
+      enabled: llmEnabled,
+      baseUrl: llmBaseUrl ? normalizeLlmBaseUrl(llmBaseUrl) : undefined,
+      apiKey: llmApiKey,
+      model: llmModel,
+      timeoutMs: parseTimeout(env.POOLMATE_LLM_TIMEOUT_MS, 10_000),
+      maxInputChars: parseMaxInputChars(env.POOLMATE_LLM_MAX_INPUT_CHARS, 2_000)
     }
   };
 }

@@ -83,6 +83,67 @@ function tokenFromFragment(value: string): string {
   return new URLSearchParams(new URL(value).hash.slice(1)).get("token")!;
 }
 
+test("bot facade keeps LLM output in DRAFT until the owner publishes or discards", async () => {
+  const { database, directory, facade } = fixture();
+  try {
+    const input = {
+      sourceIdempotencyKey: "telegram:update:v1:draft-1",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: actor(),
+      title: "Fresh fruit",
+      targetUnits: 3
+    };
+    const draft = await facade.createDraft(input);
+    assert.equal(draft.state, "DRAFT");
+    assert.equal(draft.paymentRequest, undefined);
+
+    await assert.rejects(
+      facade.publishDraft({
+        sourceIdempotencyKey: "telegram:callback:v1:publish-other",
+        telegramChatId: "-500",
+        orderId: draft.id,
+        actor: actor("202")
+      }),
+      (error) => error instanceof DomainError && error.code === "FORBIDDEN"
+    );
+    const published = await facade.publishDraft({
+      sourceIdempotencyKey: "telegram:callback:v1:publish-owner",
+      telegramChatId: "-500",
+      orderId: draft.id,
+      actor: actor()
+    });
+    assert.equal(published.state, "COLLECTING");
+
+    const discardedDraft = await facade.createDraft({
+      ...input,
+      sourceIdempotencyKey: "telegram:update:v1:draft-2",
+      title: "Discard me"
+    });
+    await assert.rejects(
+      facade.discardDraft({
+        sourceIdempotencyKey: "telegram:callback:v1:discard-other",
+        telegramChatId: "-500",
+        orderId: discardedDraft.id,
+        actor: actor("202")
+      }),
+      (error) => error instanceof DomainError && error.code === "FORBIDDEN"
+    );
+    const discarded = await facade.discardDraft({
+      sourceIdempotencyKey: "telegram:callback:v1:discard-owner",
+      telegramChatId: "-500",
+      orderId: discardedDraft.id,
+      actor: actor()
+    });
+    assert.equal(discarded.state, "CANCELED");
+    assert.equal(discarded.checkout, undefined);
+    assert.equal(discarded.paymentRequest, undefined);
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("bot facade enforces group ownership and persists claim/leave idempotency", async () => {
   const { database, directory, facade } = fixture();
   try {

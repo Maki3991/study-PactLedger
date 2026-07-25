@@ -25,7 +25,6 @@
     "node": ">=20.18.1"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.114.0",
     "@poolmate/shared": "file:../shared",
     "better-sqlite3": "^13.0.1",
     "dotenv": "^16.4.7",

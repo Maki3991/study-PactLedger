@@ -8,7 +8,8 @@ import { z } from "zod";
 import type {
   ApiErrorBody,
   BotStatus,
-  LivenessResponse
+  LivenessResponse,
+  LlmStatus
 } from "@poolmate/shared";
 import type { PoolMateConfig } from "../config.js";
 import type { PoolMateDatabase } from "../infrastructure/db/database.js";
@@ -22,6 +23,7 @@ export interface CreateServerOptions {
   config: PoolMateConfig;
   database: PoolMateDatabase;
   getBotStatus: () => BotStatus;
+  getLlmStatus?: () => LlmStatus;
   orderService?: OrderService;
   paymentOrchestrationService?: PaymentOrchestrationService;
   identityVerifier?: ConfirmationIdentityVerifier;

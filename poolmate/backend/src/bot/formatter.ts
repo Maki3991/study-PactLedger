@@ -1,9 +1,8 @@
-import type { BotStatus, OrderDetailView } from "@poolmate/shared";
-import type { AgentRuntimeStatus } from "../agent/agentRuntime.js";
+import type { BotStatus, LlmStatus, OrderDetailView } from "@poolmate/shared";
 
 export interface PoolMateStatusView {
   bot: BotStatus;
-  agent?: AgentRuntimeStatus;
+  llm: LlmStatus;
 }
 
 function hasVerifiableReceipt(
@@ -34,16 +33,11 @@ function hasVerifiableReceipt(
 }
 
 export function formatPoolMateStatus(view: PoolMateStatusView): string {
-  const lines = ["PoolMate status", `Bot: ${view.bot}`];
-
-  if (view.agent) {
-    lines.push(
-      `Agent: ${view.agent.state}`,
-      `Agent mode: ${view.agent.activeMode ?? view.agent.lastMode ?? "none"}`
-    );
-  }
-
-  return lines.join("\n");
+  return [
+    "PoolMate status",
+    `Bot: ${view.bot}`,
+    `Natural-language drafts: ${view.llm}`
+  ].join("\n");
 }
 
 export function formatPaymentStatus(order: OrderDetailView): string {

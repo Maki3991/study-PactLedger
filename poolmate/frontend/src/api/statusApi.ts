@@ -3,6 +3,7 @@ import type {
   ConfigStatusResponse,
   DatabaseStatus,
   HealthResponse,
+  LlmStatus,
   PaymentBaseStatus,
   ServiceHealth,
   SettlementMode
@@ -33,6 +34,11 @@ const botStatusValues: readonly BotStatus[] = [
 ];
 const paymentStatusValues: readonly PaymentBaseStatus[] = [
   "not_configured",
+  "configured",
+  "unavailable"
+];
+const llmStatusValues: readonly LlmStatus[] = [
+  "disabled",
   "configured",
   "unavailable"
 ];
@@ -68,7 +74,8 @@ export function isConfigStatusResponse(
     !isRecord(value) ||
     !isRecord(value.database) ||
     !isRecord(value.bot) ||
-    !isRecord(value.paymentBase)
+    !isRecord(value.paymentBase) ||
+    !isRecord(value.llm)
   ) {
     return false;
   }
@@ -85,7 +92,9 @@ export function isConfigStatusResponse(
     typeof value.bot.userAllowlistEnabled === "boolean" &&
     isNonNegativeInteger(value.bot.allowedUserCount) &&
     isOneOf(value.paymentBase.status, paymentStatusValues) &&
-    isOneOf(value.paymentBase.settlementMode, settlementModeValues)
+    isOneOf(value.paymentBase.settlementMode, settlementModeValues) &&
+    isOneOf(value.llm.status, llmStatusValues) &&
+    (value.llm.model === undefined || typeof value.llm.model === "string")
   );
 }
 

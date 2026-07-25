@@ -6,6 +6,7 @@ export type {
   DatabaseStatus,
   HealthResponse,
   LivenessResponse,
+  LlmStatus,
   PaymentBaseStatus,
   SettlementMode,
   ServiceHealth,

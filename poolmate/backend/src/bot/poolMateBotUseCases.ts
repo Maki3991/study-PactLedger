@@ -14,6 +14,15 @@ export interface CreatePoolFromBotInput {
   targetUnits: number;
 }
 
+export type CreateDraftFromBotInput = CreatePoolFromBotInput;
+
+export interface DraftActionFromBotInput {
+  sourceIdempotencyKey: string;
+  telegramChatId: string;
+  orderId: string;
+  actor: PoolMateBotActor;
+}
+
 export interface ClaimPoolFromBotInput {
   sourceIdempotencyKey: string;
   telegramChatId: string;
@@ -73,6 +82,9 @@ export interface GetPoolFromBotInput {
 }
 
 export interface PoolMateBotUseCases {
+  createDraft(input: CreateDraftFromBotInput): Promise<OrderDetailView>;
+  publishDraft(input: DraftActionFromBotInput): Promise<OrderDetailView>;
+  discardDraft(input: DraftActionFromBotInput): Promise<OrderDetailView>;
   createPool(input: CreatePoolFromBotInput): Promise<OrderDetailView>;
   claimPool(input: ClaimPoolFromBotInput): Promise<OrderDetailView>;
   leavePool(input: LeavePoolFromBotInput): Promise<OrderDetailView>;

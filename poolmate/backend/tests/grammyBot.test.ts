@@ -119,6 +119,10 @@ test("grammY handles /start and /status without live Telegram calls", async () =
   assert.equal(calls[0].method, "sendMessage");
   assert.match(String(calls[0].payload.text), /PoolMate is ready/);
   assert.match(String(calls[1].payload.text), /Bot: running/);
+  assert.match(
+    String(calls[1].payload.text),
+    /Natural-language drafts: disabled/
+  );
 });
 
 test("grammY silently blocks commands from users outside the allowlist", async () => {

@@ -388,6 +388,14 @@ function RuntimeView({ api, onNavigate }: RuntimeViewProps) {
               <dd>{config.data?.paymentBase.settlementMode ?? "Not reported"}</dd>
             </div>
             <div>
+              <dt>Natural-language drafts</dt>
+              <dd>
+                {config.data
+                  ? `${config.data.llm.status}${config.data.llm.model ? ` / ${config.data.llm.model}` : ""}`
+                  : "Not reported"}
+              </dd>
+            </div>
+            <div>
               <dt>Telegram user allowlist</dt>
               <dd>
                 {config.data

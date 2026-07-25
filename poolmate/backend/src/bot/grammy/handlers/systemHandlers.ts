@@ -1,13 +1,12 @@
 import type { Bot } from "grammy";
-import type { BotStatus } from "@poolmate/shared";
-import type { AgentRuntimeStatus } from "../../../agent/agentRuntime.js";
+import type { BotStatus, LlmStatus } from "@poolmate/shared";
 import { formatPoolMateStatus } from "../../formatter.js";
 import { message, resolveLocale } from "../../i18n.js";
 import type { PoolMateContext } from "../context.js";
 
 export interface SystemHandlerDependencies {
   getBotStatus(): BotStatus;
-  getAgentStatus?(): AgentRuntimeStatus;
+  getLlmStatus(): LlmStatus;
 }
 
 export function registerSystemHandlers(
@@ -23,7 +22,7 @@ export function registerSystemHandlers(
     await context.reply(
       formatPoolMateStatus({
         bot: dependencies.getBotStatus(),
-        agent: dependencies.getAgentStatus?.()
+        llm: dependencies.getLlmStatus()
       })
     );
   });

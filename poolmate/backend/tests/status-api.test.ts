@@ -79,6 +79,10 @@ test("config status never returns configured secrets", async () => {
   fixture.config.paymentBase.submitPath = "/v1/payment-operations";
   fixture.config.paymentBase.recoverPath =
     "/v1/payment-operations/{operationId}";
+  fixture.config.llm.enabled = true;
+  fixture.config.llm.baseUrl = "https://llm.example.test";
+  fixture.config.llm.apiKey = "llm-secret";
+  fixture.config.llm.model = "draft-model";
   fixture.config.admin.apiKey = "admin-secret";
   const app = await createServer({
     ...fixture,
@@ -94,7 +98,12 @@ test("config status never returns configured secrets", async () => {
   assert.equal(response.statusCode, 200);
   assert.equal(raw.includes("telegram-secret"), false);
   assert.equal(raw.includes("payment-secret"), false);
+  assert.equal(raw.includes("llm-secret"), false);
   assert.equal(response.json().paymentBase.status, "configured");
+  assert.deepEqual(response.json().llm, {
+    status: "unavailable",
+    model: "draft-model"
+  });
 
   const protectedResponse = await app.inject({
     method: "GET",
