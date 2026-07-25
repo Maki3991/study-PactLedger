@@ -1,5 +1,25 @@
 export type FundingMode = "sponsored_demo" | "prefunded_participants";
 
+export type OrderIntentSource =
+  | "telegram_natural_language"
+  | "telegram_command"
+  | "admin";
+
+export interface OrderIntentItemView {
+  name: string;
+  quantity: number;
+  unit?: string;
+}
+
+export interface OrderIntentView {
+  schemaVersion: "poolmate-order-intent-v1";
+  originalText: string;
+  source: OrderIntentSource;
+  items: OrderIntentItemView[];
+  purchaseChannelHint?: string;
+  userPriceHint?: string;
+}
+
 export type OrderState =
   | "DRAFT"
   | "COLLECTING"
@@ -182,6 +202,7 @@ export interface PaymentOutboxView {
 export interface OrderSummaryView {
   id: string;
   title: string;
+  intent?: OrderIntentView;
   group: GroupView;
   state: OrderState;
   fundingMode: FundingMode;
@@ -230,7 +251,9 @@ export interface ConfirmationView {
 export interface ConfirmationResult {
   confirmation: ConfirmationView;
   orderState: OrderState;
+  actionRecorded: boolean;
   paymentRequestCreated: boolean;
+  paymentProjection?: PaymentProjectionView;
 }
 
 export interface CreateGroupRequest {
@@ -243,6 +266,7 @@ export interface CreateOrderRequest {
   ownerUserId: string;
   title: string;
   targetUnits: number;
+  intent?: OrderIntentView;
   sourceIdempotencyKey?: string;
 }
 

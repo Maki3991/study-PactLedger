@@ -336,6 +336,64 @@ function OrderDetail({
         </div>
       </dl>
 
+      {order.intent ? (
+        <section
+          className="detail-section"
+          aria-labelledby="purchase-intent-heading"
+        >
+          <div className="detail-section__heading">
+            <div>
+              <p className="section-kicker">Untrusted user request</p>
+              <h3 id="purchase-intent-heading">Purchase intent</h3>
+            </div>
+            <StateBadge label="Intent only" severity="neutral" />
+          </div>
+          <p className="truth-note">
+            This preserves what the user asked for. Merchant, payee, and amount
+            become authoritative only in the verified Checkout.
+          </p>
+          <dl className="detail-facts">
+            <div>
+              <dt>Original request</dt>
+              <dd>{order.intent.originalText}</dd>
+            </div>
+            <div>
+              <dt>Requested item</dt>
+              <dd>{order.intent.items[0]?.name}</dd>
+            </div>
+            <div>
+              <dt>Requested quantity</dt>
+              <dd>
+                {order.intent.items[0]?.quantity}
+                {order.intent.items[0]?.unit
+                  ? ` ${order.intent.items[0].unit}`
+                  : " units"}
+              </dd>
+            </div>
+            <div>
+              <dt>Channel preference</dt>
+              <dd>{order.intent.purchaseChannelHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>User price reference</dt>
+              <dd>{order.intent.userPriceHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd className="mono-value">{order.intent.source}</dd>
+            </div>
+          </dl>
+          <div className="inline-warning" role="status">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>
+              Current quotes use the configured Demo Merchant. A requested
+              channel such as Meituan is preserved for routing but is not a live
+              integration claim.
+            </span>
+          </div>
+        </section>
+      ) : null}
+
       {canClose ? (
         <button type="button" onClick={onCloseOrder} disabled={Boolean(action)}>
           {action?.kind === "close" ? (

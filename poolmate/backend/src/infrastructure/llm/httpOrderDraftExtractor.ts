@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { LlmStatus } from "@poolmate/shared";
 import {
   ORDER_DRAFT_FIELDS,
+  ORDER_DRAFT_REQUIRED_FIELDS,
   type ExtractOrderDraftRequest,
   type OrderDraftExtraction,
   type OrderDraftExtractor,
@@ -15,9 +16,15 @@ const draftFieldSchema = z.enum(ORDER_DRAFT_FIELDS);
 const draftExtractionSchema = z
   .object({
     title: z.string().trim().min(1).max(120).nullable(),
+    itemName: z.string().trim().min(1).max(120).nullable(),
     targetUnits: z.number().int().min(1).max(1_000).nullable(),
-    missingFields: z.array(draftFieldSchema).max(2),
-    ambiguousFields: z.array(draftFieldSchema).max(2)
+    unit: z.string().trim().min(1).max(24).nullable(),
+    purchaseChannelHint: z.string().trim().min(1).max(80).nullable(),
+    userPriceHint: z.string().trim().min(1).max(80).nullable(),
+    missingFields: z
+      .array(z.enum(ORDER_DRAFT_REQUIRED_FIELDS))
+      .max(ORDER_DRAFT_REQUIRED_FIELDS.length),
+    ambiguousFields: z.array(draftFieldSchema).max(ORDER_DRAFT_FIELDS.length)
   })
   .strict()
   .superRefine((value, context) => {
@@ -33,7 +40,7 @@ const draftExtractionSchema = z
         message: "Draft field classifications must be unique and disjoint."
       });
     }
-    for (const field of ORDER_DRAFT_FIELDS) {
+    for (const field of ORDER_DRAFT_REQUIRED_FIELDS) {
       const hasValue = value[field] !== null;
       const classified = missing.has(field) || ambiguous.has(field);
       if (hasValue === classified) {
@@ -44,6 +51,15 @@ const draftExtractionSchema = z
         });
       }
     }
+    for (const field of ORDER_DRAFT_FIELDS) {
+      if (ambiguous.has(field) && value[field] !== null) {
+        context.addIssue({
+          code: "custom",
+          path: [field],
+          message: "Ambiguous draft fields must not contain a value."
+        });
+      }
+    }
   });
 
 const structuredOutputSchema = {
@@ -51,33 +67,63 @@ const structuredOutputSchema = {
   additionalProperties: false,
   properties: {
     title: { type: ["string", "null"], minLength: 1, maxLength: 120 },
+    itemName: { type: ["string", "null"], minLength: 1, maxLength: 120 },
     targetUnits: {
       type: ["integer", "null"],
       minimum: 1,
       maximum: 1_000
     },
+    unit: { type: ["string", "null"], minLength: 1, maxLength: 24 },
+    purchaseChannelHint: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: 80
+    },
+    userPriceHint: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: 80
+    },
     missingFields: {
       type: "array",
-      items: { type: "string", enum: [...ORDER_DRAFT_FIELDS] },
-      maxItems: 2
+      items: { type: "string", enum: [...ORDER_DRAFT_REQUIRED_FIELDS] },
+      maxItems: ORDER_DRAFT_REQUIRED_FIELDS.length
     },
     ambiguousFields: {
       type: "array",
       items: { type: "string", enum: [...ORDER_DRAFT_FIELDS] },
-      maxItems: 2
+      maxItems: ORDER_DRAFT_FIELDS.length
     }
   },
-  required: ["title", "targetUnits", "missingFields", "ambiguousFields"]
+  required: [
+    "title",
+    "itemName",
+    "targetUnits",
+    "unit",
+    "purchaseChannelHint",
+    "userPriceHint",
+    "missingFields",
+    "ambiguousFields"
+  ]
 } as const;
 
 const EXTRACTION_INSTRUCTIONS = [
-  "Extract only a PoolMate order draft from the user's Telegram message.",
-  "The title is a short product or pool description, not a price or payee.",
-  "targetUnits is the total positive integer quantity requested.",
+  "Extract one PoolMate single-item group-purchase draft from the user's Telegram message.",
+  "The title is a short group-purchase title and itemName is the requested product.",
+  "targetUnits is the explicitly requested total positive integer quantity.",
+  "unit is the explicitly stated quantity unit such as 瓶, 箱, 杯, 份, or null when omitted.",
+  "purchaseChannelHint preserves an explicitly stated shopping channel such as 美团外卖, 饿了么, 京东到家, 盒马, or null when omitted.",
+  "A purchase channel hint is untrusted user intent, never a verified merchant identity or payee.",
+  "userPriceHint preserves only an explicitly stated reference-price phrase such as 一箱89 or 45元一份; otherwise it is null.",
+  "If multiple different products are requested, mark itemName ambiguous instead of inventing a cart.",
   "If a field is absent, set it to null and list it in missingFields.",
   "If a field has multiple plausible values, set it to null and list it in ambiguousFields.",
-  "Do not infer merchant, asset, amount, allocation, payee, confirmation, payment, or order state."
+  "Optional unit, purchaseChannelHint, and userPriceHint may be null without being listed as missing.",
+  "Do not infer a verified merchant, merchantId, asset, final amount, allocation, payee, confirmation, payment, or order state.",
+  "Example: @PoolMate 拼单 3瓶可乐，美团外卖 => title 可乐拼单, itemName 可乐, targetUnits 3, unit 瓶, purchaseChannelHint 美团外卖, userPriceHint null."
 ].join(" ");
+
+export type OrderDraftLlmProvider = "deepseek" | "responses";
 
 export interface OrderDraftHttpTransportRequest {
   url: URL;
@@ -100,6 +146,7 @@ export interface OrderDraftHttpTransport {
 
 export interface CreateOrderDraftExtractorOptions {
   enabled: boolean;
+  provider?: OrderDraftLlmProvider;
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -154,6 +201,7 @@ class DisabledOrderDraftExtractor implements OrderDraftExtractor {
 
 class HttpOrderDraftExtractor implements OrderDraftExtractor {
   private readonly url: URL;
+  private readonly provider: OrderDraftLlmProvider;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly timeoutMs: number;
@@ -163,12 +211,17 @@ class HttpOrderDraftExtractor implements OrderDraftExtractor {
 
   constructor(
     options: CreateOrderDraftExtractorOptions & {
+      provider: OrderDraftLlmProvider;
       baseUrl: string;
       apiKey: string;
       model: string;
     }
   ) {
-    this.url = responsesUrl(options.baseUrl);
+    this.provider = options.provider;
+    this.url =
+      options.provider === "deepseek"
+        ? chatCompletionsUrl(options.baseUrl)
+        : responsesUrl(options.baseUrl);
     this.apiKey = requireHeaderValue(options.apiKey, "LLM API key");
     this.model = requireText(options.model, "LLM model", 120);
     this.timeoutMs = validateTimeout(options.timeoutMs);
@@ -190,60 +243,91 @@ class HttpOrderDraftExtractor implements OrderDraftExtractor {
         `Natural-language order requests must contain 1-${this.maxInputChars} characters.`
       );
     }
-    try {
-      const response = await this.send({
-        url: this.url,
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          model: this.model,
-          instructions: EXTRACTION_INSTRUCTIONS,
-          input: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: request.locale
-                    ? `[locale=${request.locale}] ${text}`
-                    : text
-                }
-              ]
-            }
-          ],
-          text: {
-            format: {
-              type: "json_schema",
-              name: "poolmate_order_draft_patch",
-              strict: true,
-              schema: structuredOutputSchema
-            }
+    const attempts = this.provider === "deepseek" ? 2 : 1;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await this.send({
+          url: this.url,
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json"
           },
-          max_output_tokens: 300
-        }),
-        timeoutMs: this.timeoutMs,
-        signal: request.signal
-      });
-      if (response.status < 200 || response.status >= 300) {
-        throw unavailable("The LLM endpoint rejected the draft request.");
+          body: JSON.stringify(
+            this.provider === "deepseek"
+              ? {
+                  model: this.model,
+                  messages: [
+                    {
+                      role: "system",
+                      content: `${EXTRACTION_INSTRUCTIONS} Return only one JSON object matching this schema: ${JSON.stringify(structuredOutputSchema)}.`
+                    },
+                    {
+                      role: "user",
+                      content: request.locale
+                        ? `[locale=${request.locale}] ${text}`
+                        : text
+                    }
+                  ],
+                  response_format: { type: "json_object" },
+                  temperature: 0,
+                  max_tokens: 1_000,
+                  stream: false
+                }
+              : {
+                  model: this.model,
+                  instructions: EXTRACTION_INSTRUCTIONS,
+                  input: [
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: request.locale
+                            ? `[locale=${request.locale}] ${text}`
+                            : text
+                        }
+                      ]
+                    }
+                  ],
+                  text: {
+                    format: {
+                      type: "json_schema",
+                      name: "poolmate_order_draft_patch",
+                      strict: true,
+                      schema: structuredOutputSchema
+                    }
+                  },
+                  max_output_tokens: 500
+                }
+          ),
+          timeoutMs: this.timeoutMs,
+          signal: request.signal
+        });
+        if (response.status < 200 || response.status >= 300) {
+          throw unavailable("The LLM endpoint rejected the draft request.");
+        }
+        const extraction = decodeResponse(response.body);
+        this.status = "configured";
+        return extraction;
+      } catch (error) {
+        if (
+          error instanceof OrderDraftExtractorError &&
+          error.code === "LLM_INVALID_INPUT"
+        ) {
+          throw error;
+        }
+        const retryableInvalidResponse =
+          error instanceof OrderDraftExtractorError &&
+          error.code === "LLM_INVALID_RESPONSE" &&
+          attempt < attempts;
+        if (retryableInvalidResponse) continue;
+        this.status = "unavailable";
+        if (error instanceof OrderDraftExtractorError) throw error;
+        throw unavailable("The LLM draft extractor is unavailable.");
       }
-      const extraction = decodeResponse(response.body);
-      this.status = "configured";
-      return extraction;
-    } catch (error) {
-      if (
-        error instanceof OrderDraftExtractorError &&
-        error.code === "LLM_INVALID_INPUT"
-      ) {
-        throw error;
-      }
-      this.status = "unavailable";
-      if (error instanceof OrderDraftExtractorError) throw error;
-      throw unavailable("The LLM draft extractor is unavailable.");
     }
+    throw unavailable("The LLM draft extractor is unavailable.");
   }
 
   private async send(
@@ -283,13 +367,23 @@ export function createOrderDraftExtractor(
   }
   return new HttpOrderDraftExtractor({
     ...options,
+    provider: options.provider ?? "responses",
     baseUrl,
     apiKey,
     model
   });
 }
 
+function chatCompletionsUrl(value: string): URL {
+  return new URL("chat/completions", secureBaseUrl(value));
+}
+
 function responsesUrl(value: string): URL {
+  const base = secureBaseUrl(value);
+  return new URL(base.pathname === "/" ? "v1/responses" : "responses", base);
+}
+
+function secureBaseUrl(value: string): URL {
   let base: URL;
   try {
     base = new URL(value);
@@ -301,12 +395,14 @@ function responsesUrl(value: string): URL {
     base.username ||
     base.password ||
     base.search ||
-    base.hash ||
-    base.pathname !== "/"
+    base.hash
   ) {
-    throw unavailable("The LLM base URL must be a secure HTTPS origin.");
+    throw unavailable(
+      "The LLM base URL must use HTTPS without credentials, query, or fragment."
+    );
   }
-  return new URL("/v1/responses", base);
+  if (!base.pathname.endsWith("/")) base.pathname += "/";
+  return base;
 }
 
 function requireText(value: string, field: string, maxLength: number): string {
@@ -333,7 +429,7 @@ function requireHeaderValue(value: string, field: string): string {
 }
 
 function validateTimeout(value: number | undefined): number {
-  const timeout = value ?? 10_000;
+  const timeout = value ?? 30_000;
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60_000) {
     throw unavailable("The LLM timeout is invalid.");
   }
@@ -378,6 +474,20 @@ function decodeResponse(body: string): OrderDraftExtraction {
 }
 
 function responseOutputText(value: Record<string, unknown>): string {
+  if (Array.isArray(value.choices)) {
+    const texts = value.choices
+      .map((choice) => {
+        if (!isRecord(choice) || !isRecord(choice.message)) return undefined;
+        return typeof choice.message.content === "string"
+          ? choice.message.content
+          : undefined;
+      })
+      .filter((text): text is string => Boolean(text?.trim()));
+    if (texts.length === 1) return texts[0]!;
+    throw invalidResponse(
+      "The LLM chat completion did not contain one structured output."
+    );
+  }
   if (typeof value.output_text === "string" && value.output_text.trim()) {
     return value.output_text;
   }

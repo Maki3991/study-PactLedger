@@ -29,10 +29,37 @@ test("bot runtime is disabled without a Telegram token", async () => {
   );
 
   assert.equal(runtime.getStatus(), "disabled");
+  assert.equal(await runtime.sendMessage("-100", "test"), false);
   await runtime.start();
   await runtime.stop();
   assert.equal(runtime.getStatus(), "disabled");
   assert.equal(created, false);
+});
+
+test("bot runtime sends proactive group notifications through grammY", async () => {
+  const sent: Array<{ chatId: string; text: string }> = [];
+  const runtime = createBotRuntime(
+    {
+      token: "test-token",
+      userAllowlistEnabled: false,
+      allowedUserIds: []
+    },
+    {
+      createBot: () => ({
+        api: {
+          sendMessage: async (chatId, text) => {
+            sent.push({ chatId, text });
+          }
+        },
+        init: async () => undefined,
+        start: async () => undefined,
+        stop: async () => undefined
+      })
+    }
+  );
+
+  assert.equal(await runtime.sendMessage("-10006", "Mock completed"), true);
+  assert.deepEqual(sent, [{ chatId: "-10006", text: "Mock completed" }]);
 });
 
 test("bot runtime starts without users when the allowlist is disabled", async () => {

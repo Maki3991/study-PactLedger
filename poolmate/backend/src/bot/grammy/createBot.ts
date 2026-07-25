@@ -9,6 +9,7 @@ import { registerSystemHandlers } from "./handlers/systemHandlers.js";
 import { registerPoolHandlers } from "./handlers/poolHandlers.js";
 import { createAccessMiddleware } from "./middleware.js";
 import { createProxyFetch } from "./proxyFetch.js";
+import { DomainError } from "../../domain/domainError.js";
 
 const DEFAULT_API_ROOT = "https://api.telegram.org";
 
@@ -35,6 +36,9 @@ export interface BotRuntimeConfig {
 }
 
 interface GrammyBotController {
+  api?: {
+    sendMessage(chatId: string, text: string): Promise<unknown>;
+  };
   init(): Promise<void>;
   start(options?: PollingOptions): Promise<void>;
   stop(): Promise<void>;
@@ -46,6 +50,22 @@ export interface BotRuntimeDependencies {
 
 function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown Telegram error";
+}
+
+async function replyToDomainError(
+  context: PoolMateContext,
+  error: DomainError
+): Promise<void> {
+  if (context.callbackQuery) {
+    const answered = await context
+      .answerCallbackQuery({ text: error.message, show_alert: true })
+      .then(
+        () => true,
+        () => false
+      );
+    if (answered) return;
+  }
+  await context.reply(error.message).catch(() => undefined);
 }
 
 export function createPoolMateBot(
@@ -63,6 +83,17 @@ export function createPoolMateBot(
   bot.use(
     createAccessMiddleware(config.userAllowlistEnabled, config.allowedUserIds)
   );
+  bot.use(async (context, next) => {
+    try {
+      await next();
+    } catch (error) {
+      if (error instanceof DomainError) {
+        await replyToDomainError(context, error);
+        return;
+      }
+      throw error;
+    }
+  });
   registerSystemHandlers(bot, {
     getBotStatus: config.getBotStatus,
     getLlmStatus: () => config.draftExtractor?.getStatus() ?? "disabled"
@@ -75,6 +106,10 @@ export function createPoolMateBot(
   }
 
   bot.catch(async ({ error, ctx }) => {
+    if (error instanceof DomainError) {
+      await replyToDomainError(ctx, error);
+      return;
+    }
     console.error(
       `[telegram] update handling failed: ${safeErrorMessage(error)}`
     );
@@ -118,6 +153,12 @@ export function createBotRuntime(
 
   return {
     getStatus: () => status,
+
+    async sendMessage(chatId: string, text: string): Promise<boolean> {
+      if (!bot?.api) return false;
+      await bot.api.sendMessage(chatId, text);
+      return true;
+    },
 
     async start(): Promise<void> {
       if (!bot || status === "running") return;

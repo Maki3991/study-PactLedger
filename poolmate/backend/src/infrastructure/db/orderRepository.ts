@@ -1,16 +1,21 @@
-import { and, asc, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
 import type {
   AllocationStrategy,
   CheckoutItemView,
   FundingMode,
   OrderCancellationView,
   OrderDetailView,
+  OrderIntentView,
   OrderState,
   PaymentOutboxView,
   PaymentAllocationStatus,
   PaymentProjectionStatus,
   SettlementMode
 } from "@poolmate/shared";
+import {
+  parsePersistedOrderIntent,
+  serializeOrderIntent
+} from "../../domain/orderIntent.js";
 import type { PoolMateDatabase } from "./database.js";
 import {
   allocations as allocationTable,
@@ -43,6 +48,7 @@ export interface OrderRow {
   state: OrderState;
   fundingMode: FundingMode;
   targetUnits: number;
+  intent: OrderIntentView;
   sourceIdempotencyKey: string | null;
   requestHash: string | null;
   cancellation: OrderCancellationView | null;
@@ -269,6 +275,10 @@ function mapOrder(
     state: (row.terminalState ?? row.state) as OrderState,
     fundingMode: row.fundingMode as FundingMode,
     targetUnits: row.targetUnits,
+    intent: parsePersistedOrderIntent(row.intentSchemaVersion, row.intentJson, {
+      title: row.title,
+      targetUnits: row.targetUnits
+    }),
     sourceIdempotencyKey: row.sourceIdempotencyKey,
     requestHash: row.requestHash,
     cancellation: cancellation
@@ -412,6 +422,8 @@ export class OrderTransaction {
         state: row.state,
         fundingMode: row.fundingMode,
         targetUnits: row.targetUnits,
+        intentSchemaVersion: row.intent.schemaVersion,
+        intentJson: serializeOrderIntent(row.intent),
         sourceIdempotencyKey: row.sourceIdempotencyKey,
         requestHash: row.requestHash,
         createdAt: row.createdAt,
@@ -896,6 +908,53 @@ export class OrderTransaction {
               lte(outbox.availableAt, now)
             )
           )
+        )
+      )
+      .orderBy(asc(paymentProjections.updatedAt), asc(paymentRequests.orderId))
+      .all()
+      .map((row) => row.orderId);
+  }
+
+  readyPaymentOrderIds(now: string): string[] {
+    return this.connection
+      .select({ orderId: paymentRequests.orderId })
+      .from(paymentRequests)
+      .innerJoin(
+        paymentProjections,
+        eq(paymentProjections.paymentRequestId, paymentRequests.id)
+      )
+      .innerJoin(outbox, eq(outbox.paymentRequestId, paymentRequests.id))
+      .innerJoin(orders, eq(orders.id, paymentRequests.orderId))
+      .where(
+        and(
+          isNull(orders.terminalState),
+          inArray(paymentProjections.status, ["READY", "UNAVAILABLE"]),
+          inArray(outbox.status, ["pending", "blocked"]),
+          lte(outbox.availableAt, now),
+          gt(paymentRequests.expiresAt, now)
+        )
+      )
+      .orderBy(asc(paymentProjections.updatedAt), asc(paymentRequests.orderId))
+      .all()
+      .map((row) => row.orderId);
+  }
+
+  expiredReadyPaymentOrderIds(now: string): string[] {
+    return this.connection
+      .select({ orderId: paymentRequests.orderId })
+      .from(paymentRequests)
+      .innerJoin(
+        paymentProjections,
+        eq(paymentProjections.paymentRequestId, paymentRequests.id)
+      )
+      .innerJoin(outbox, eq(outbox.paymentRequestId, paymentRequests.id))
+      .innerJoin(orders, eq(orders.id, paymentRequests.orderId))
+      .where(
+        and(
+          isNull(orders.terminalState),
+          inArray(paymentProjections.status, ["READY", "UNAVAILABLE"]),
+          inArray(outbox.status, ["pending", "blocked"]),
+          lte(paymentRequests.expiresAt, now)
         )
       )
       .orderBy(asc(paymentProjections.updatedAt), asc(paymentRequests.orderId))

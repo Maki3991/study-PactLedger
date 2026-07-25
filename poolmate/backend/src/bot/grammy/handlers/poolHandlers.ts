@@ -1,5 +1,5 @@
 import { InlineKeyboard, type Bot } from "grammy";
-import type { OrderDetailView } from "@poolmate/shared";
+import type { OrderDetailView, OrderIntentView } from "@poolmate/shared";
 import {
   type OrderDraftExtractor,
   OrderDraftExtractorError
@@ -26,6 +26,7 @@ import type {
 import { formatPaymentStatus } from "../../formatter.js";
 import { collectingOrderKeyboard, draftOrderKeyboard } from "../keyboards.js";
 import type { PoolMateContext } from "../context.js";
+import { ORDER_INTENT_SCHEMA_VERSION } from "../../../domain/orderIntent.js";
 
 export interface PoolHandlerDependencies {
   useCases: PoolMateBotUseCases;
@@ -55,8 +56,66 @@ function orderMessage(prefix: string, order: OrderDetailView): string {
   ].join("\n");
 }
 
+function orderIntent(
+  originalText: string,
+  source: OrderIntentView["source"],
+  input: {
+    itemName: string;
+    targetUnits: number;
+    unit?: string | null;
+    purchaseChannelHint?: string | null;
+    userPriceHint?: string | null;
+  }
+): OrderIntentView {
+  return {
+    schemaVersion: ORDER_INTENT_SCHEMA_VERSION,
+    originalText,
+    source,
+    items: [
+      {
+        name: input.itemName,
+        quantity: input.targetUnits,
+        ...(input.unit ? { unit: input.unit } : {})
+      }
+    ],
+    ...(input.purchaseChannelHint
+      ? { purchaseChannelHint: input.purchaseChannelHint }
+      : {}),
+    ...(input.userPriceHint ? { userPriceHint: input.userPriceHint } : {})
+  };
+}
+
+function draftReviewMessage(order: OrderDetailView): string {
+  const intent = order.intent;
+  const item = intent?.items[0];
+  const quantity = item
+    ? `${item.quantity}${item.unit ? ` ${item.unit}` : " units"}`
+    : `${order.targetUnits} units`;
+  return [
+    orderMessage("Draft created for review.", order),
+    `Requested item: ${item?.name ?? order.title}`,
+    `Requested quantity: ${quantity}`,
+    `Purchase channel preference: ${intent?.purchaseChannelHint ?? "Not specified"}`,
+    `User price reference: ${intent?.userPriceHint ?? "Not specified"}`,
+    "Current execution mode: Demo Merchant (Mock).",
+    "The requested channel is preserved as user intent, but no live channel integration is implied.",
+    "Final merchant, payee, and amount will come only from a verified Checkout.",
+    "No checkout, confirmation, or payment exists yet."
+  ].join("\n");
+}
+
 function safeDisplayName(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 80) || "participant";
+}
+
+function actorReference(
+  context: PoolMateContext,
+  currentActor: PoolMateBotActor
+): string {
+  const username = context.from?.username;
+  return username && /^[A-Za-z0-9_]{1,32}$/.test(username)
+    ? `@${username}`
+    : safeDisplayName(currentActor.displayName);
 }
 
 function groupChatId(context: PoolMateContext): string | null {
@@ -66,29 +125,56 @@ function groupChatId(context: PoolMateContext): string | null {
     : null;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function usernameMentionPattern(username: string): RegExp {
+  return new RegExp(
+    `(^|[^A-Za-z0-9_])@${escapeRegExp(username)}(?=$|[^A-Za-z0-9_])`,
+    "gi"
+  );
+}
+
 function mentionedOrderRequest(context: PoolMateContext): string | null {
   const message = context.message;
   const username = context.me.username;
   if (!message?.text || !username) return null;
   const text = message.text;
-  const expected = `@${username}`.toLowerCase();
-  const mentioned = message.entities?.some((entity) => {
-    if (entity.type !== "mention") return false;
-    return (
-      text.slice(entity.offset, entity.offset + entity.length).toLowerCase() ===
-      expected
-    );
-  });
-  if (!mentioned) return null;
-  return text
-    .replace(new RegExp(`@${username}\\b`, "gi"), " ")
+  const textMentionPattern = usernameMentionPattern(username);
+  const textMentioned = textMentionPattern.test(text);
+  const richMentionRanges = (message.entities ?? [])
+    .filter(
+      (entity) =>
+        entity.type === "text_mention" && entity.user.id === context.me.id
+    )
+    .map((entity) => ({ offset: entity.offset, length: entity.length }))
+    .sort((left, right) => right.offset - left.offset);
+
+  if (!textMentioned && richMentionRanges.length === 0) return null;
+
+  let requestText = text;
+  for (const range of richMentionRanges) {
+    requestText = `${requestText.slice(0, range.offset)} ${requestText.slice(
+      range.offset + range.length
+    )}`;
+  }
+
+  return requestText
+    .replace(usernameMentionPattern(username), "$1 ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function fieldNames(fields: string[]): string {
   return fields
-    .map((field) => (field === "targetUnits" ? "target quantity" : "title"))
+    .map((field) => {
+      if (field === "targetUnits") return "target quantity";
+      if (field === "itemName") return "product";
+      if (field === "purchaseChannelHint") return "purchase channel";
+      if (field === "userPriceHint") return "reference price";
+      return field;
+    })
     .join(", ");
 }
 
@@ -231,9 +317,13 @@ async function handleCallbackAction(
       units: data.units
     });
     await context.answerCallbackQuery({ text: "Claim recorded" });
-    await context.reply(orderMessage("Claim updated.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage(
+        `${actorReference(context, currentActor)} updated their claim.`,
+        order
+      ),
+      { reply_markup: collectingOrderKeyboard(order.id) }
+    );
     return;
   }
 
@@ -245,9 +335,13 @@ async function handleCallbackAction(
       actor: currentActor
     });
     await context.answerCallbackQuery({ text: "Claim removed" });
-    await context.reply(orderMessage("You left the pool.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage(
+        `${actorReference(context, currentActor)} left the pool.`,
+        order
+      ),
+      { reply_markup: collectingOrderKeyboard(order.id) }
+    );
     return;
   }
 
@@ -319,7 +413,8 @@ export function registerPoolHandlers(
       return;
     }
 
-    const command = parseNewPoolCommand(context.message?.text ?? "");
+    const originalText = context.message?.text ?? "";
+    const command = parseNewPoolCommand(originalText);
     if (!command) {
       await context.reply("Usage: /pool_new <targetUnits> <title>");
       return;
@@ -333,7 +428,11 @@ export function registerPoolHandlers(
       telegramChatTitle: context.chat.title,
       actor: actor(context),
       title: command.title,
-      targetUnits: command.targetUnits
+      targetUnits: command.targetUnits,
+      intent: orderIntent(originalText, "telegram_command", {
+        itemName: command.title,
+        targetUnits: command.targetUnits
+      })
     });
     await context.reply(orderMessage("Pool created.", order), {
       reply_markup: collectingOrderKeyboard(order.id)
@@ -352,18 +451,23 @@ export function registerPoolHandlers(
       return;
     }
 
+    const currentActor = actor(context);
     const order = await useCases.claimPool({
       sourceIdempotencyKey: telegramUpdateIdempotencyKey(
         context.update.update_id
       ),
       telegramChatId,
       orderId: command.orderId,
-      actor: actor(context),
+      actor: currentActor,
       units: command.units
     });
-    await context.reply(orderMessage("Claim updated.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage(
+        `${actorReference(context, currentActor)} updated their claim.`,
+        order
+      ),
+      { reply_markup: collectingOrderKeyboard(order.id) }
+    );
   });
 
   bot.command("pool_leave", async (context) => {
@@ -381,17 +485,22 @@ export function registerPoolHandlers(
       return;
     }
 
+    const currentActor = actor(context);
     const order = await useCases.leavePool({
       sourceIdempotencyKey: telegramUpdateIdempotencyKey(
         context.update.update_id
       ),
       telegramChatId,
       orderId,
-      actor: actor(context)
+      actor: currentActor
     });
-    await context.reply(orderMessage("You left the pool.", order), {
-      reply_markup: collectingOrderKeyboard(order.id)
-    });
+    await context.reply(
+      orderMessage(
+        `${actorReference(context, currentActor)} left the pool.`,
+        order
+      ),
+      { reply_markup: collectingOrderKeyboard(order.id) }
+    );
   });
 
   bot.command("pool_close", async (context) => {
@@ -519,6 +628,10 @@ export function registerPoolHandlers(
         return;
       }
 
+      await context.reply(
+        "Request received. PoolMate is parsing the order draft now."
+      );
+
       try {
         const extraction = await draftExtractor.extract({
           text: requestText,
@@ -531,6 +644,7 @@ export function registerPoolHandlers(
         if (
           unresolved.length > 0 ||
           extraction.title === null ||
+          extraction.itemName === null ||
           extraction.targetUnits === null
         ) {
           await context.reply(
@@ -546,23 +660,29 @@ export function registerPoolHandlers(
           telegramChatTitle: context.chat.title ?? "Telegram group",
           actor: actor(context),
           title: extraction.title,
-          targetUnits: extraction.targetUnits
+          targetUnits: extraction.targetUnits,
+          intent: orderIntent(requestText, "telegram_natural_language", {
+            itemName: extraction.itemName,
+            targetUnits: extraction.targetUnits,
+            unit: extraction.unit,
+            purchaseChannelHint: extraction.purchaseChannelHint,
+            userPriceHint: extraction.userPriceHint
+          })
         });
-        await context.reply(
-          [
-            orderMessage("Draft created for review.", order),
-            "No checkout, confirmation, or payment exists yet."
-          ].join("\n"),
-          { reply_markup: draftOrderKeyboard(order.id) }
-        );
+        await context.reply(draftReviewMessage(order), {
+          reply_markup: draftOrderKeyboard(order.id)
+        });
       } catch (error) {
         if (error instanceof OrderDraftExtractorError) {
+          console.error(`[telegram] draft parsing failed code=${error.code}`);
           const message =
             error.code === "LLM_INVALID_INPUT"
               ? error.message
               : error.code === "LLM_REFUSED"
                 ? "The request could not be parsed into an order draft. No order was created."
-                : "Natural-language draft parsing is unavailable. Use /pool_new <targetUnits> <title>.";
+                : error.code === "LLM_INVALID_RESPONSE"
+                  ? "The model returned an invalid order draft. Please retry the same request. No order was created."
+                  : "Natural-language draft parsing is unavailable. Use /pool_new <targetUnits> <title>.";
           await context.reply(message);
           return;
         }

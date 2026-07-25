@@ -20,6 +20,7 @@ export class OrderServiceBotUseCases implements PoolMateBotUseCases {
       ownerUserId: input.actor.userId,
       title: input.title,
       targetUnits: input.targetUnits,
+      intent: input.intent,
       sourceIdempotencyKey: input.sourceIdempotencyKey
     });
   }

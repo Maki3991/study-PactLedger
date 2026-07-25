@@ -22,6 +22,19 @@ function responseWithDraft(draft: unknown): string {
   });
 }
 
+function chatCompletionWithDraft(draft: unknown): string {
+  return JSON.stringify({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: JSON.stringify(draft)
+        }
+      }
+    ]
+  });
+}
+
 test("HTTP extractor sends strict Structured Output and returns a draft patch", async () => {
   let captured: OrderDraftHttpTransportRequest | undefined;
   const extractor = createOrderDraftExtractor({
@@ -36,7 +49,11 @@ test("HTTP extractor sends strict Structured Output and returns a draft patch", 
           status: 200,
           body: responseWithDraft({
             title: "Three fruit boxes",
+            itemName: "杨梅",
             targetUnits: 3,
+            unit: "箱",
+            purchaseChannelHint: null,
+            userPriceHint: null,
             missingFields: [],
             ambiguousFields: []
           })
@@ -51,7 +68,11 @@ test("HTTP extractor sends strict Structured Output and returns a draft patch", 
   });
   assert.deepEqual(result, {
     title: "Three fruit boxes",
+    itemName: "杨梅",
     targetUnits: 3,
+    unit: "箱",
+    purchaseChannelHint: null,
+    userPriceHint: null,
     missingFields: [],
     ambiguousFields: []
   });
@@ -68,7 +89,11 @@ test("HTTP extractor sends strict Structured Output and returns a draft patch", 
   assert.equal(requestBody.text.format.schema.additionalProperties, false);
   assert.deepEqual(requestBody.text.format.schema.required, [
     "title",
+    "itemName",
     "targetUnits",
+    "unit",
+    "purchaseChannelHint",
+    "userPriceHint",
     "missingFields",
     "ambiguousFields"
   ]);
@@ -88,7 +113,11 @@ test("extractor accepts explicit missing fields without inventing an order", asy
           status: 200,
           body: responseWithDraft({
             title: "Fruit boxes",
+            itemName: "Fruit",
             targetUnits: null,
+            unit: null,
+            purchaseChannelHint: null,
+            userPriceHint: null,
             missingFields: ["targetUnits"],
             ambiguousFields: []
           })
@@ -99,10 +128,127 @@ test("extractor accepts explicit missing fields without inventing an order", asy
 
   assert.deepEqual(await extractor.extract({ text: "pool fruit boxes" }), {
     title: "Fruit boxes",
+    itemName: "Fruit",
     targetUnits: null,
+    unit: null,
+    purchaseChannelHint: null,
+    userPriceHint: null,
     missingFields: ["targetUnits"],
     ambiguousFields: []
   });
+});
+
+test("OpenAI-compatible chat completions preserve purchase-channel intent", async () => {
+  let captured: OrderDraftHttpTransportRequest | undefined;
+  const extractor = createOrderDraftExtractor({
+    enabled: true,
+    provider: "deepseek",
+    baseUrl: "https://aiping.cn/api/v1",
+    apiKey: "provider-secret",
+    model: "DeepSeek-V3.2",
+    transport: {
+      async send(request) {
+        captured = request;
+        return {
+          status: 200,
+          body: chatCompletionWithDraft({
+            title: "可乐拼单",
+            itemName: "可乐",
+            targetUnits: 3,
+            unit: "瓶",
+            purchaseChannelHint: "美团外卖",
+            userPriceHint: null,
+            missingFields: [],
+            ambiguousFields: []
+          })
+        };
+      }
+    }
+  });
+
+  assert.deepEqual(
+    await extractor.extract({
+      text: "@PoolMate 拼单 3瓶可乐，美团外卖",
+      locale: "zh"
+    }),
+    {
+      title: "可乐拼单",
+      itemName: "可乐",
+      targetUnits: 3,
+      unit: "瓶",
+      purchaseChannelHint: "美团外卖",
+      userPriceHint: null,
+      missingFields: [],
+      ambiguousFields: []
+    }
+  );
+  assert.equal(
+    captured?.url.toString(),
+    "https://aiping.cn/api/v1/chat/completions"
+  );
+  assert.equal(captured?.headers.authorization, "Bearer provider-secret");
+  const requestBody = JSON.parse(captured!.body);
+  assert.equal(requestBody.response_format.type, "json_object");
+  assert.equal(requestBody.temperature, 0);
+  assert.equal(requestBody.max_tokens, 1_000);
+  assert.match(requestBody.messages[0].content, /purchaseChannelHint/);
+  assert.match(requestBody.messages[0].content, /never a verified merchant/);
+  assert.equal(JSON.stringify(requestBody).includes("provider-secret"), false);
+});
+
+test("OpenAI-compatible chat completions retry one invalid structured response", async () => {
+  let attempts = 0;
+  const extractor = createOrderDraftExtractor({
+    enabled: true,
+    provider: "deepseek",
+    baseUrl: "https://aiping.cn/api/v1",
+    apiKey: "provider-secret",
+    model: "DeepSeek-V3.2",
+    transport: {
+      async send() {
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            status: 200,
+            body: JSON.stringify({
+              choices: [
+                {
+                  finish_reason: "stop",
+                  message: {
+                    role: "assistant",
+                    content: "",
+                    reasoning_content: "draft reasoning without final output"
+                  }
+                }
+              ]
+            })
+          };
+        }
+        return {
+          status: 200,
+          body: chatCompletionWithDraft({
+            title: "可乐拼单",
+            itemName: "可乐",
+            targetUnits: 3,
+            unit: "瓶",
+            purchaseChannelHint: "美团外卖",
+            userPriceHint: null,
+            missingFields: [],
+            ambiguousFields: []
+          })
+        };
+      }
+    }
+  });
+
+  const result = await extractor.extract({
+    text: "拼单 3瓶可乐，美团外卖",
+    locale: "zh"
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.purchaseChannelHint, "美团外卖");
+  assert.equal(extractor.getStatus(), "configured");
 });
 
 test("extractor rejects refusals, extra payment fields, and malformed output", async () => {
@@ -117,10 +263,16 @@ test("extractor rejects refusals, extra payment fields, and malformed output", a
     }),
     responseWithDraft({
       title: "Fruit",
+      itemName: "Fruit",
       targetUnits: 3,
+      unit: null,
+      purchaseChannelHint: null,
+      userPriceHint: null,
       missingFields: [],
       ambiguousFields: [],
-      payeeId: "attacker-payee"
+      merchantId: "attacker-merchant",
+      payeeId: "attacker-payee",
+      finalAmount: "1"
     }),
     "not-json"
   ];

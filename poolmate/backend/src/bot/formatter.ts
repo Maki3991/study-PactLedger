@@ -56,6 +56,15 @@ export function formatPaymentStatus(order: OrderDetailView): string {
     ].join("\n");
   }
 
+  if (projection?.errorCode === "PAYMENT_REQUEST_EXPIRED") {
+    return [
+      heading,
+      "The confirmed checkout expired before payment submission.",
+      "No payment was made and no settlement receipt was created.",
+      "Create a new pool to obtain a fresh final quote."
+    ].join("\n");
+  }
+
   if (!projection) {
     return [
       heading,
@@ -120,9 +129,19 @@ export function formatPaymentStatus(order: OrderDetailView): string {
     ].join("\n");
   }
   if (projection.status === "DEMO_CONFIRMED") {
+    const receipt = projection.receipt;
+    if (receipt?.kind !== "mock" || !receipt.receiptId.trim()) {
+      return [
+        heading,
+        "Mock payment evidence is incomplete.",
+        "PoolMate cannot claim that the demo completed without a persisted Mock Receipt."
+      ].join("\n");
+    }
     return [
       heading,
       "Mock demo completed.",
+      `Amount: ${amount}.`,
+      `Mock receipt: ${receipt.receiptId}.`,
       "No real funds moved and this is not a chain payment."
     ].join("\n");
   }
@@ -140,5 +159,29 @@ export function formatPaymentStatus(order: OrderDetailView): string {
     `Amount: ${amount}.`,
     `Transaction: ${receipt.transactionHash}.`,
     `Explorer: ${receipt.explorerUrl}.`
+  ].join("\n");
+}
+
+export function formatConfirmationUpdate(
+  actorReference: string,
+  action: "confirm" | "decline",
+  order: OrderDetailView
+): string {
+  const allocations = order.checkout?.allocations ?? [];
+  const confirmed = allocations.filter(
+    (allocation) => allocation.confirmationStatus === "confirmed"
+  ).length;
+  const pending = allocations.filter(
+    (allocation) => allocation.confirmationStatus === "pending"
+  ).length;
+  const declined = allocations.filter(
+    (allocation) => allocation.confirmationStatus === "declined"
+  ).length;
+  return [
+    action === "confirm"
+      ? `${actorReference} confirmed the final quote.`
+      : `${actorReference} declined the final quote.`,
+    `Confirmations: ${confirmed} confirmed, ${pending} pending, ${declined} declined.`,
+    formatPaymentStatus(order)
   ].join("\n");
 }

@@ -14,7 +14,7 @@
 >
 > 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
 >
-> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base、安全关闭拼单、默认关闭的直接 HTTP LLM 草稿和管理面板；本地 Backend tests `114/114`、Frontend tests `31/31`，远程支付基座契约与真实链上结算仍未接通
+> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base、安全关闭拼单、结构化采购意图和管理面板；最后一名参与者在 Telegram WebApp 确认后，本地 Mock 会自动经过 Policy、持久化 Mock Receipt 并回群播报，不再需要管理员手动提交；设置 `AIPING_API_KEY` 即自动使用普通模型 `DeepSeek-V3.2`，真实抽取请求已验证，本地 Backend tests `133/133`、Frontend tests `32/32`，远程支付基座契约与真实链上结算仍未接通
 
 ---
 
@@ -420,8 +420,8 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 | A2A Agent Card / 任务协议 | 已实现 | Fastify Agent Card、REST 任务、JSON-RPC 与 API-key 保护均已通过本地测试；待生产重新部署与公网 Smoke Test |
 | x402 / ACP / AP2 | 原型 | 当前主要作为协议标签；尚无完整握手、鉴权和支付 Connector |
 | Telegram 群机器人 | 已实现 | Bot、会话与状态端点已迁入 `web/server/` Fastify；群消息可形成持久化拼单和标准 `AgentPaymentIntent -> Policy -> Mock Receipt`，陌生收款人产生真实拒绝 Trace；尚未配置生产 Token，明确为 `Mock · No Chain`，也不满足 Photon iMessage 门槛 |
-| PoolMate 独立参考应用 | 已实现 | 顶层 `poolmate/` 已从固定 CodexClaw commit 导入并移除嵌套 `.git`；CodexClaw 仅作为尽量少改代码的初始源码基线，运行时不依赖 Codex CLI/SDK/PTY；独立 Fastify / SQLite / React / grammY 实现订单、不可变 Checkout、原子金额分摊、Telegram WebApp 逐人确认、payment projection/outbox、幂等与只读恢复；Owner-only 安全关闭会持久化 cancellation evidence 并处理付款 claim 竞态；默认关闭的 Responses-compatible HTTPS Adapter 只提取 `title/targetUnits` 并停在 `DRAFT`，需发起人显式发布；Telegram user allowlist 默认关闭、可显式 fail closed 开启；Backend tests `114/114`、Frontend tests `31/31`、空 volume Docker 及桌面/移动浏览器检查通过 |
-| PoolMate 本地 Mock Payment Base | 已实现 | `PAYMENT_SETTLEMENT_MODE=mock` 无需远程 URL/Key；白名单、资产、正原子金额、有效期和 operation identity 经 Policy 检查后，operation/decision/Mock Receipt 追加写入独立 SQLite；重试和重启只恢复原 operation，只能进入 `DEMO_CONFIRMED`，API 不返回 tx hash 或 Explorer |
+| PoolMate 独立参考应用 | 已实现 | 顶层 `poolmate/` 已从固定 CodexClaw commit 导入并移除嵌套 `.git`；CodexClaw 仅作为尽量少改代码的初始源码基线，运行时不依赖 Codex CLI/SDK/PTY；独立 Fastify / SQLite / React / grammY 实现订单、不可变 Checkout、原子金额分摊、Telegram WebApp 逐人确认、payment projection/outbox、幂等与只读恢复；最后一名参与者确认后，Mock 模式会自动完成受控付款、返回 Mock Receipt、由 Bot 回原群播报，确认页可明确返回 Telegram；过期且尚未提交的确认 Checkout 会幂等进入 `PAYMENT_FAILED / PAYMENT_REQUEST_EXPIRED` 并明确说明无付款、无 Receipt；Owner-only 安全关闭会持久化 cancellation evidence 并处理付款 claim 竞态；自然语言入口可提取商品、数量、单位、采购渠道偏好和用户参考价并持久化为 `DRAFT`，设置 `AIPING_API_KEY` 即启用 AIPing `DeepSeek-V3.2`，真实 HTTP 抽取已返回目标结构；采购渠道仍是用户偏好，固定 Demo Merchant 的 merchant/payee/amount 只来自可信 Checkout；Telegram user allowlist 默认关闭、可显式 fail closed 开启；Backend tests `133/133`、Frontend tests `32/32`、10 个 migration、空 volume Docker 及桌面/移动浏览器检查通过 |
+| PoolMate 本地 Mock Payment Base | 已实现 | `PAYMENT_SETTLEMENT_MODE=mock` 无需远程 URL/Key；白名单、资产、正原子金额、有效期和 operation identity 经 Policy 检查后，operation/decision/Mock Receipt 追加写入独立 SQLite；最终确认会立即提交现有 Payment Orchestration，后台同时补扫持久化的 ready outbox 以恢复确认后中断；超过 Checkout 有效期的未提交请求会原子终止为 `PAYMENT_FAILED / PAYMENT_REQUEST_EXPIRED`，绝不补付或生成 Mock Receipt；重试和重启只处理原 operation，只能进入 `DEMO_CONFIRMED`，API 和群消息明确不返回 tx hash 或 Explorer、不宣称真实付款 |
 | PoolMate 独立远程 Payment Base 联调 | 实现中 | Testnet/Live HTTPS Client、稳定 operation ID、服务端鉴权、超时和错误归一化已实现；因 PactLedger 尚未发布稳定远端支付 API，远程模式默认 fail closed 为 `PAYMENT_BASE_UNAVAILABLE`，未调用 Demo 端点、未产生真实 Injective Receipt |
 | 链上 Treasury 合约 | 待实现 | 仓库当前无可验证部署 Manifest |
 
@@ -784,7 +784,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - **产品门**：PactLedger 已统一为主产品。
 - **基座门**：通用 Policy / Trace、Receipt 持久化与幂等已通过 API tests。
 - **复用门**：PoolMate 已调用同一 Fastify 基座 API，合法与拒绝 Trace 均可复现。
-- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4、安全关闭拼单和自然语言草稿已完成本地验收；本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；LLM 默认关闭且只能创建待发布 `DRAFT`；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
+- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4、安全关闭拼单和自然语言草稿已完成本地验收；本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；配置 `AIPING_API_KEY` 后 LLM 自动使用普通模型且只能创建待发布 `DRAFT`，未配置 Key 时命令流程继续可用；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
 
 从当前提交继续时，严格按以下顺序：
 
@@ -826,8 +826,8 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 ### P1：提升完整度
 
 - 统一 Protocol Router Connector 接口。
-- 使用已配置的生产 Telegram Bot 完成真实群聊收发，并固化本地 Mock Receipt 与拒绝 Policy 证据。
-- 为独立 PoolMate 配置一个 Responses-compatible HTTPS 模型端点，完成一次真实 mention → `DRAFT` → 发起人发布的联调证据；没有可用 Key 时保持默认关闭，不影响命令流程。
+- 使用已配置的生产 Telegram Bot 固化真实群聊证据：最终 WebApp 确认后自动进入 `DEMO_CONFIRMED`、群内展示带 `@username` 的确认进度与 Mock Receipt，并保留拒绝 Policy 证据。
+- 使用已验证的 AIPing `DeepSeek-V3.2` 配置，补充一次真实 Telegram 群聊 `@PoolMate 拼单 3瓶可乐，美团外卖` → `DRAFT` → 发起人发布的外部证据；采购渠道只作为意图保留，Demo Merchant 继续负责当前模拟 Checkout；没有可用 Key 时保持关闭，不影响命令流程。
 - 为独立 PoolMate 发布并冻结非 Demo 的远端支付提交/按 operation ID 查询契约，再配置 `PAYMENT_BASE_URL`、提交路径、恢复路径和服务端凭证完成 P3。
 - Receipt 总账页同时展示两个应用。
 - Policy 管理界面和人工审批队列。

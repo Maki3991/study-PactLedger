@@ -11,6 +11,7 @@ import type {
   FinalizeCheckoutResult,
   GroupView,
   OrderDetailView,
+  OrderIntentView,
   OrderState,
   OrderSummaryView,
   ParticipantView,
@@ -22,6 +23,7 @@ import type {
 import { allocateCheckout, parseAtomicAmount } from "../domain/allocation.js";
 import { hashCheckout } from "../domain/checkoutHash.js";
 import { DomainError } from "../domain/domainError.js";
+import { normalizeOrderIntent } from "../domain/orderIntent.js";
 import type {
   CheckoutRow,
   ConfirmationLookupRow,
@@ -375,10 +377,33 @@ export class OrderService {
     const groupId = requireText(request.groupId, "groupId", 64);
     const ownerUserId = requireText(request.ownerUserId, "ownerUserId", 64);
     const title = requireText(request.title, "title");
+    let intent: OrderIntentView;
+    try {
+      intent = normalizeOrderIntent(request.intent, {
+        title,
+        targetUnits: request.targetUnits
+      });
+    } catch {
+      throw new DomainError(
+        "INVALID_REQUEST",
+        "The order purchase intent is invalid.",
+        422
+      );
+    }
     const sourceIdempotencyKey = request.sourceIdempotencyKey
       ? requireText(request.sourceIdempotencyKey, "sourceIdempotencyKey", 160)
       : null;
     const requestHash = stableDigest(
+      JSON.stringify({
+        operation: "create-order-v1",
+        groupId,
+        ownerUserId,
+        title,
+        targetUnits: request.targetUnits,
+        intent
+      })
+    );
+    const legacyRequestHash = stableDigest(
       JSON.stringify({
         operation: "create-order-v1",
         groupId,
@@ -400,6 +425,7 @@ export class OrderService {
         state: "DRAFT",
         fundingMode: "sponsored_demo",
         targetUnits: request.targetUnits,
+        intent,
         sourceIdempotencyKey,
         requestHash,
         cancellation: null,
@@ -414,10 +440,14 @@ export class OrderService {
             groupId: order.groupId,
             ownerUserId: order.ownerUserId,
             title: order.title,
-            targetUnits: order.targetUnits
+            targetUnits: order.targetUnits,
+            intent: order.intent
           })
         );
-      if (persistedRequestHash !== requestHash) {
+      if (
+        persistedRequestHash !== requestHash &&
+        persistedRequestHash !== legacyRequestHash
+      ) {
         throw new DomainError(
           "IDEMPOTENCY_CONFLICT",
           "The idempotency key was already used for a different create-order request."
@@ -664,7 +694,8 @@ export class OrderService {
       receivedQuote = await this.merchantQuoteProvider.getQuote({
         orderId: snapshot.order.id,
         merchantId,
-        totalUnits: claimedUnits
+        totalUnits: claimedUnits,
+        orderIntent: snapshot.order.intent
       });
     } catch {
       throw new DomainError(
@@ -968,6 +999,17 @@ export class OrderService {
     });
   }
 
+  getTelegramChatIdForOrder(orderId: string): string {
+    return this.repository.read((transaction) => {
+      const order = this.requireOrder(transaction, orderId);
+      const group = transaction.getGroup(order.groupId);
+      if (!group) {
+        throw new DomainError("GROUP_NOT_FOUND", "Order group not found.", 404);
+      }
+      return group.telegramChatId;
+    });
+  }
+
   getGroupByChatId(telegramChatId: string): GroupView | undefined {
     return this.repository.read((transaction) => {
       const group = transaction.getGroupByChatId(telegramChatId);
@@ -1155,6 +1197,7 @@ export class OrderService {
           return {
             confirmation: this.confirmationView(row),
             orderState: row.orderState,
+            actionRecorded: false,
             paymentRequestCreated: false
           };
         }
@@ -1189,6 +1232,7 @@ export class OrderService {
           return {
             confirmation: this.confirmationView(row),
             orderState: this.requireOrder(transaction, row.orderId).state,
+            actionRecorded: true,
             paymentRequestCreated: false
           };
         }
@@ -1243,6 +1287,7 @@ export class OrderService {
         return {
           confirmation: this.confirmationView(row),
           orderState: this.requireOrder(transaction, row.orderId).state,
+          actionRecorded: true,
           paymentRequestCreated
         };
       }
@@ -1345,6 +1390,7 @@ export class OrderService {
     return {
       id: order.id,
       title: order.title,
+      intent: order.intent,
       group: publicGroup(group),
       state: order.state,
       fundingMode: order.fundingMode,

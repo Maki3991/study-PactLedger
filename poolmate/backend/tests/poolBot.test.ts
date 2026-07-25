@@ -173,7 +173,12 @@ function createUseCases(
     useCases: {
       createDraft: async (input) => {
         calls.draft.push(input);
-        return draftOrder;
+        return {
+          ...draftOrder,
+          title: input.title,
+          targetUnits: input.targetUnits,
+          intent: input.intent
+        };
       },
       publishDraft: async (input) => {
         calls.publish.push(input);
@@ -296,6 +301,7 @@ function commandUpdate(updateId: number, text: string) {
         is_bot: false,
         first_name: "Alice",
         last_name: "Chen",
+        username: "alice",
         language_code: "en"
       },
       chat: {
@@ -316,8 +322,13 @@ function commandUpdate(updateId: number, text: string) {
   };
 }
 
-function textUpdate(updateId: number, text: string, mention = false) {
-  const mentionText = "@poolmate_test_bot";
+function textUpdate(
+  updateId: number,
+  text: string,
+  mention: boolean | "text_mention" = false
+) {
+  const mentionText =
+    mention === "text_mention" ? "PoolMate" : "@poolmate_test_bot";
   const mentionOffset = text.indexOf(mentionText);
   return {
     update_id: updateId,
@@ -329,6 +340,7 @@ function textUpdate(updateId: number, text: string, mention = false) {
         is_bot: false,
         first_name: "Alice",
         last_name: "Chen",
+        username: "alice",
         language_code: "zh"
       },
       chat: {
@@ -341,11 +353,23 @@ function textUpdate(updateId: number, text: string, mention = false) {
       ...(mention && mentionOffset >= 0
         ? {
             entities: [
-              {
-                offset: mentionOffset,
-                length: mentionText.length,
-                type: "mention" as const
-              }
+              mention === "text_mention"
+                ? {
+                    offset: mentionOffset,
+                    length: mentionText.length,
+                    type: "text_mention" as const,
+                    user: {
+                      id: 123456,
+                      is_bot: true,
+                      first_name: "PoolMate",
+                      username: "poolmate_test_bot"
+                    }
+                  }
+                : {
+                    offset: mentionOffset,
+                    length: mentionText.length,
+                    type: "mention" as const
+                  }
             ]
           }
         : {})
@@ -362,7 +386,8 @@ function callbackUpdate(updateId: number, callbackId: string, data: string) {
         id: 101,
         is_bot: false,
         first_name: "Alice",
-        last_name: "Chen"
+        last_name: "Chen",
+        username: "alice"
       },
       chat_instance: "group-chat-instance",
       data,
@@ -437,7 +462,13 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
       telegramChatTitle: "Friday Pool",
       actor: { userId: "101", displayName: "Alice Chen" },
       title: "Fresh fruit",
-      targetUnits: 3
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "/pool_new 3 Fresh fruit",
+        source: "telegram_command",
+        items: [{ name: "Fresh fruit", quantity: 3 }]
+      }
     }
   ]);
   assert.deepEqual(calls.claim[0], {
@@ -474,17 +505,45 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
   assert.deepEqual(calls.get, [{ telegramChatId: "-500", orderId: "order-1" }]);
 });
 
-test("natural language creates only a persisted draft after an explicit mention", async () => {
+test("claim and leave replies identify the Telegram actor by @username", async () => {
+  const { useCases } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(commandUpdate(107, "/pool_claim order-1 1"));
+  await bot.handleUpdate(commandUpdate(108, "/pool_leave order-1"));
+  await bot.handleUpdate(
+    callbackUpdate(109, "callback-claim-actor", claimCallbackData("order-1", 1))
+  );
+  await bot.handleUpdate(
+    callbackUpdate(110, "callback-leave-actor", leaveCallbackData("order-1"))
+  );
+
+  const replies = apiCalls
+    .filter((call) => call.method === "sendMessage")
+    .map((call) => String(call.payload.text).split("\n", 1)[0]);
+  assert.deepEqual(replies, [
+    "@alice updated their claim.",
+    "@alice left the pool.",
+    "@alice updated their claim.",
+    "@alice left the pool."
+  ]);
+});
+
+test("natural language accepts exact username text and Telegram bot mention entities", async () => {
   let extracted = 0;
   const extractor: OrderDraftExtractor = {
     getStatus: () => "configured",
     async extract(request) {
       extracted += 1;
-      assert.equal(request.text, "拼三箱杨梅");
+      assert.equal(request.text, "拼单 3瓶可乐，美团外卖");
       assert.equal(request.locale, "zh");
       return {
-        title: "杨梅拼单",
+        title: "可乐拼单",
+        itemName: "可乐",
         targetUnits: 3,
+        unit: "瓶",
+        purchaseChannelHint: "美团外卖",
+        userPriceHint: null,
         missingFields: [],
         ambiguousFields: []
       };
@@ -499,26 +558,90 @@ test("natural language creates only a persisted draft after an explicit mention"
   );
 
   await bot.handleUpdate(textUpdate(110, "今晚吃什么"));
-  await bot.handleUpdate(textUpdate(109, "@poolmate_test_bot 拼三箱杨梅"));
   await bot.handleUpdate(
-    textUpdate(111, "@poolmate_test_bot 拼三箱杨梅", true)
+    textUpdate(108, "@poolmate_test_bot_extra 拼单 3瓶可乐，美团外卖")
+  );
+  await bot.handleUpdate(
+    textUpdate(109, "@poolmate_test_bot 拼单 3瓶可乐，美团外卖")
+  );
+  await bot.handleUpdate(
+    textUpdate(111, "@poolmate_test_bot 拼单 3瓶可乐，美团外卖", true)
+  );
+  await bot.handleUpdate(
+    textUpdate(112, "PoolMate 拼单 3瓶可乐，美团外卖", "text_mention")
   );
 
-  assert.equal(extracted, 1);
+  assert.equal(extracted, 3);
   assert.deepEqual(calls.draft, [
+    {
+      sourceIdempotencyKey: "telegram:update:v1:109",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "拼单 3瓶可乐，美团外卖",
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖"
+      }
+    },
     {
       sourceIdempotencyKey: "telegram:update:v1:111",
       telegramChatId: "-500",
       telegramChatTitle: "Friday Pool",
       actor: { userId: "101", displayName: "Alice Chen" },
-      title: "杨梅拼单",
-      targetUnits: 3
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "拼单 3瓶可乐，美团外卖",
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖"
+      }
+    },
+    {
+      sourceIdempotencyKey: "telegram:update:v1:112",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "拼单 3瓶可乐，美团外卖",
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖"
+      }
     }
   ]);
   assert.equal(calls.create.length, 0);
   assert.equal(calls.publish.length, 0);
-  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  const processingReplies = apiCalls.filter(
+    (call) =>
+      call.method === "sendMessage" &&
+      /Request received/.test(String(call.payload.text))
+  );
+  assert.equal(processingReplies.length, 3);
+  const reply = apiCalls.find(
+    (call) =>
+      call.method === "sendMessage" &&
+      /Draft created for review/.test(String(call.payload.text))
+  );
   assert.match(String(reply?.payload.text), /State: DRAFT/);
+  assert.match(String(reply?.payload.text), /Requested item: 可乐/);
+  assert.match(String(reply?.payload.text), /Requested quantity: 3 瓶/);
+  assert.match(
+    String(reply?.payload.text),
+    /Purchase channel preference: 美团外卖/
+  );
+  assert.match(String(reply?.payload.text), /Demo Merchant \(Mock\)/);
+  assert.match(String(reply?.payload.text), /no live channel integration/);
+  assert.match(String(reply?.payload.text), /verified Checkout/);
   assert.match(
     String(reply?.payload.text),
     /No checkout, confirmation, or payment/
@@ -542,7 +665,11 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
     async extract() {
       return {
         title: "Fruit",
+        itemName: "Fruit",
         targetUnits: null,
+        unit: null,
+        purchaseChannelHint: null,
+        userPriceHint: null,
         missingFields: ["targetUnits"],
         ambiguousFields: []
       };
@@ -567,8 +694,12 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
   assert.equal(first.calls.draft.length, 0);
   assert.match(
     String(firstHarness.apiCalls[0]?.payload.text),
-    /target quantity/
+    /Request received/
   );
+  const missingReply = firstHarness.apiCalls.find((call) =>
+    /target quantity/.test(String(call.payload.text))
+  );
+  assert.match(String(missingReply?.payload.text), /target quantity/);
 
   const second = createUseCases();
   const secondHarness = createHarness(

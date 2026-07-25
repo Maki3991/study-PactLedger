@@ -36,7 +36,7 @@ test("health reports real database and grammY status", async () => {
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().database, {
     status: "ready",
-    appliedMigrations: 9,
+    appliedMigrations: 10,
     pendingMigrations: 0
   });
   assert.deepEqual(response.json().bot, {

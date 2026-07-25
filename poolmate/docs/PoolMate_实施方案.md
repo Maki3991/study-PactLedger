@@ -82,7 +82,7 @@
 - A2A Task、Message、Artifact 和内部状态分离；
 - AP2 演进字段预留。
 - 发起人在付款提交前安全关闭拼单，并留下不可变取消证据；
-- 默认关闭的直接 HTTPS LLM 草稿提取器；
+- 设置 `AIPING_API_KEY` 即启用普通模型的直接 HTTPS LLM 草稿提取器；
 - `DRAFT -> Confirm & publish -> COLLECTING` 显式发布门。
 
 ---
@@ -98,7 +98,7 @@ Agent 负责：
 - 识别缺失和歧义字段；
 - 只返回经过严格 schema 校验的 Draft Patch。
 
-该能力由可选的直接 HTTPS Adapter 提供，不依赖 Codex CLI、Codex SDK、PTY session 或通用 Agent Runtime。默认关闭时，全部命令和确定性业务流程照常工作。
+该能力由可选的直接 HTTPS Adapter 提供，不依赖 Codex CLI、Codex SDK、PTY session 或通用 Agent Runtime。未配置 API Key 或显式关闭时，全部命令和确定性业务流程照常工作。
 
 确定性业务代码负责：
 
@@ -561,7 +561,7 @@ CodexClaw 是一次性导入的初始源码基线，目标是尽量复用工程�
 
 ### 7.1 运行方式
 
-PoolMate 只实现一个可选的 `OrderDraftExtractor` 端口。生产适配器通过直接 HTTPS 请求 Responses-compatible `/v1/responses` 接口，不启动 CLI、SDK、PTY、子进程或通用会话运行时。
+PoolMate 只实现一个可选的 `OrderDraftExtractor` 端口。默认 DeepSeek Provider 通过直接 HTTPS 请求 `/chat/completions`；高级配置仍可切换 Responses-compatible `/v1/responses`。两种方式都不启动 CLI、SDK、PTY、子进程或通用会话运行时。
 
 ```text
 明确 @mention Bot 的群消息
@@ -575,15 +575,21 @@ PoolMate 只实现一个可选的 `OrderDraftExtractor` 端口。生产适配器
 ### 7.2 配置
 
 ```text
-POOLMATE_LLM_ENABLED=false
+AIPING_API_KEY=
+AIPING_BASE_URL=https://aiping.cn/api/v1
+AIPING_MODEL=DeepSeek-V3.2
+
+# 以下为可选高级覆盖
+POOLMATE_LLM_ENABLED=
+POOLMATE_LLM_PROVIDER=deepseek
 POOLMATE_LLM_BASE_URL=
 POOLMATE_LLM_API_KEY=
 POOLMATE_LLM_MODEL=
-POOLMATE_LLM_TIMEOUT_MS=10000
+POOLMATE_LLM_TIMEOUT_MS=30000
 POOLMATE_LLM_MAX_INPUT_CHARS=2000
 ```
 
-启用时 URL 必须是无凭证、无 path/query/fragment 的 HTTPS origin，API Key 只从服务端环境变量读取。状态端点只返回 `disabled | configured | unavailable` 和可选模型名，不返回 Key。
+只设置 `AIPING_API_KEY` 即自动启用 AIPing Provider、`/api/v1` Base URL 和普通模型 `DeepSeek-V3.2`。显式设置 `POOLMATE_LLM_ENABLED=false` 可以关闭；官方 DeepSeek 或高级 Provider、URL 和模型仍可覆盖。Base URL 可以包含安全的 API path prefix，但必须使用 HTTPS 且不能包含凭证、query 或 fragment。API Key 只从服务端环境变量读取，状态端点只返回 `disabled | configured | unavailable` 和可选模型名，不返回 Key。
 
 ### 7.3 输出边界
 
@@ -592,13 +598,24 @@ POOLMATE_LLM_MAX_INPUT_CHARS=2000
 ```ts
 interface OrderDraftExtraction {
   title: string | null;
+  itemName: string | null;
   targetUnits: number | null;
-  missingFields: Array<"title" | "targetUnits">;
-  ambiguousFields: Array<"title" | "targetUnits">;
+  unit: string | null;
+  purchaseChannelHint: string | null;
+  userPriceHint: string | null;
+  missingFields: Array<"title" | "itemName" | "targetUnits">;
+  ambiguousFields: Array<
+    | "title"
+    | "itemName"
+    | "targetUnits"
+    | "unit"
+    | "purchaseChannelHint"
+    | "userPriceHint"
+  >;
 }
 ```
 
-任何额外字段、拒绝、超时、非 2xx、无效 JSON、缺失或歧义都会 fail closed。LLM 输出只创建 `DRAFT`；只有发起人点击 `Confirm & publish` 才进入 `COLLECTING`。`Discard draft` 使用确定性取消服务并留下持久化取消证据。
+采购渠道和用户参考价只是不可信业务意图。任何 merchant、payee、asset、final amount、Checkout、确认、付款、状态等额外字段，以及拒绝、超时、非 2xx、无效 JSON、必填字段缺失或歧义，都会 fail closed。LLM 输出只创建 `DRAFT`；只有发起人点击 `Confirm & publish` 才进入 `COLLECTING`。`Discard draft` 使用确定性取消服务并留下持久化取消证据。
 
 ---
 
@@ -609,13 +626,17 @@ interface OrderDraftExtraction {
 ```ts
 interface OrderDraftExtraction {
   title: string | null;
+  itemName: string | null;
   targetUnits: number | null;
-  missingFields: Array<"title" | "targetUnits">;
-  ambiguousFields: Array<"title" | "targetUnits">;
+  unit: string | null;
+  purchaseChannelHint: string | null;
+  userPriceHint: string | null;
+  missingFields: Array<"title" | "itemName" | "targetUnits">;
+  ambiguousFields: string[];
 }
 ```
 
-模型输出只生成 Draft Patch，不包含参考价格、商户、资产、金额、payee、确认或状态。
+模型输出只生成 Draft Patch。它可以保留用户明确说出的渠道偏好和参考价，但不能生成可信商户、资产、最终金额、payee、确认或状态。
 
 应用收到结果后必须执行 Zod 校验。
 
@@ -2327,7 +2348,7 @@ Telegram Update
 
 ### Agent
 
-- 使用默认关闭的直接 HTTPS LLM Adapter；
+- 设置 `AIPING_API_KEY` 即启用普通模型的直接 HTTPS LLM Adapter；
 - Structured Output 只用于草稿数据；
 - Adapter 状态和模型名可查询，API Key 不暴露；
 - Agent 无法指定任意金额和 payee；

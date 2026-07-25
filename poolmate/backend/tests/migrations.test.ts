@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
+import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
 
 function fixtureDirectory(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "poolmate-migrations-"));
@@ -621,7 +622,10 @@ test("0009 separates canonical checkout identity and invalidates legacy allocati
   for (const filename of fs
     .readdirSync(sourceMigrations)
     .filter(
-      (filename) => filename.endsWith(".sql") && !filename.startsWith("0009")
+      (filename) =>
+        filename.endsWith(".sql") &&
+        !filename.startsWith("0009") &&
+        !filename.startsWith("0010")
     )) {
     fs.copyFileSync(
       path.join(sourceMigrations, filename),
@@ -732,5 +736,95 @@ test("0009 separates canonical checkout identity and invalidates legacy allocati
     );
     assert.deepEqual(connection.pragma("foreign_key_check"), []);
   });
+  database.close();
+});
+
+test("0010 adds optional purchase intent metadata without hiding legacy orders", () => {
+  const directory = fixtureDirectory();
+  const migrationsDir = path.join(directory, "migrations");
+  const sourceMigrations = path.resolve("../migrations");
+  fs.mkdirSync(migrationsDir);
+  for (const filename of fs
+    .readdirSync(sourceMigrations)
+    .filter(
+      (filename) => filename.endsWith(".sql") && !filename.startsWith("0010")
+    )) {
+    fs.copyFileSync(
+      path.join(sourceMigrations, filename),
+      path.join(migrationsDir, filename)
+    );
+  }
+  const database = new PoolMateDatabase(
+    path.join(directory, "poolmate.sqlite"),
+    migrationsDir
+  );
+  database.migrate();
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups VALUES
+         ('group-10', '-10010', 'Legacy group', ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode, target_units,
+          created_at, updated_at)
+         VALUES ('order-10', 'group-10', 'owner-10', 'Legacy cola', 'DRAFT',
+          'sponsored_demo', 3, ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+  });
+
+  fs.copyFileSync(
+    path.join(sourceMigrations, "0010_order_purchase_intents.sql"),
+    path.join(migrationsDir, "0010_order_purchase_intents.sql")
+  );
+  database.migrate();
+
+  const columns = database.read((connection) =>
+    connection
+      .prepare("PRAGMA table_info(pm_orders)")
+      .all()
+      .map((column) => (column as { name: string }).name)
+  );
+  assert.equal(columns.includes("intent_schema_version"), true);
+  assert.equal(columns.includes("intent_json"), true);
+
+  const order = new OrderRepository(database).read((transaction) =>
+    transaction.getOrder("order-10")
+  );
+  assert.deepEqual(order?.intent, {
+    schemaVersion: "poolmate-order-intent-v1",
+    originalText: "Legacy cola",
+    source: "admin",
+    items: [{ name: "Legacy cola", quantity: 3 }]
+  });
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `UPDATE pm_orders
+         SET intent_schema_version = 'poolmate-order-intent-v1',
+             intent_json = '{"merchantId":"untrusted"}'
+         WHERE id = 'order-10'`
+      )
+      .run();
+  });
+  assert.deepEqual(
+    new OrderRepository(database).read((transaction) =>
+      transaction.getOrder("order-10")
+    )?.intent,
+    {
+      schemaVersion: "poolmate-order-intent-v1",
+      originalText: "Legacy cola",
+      source: "admin",
+      items: [{ name: "Legacy cola", quantity: 3 }]
+    }
+  );
+  assert.deepEqual(
+    database.read((connection) => connection.pragma("foreign_key_check")),
+    []
+  );
   database.close();
 });

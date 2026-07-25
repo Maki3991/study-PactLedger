@@ -236,7 +236,9 @@ test("exact checkout confirmations create one stable payment request", async () 
   assert.equal(service.confirm(tokens[1]!, "102").paymentRequestCreated, false);
   const final = service.confirm(tokens[2]!, "103");
   const duplicate = service.confirm(tokens[2]!, "103");
+  assert.equal(final.actionRecorded, true);
   assert.equal(final.paymentRequestCreated, true);
+  assert.equal(duplicate.actionRecorded, false);
   assert.equal(duplicate.paymentRequestCreated, false);
   assert.equal(final.orderState, "READY_FOR_PAYMENT");
 

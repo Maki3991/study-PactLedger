@@ -16,6 +16,10 @@ import {
   MOCK_MERCHANT_PAYEE_ID
 } from "./infrastructure/merchant/mockMerchantAdapter.js";
 import { createOrderDraftExtractor } from "./infrastructure/llm/httpOrderDraftExtractor.js";
+import {
+  formatConfirmationUpdate,
+  formatPaymentStatus
+} from "./bot/formatter.js";
 
 const config = loadConfig();
 const database = new PoolMateDatabase(
@@ -82,30 +86,75 @@ const app = await createServer({
   identityVerifier: new TelegramWebAppIdentityVerifier({
     botToken: config.telegram.token
   }),
+  notifyConfirmation: async (notification) => {
+    const sent = await botRuntime.sendMessage(
+      notification.telegramChatId,
+      formatConfirmationUpdate(
+        notification.actorReference,
+        notification.action,
+        notification.order
+      )
+    );
+    if (!sent) throw new Error("Telegram bot is unavailable for notification.");
+  },
   getBotStatus: () => botRuntime.getStatus()
 });
 
 await app.listen({ host: config.app.host, port: config.app.port });
 void botRuntime.start();
 
-async function recoverPayments(): Promise<void> {
-  const result = await paymentOrchestrationService.recoverPending();
-  if (result.attempted > 0) {
-    console.log(
-      `[poolmate] payment recovery attempted=${result.attempted} succeeded=${result.succeeded} failed=${result.failed}`
-    );
+let paymentSweepRunning = false;
+
+async function processPayments(): Promise<void> {
+  if (paymentSweepRunning) return;
+  paymentSweepRunning = true;
+  try {
+    const expiration = await paymentOrchestrationService.expireReadyPayments();
+    for (const order of expiration.expired) {
+      const telegramChatId = orderService.getTelegramChatIdForOrder(order.id);
+      await botRuntime
+        .sendMessage(telegramChatId, formatPaymentStatus(order))
+        .catch(() => false);
+    }
+    if (expiration.attempted > 0) {
+      console.log(
+        `[poolmate] expired ready payments attempted=${expiration.attempted} succeeded=${expiration.succeeded} failed=${expiration.failed}`
+      );
+    }
+
+    const automatic =
+      await paymentOrchestrationService.submitReadyMockPayments();
+    for (const order of automatic.completed) {
+      const telegramChatId = orderService.getTelegramChatIdForOrder(order.id);
+      await botRuntime
+        .sendMessage(telegramChatId, formatPaymentStatus(order))
+        .catch(() => false);
+    }
+    if (automatic.attempted > 0) {
+      console.log(
+        `[poolmate] automatic mock payments attempted=${automatic.attempted} succeeded=${automatic.succeeded} failed=${automatic.failed}`
+      );
+    }
+
+    const result = await paymentOrchestrationService.recoverPending();
+    if (result.attempted > 0) {
+      console.log(
+        `[poolmate] payment recovery attempted=${result.attempted} succeeded=${result.succeeded} failed=${result.failed}`
+      );
+    }
+  } finally {
+    paymentSweepRunning = false;
   }
 }
 
-// Recovery only queries persisted operations; it never creates a new payment.
-void recoverPayments().catch((error: unknown) => {
-  console.error("[poolmate] payment recovery failed", error);
+void processPayments().catch((error: unknown) => {
+  console.error("[poolmate] payment processing failed", error);
 });
 const recoveryTimer = setInterval(() => {
-  void recoverPayments().catch((error: unknown) => {
-    console.error("[poolmate] payment recovery failed", error);
+  void processPayments().catch((error: unknown) => {
+    console.error("[poolmate] payment processing failed", error);
   });
-}, 30_000);
+}, 1_000);
 recoveryTimer.unref();
 
 async function shutdown(signal: string): Promise<void> {

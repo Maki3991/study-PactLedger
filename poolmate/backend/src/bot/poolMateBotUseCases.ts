@@ -1,4 +1,4 @@
-import type { OrderDetailView } from "@poolmate/shared";
+import type { OrderDetailView, OrderIntentView } from "@poolmate/shared";
 
 export interface PoolMateBotActor {
   userId: string;
@@ -12,6 +12,7 @@ export interface CreatePoolFromBotInput {
   actor: PoolMateBotActor;
   title: string;
   targetUnits: number;
+  intent?: OrderIntentView;
 }
 
 export type CreateDraftFromBotInput = CreatePoolFromBotInput;

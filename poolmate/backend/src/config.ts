@@ -47,6 +47,7 @@ export interface PoolMateConfig {
   };
   llm: {
     enabled: boolean;
+    provider: "deepseek" | "responses";
     baseUrl?: string;
     apiKey?: string;
     model?: string;
@@ -116,6 +117,18 @@ function parseSettlementMode(value: string | undefined): SettlementMode {
     : "disabled";
 }
 
+function parseLlmProvider(
+  value: string | undefined,
+  fallback: "deepseek" | "responses"
+): "deepseek" | "responses" {
+  const normalized = optional(value)?.toLowerCase();
+  if (normalized === undefined) return fallback;
+  if (normalized === "deepseek" || normalized === "responses") {
+    return normalized;
+  }
+  throw new Error("POOLMATE_LLM_PROVIDER must be deepseek or responses.");
+}
+
 function normalizePublicBaseUrl(
   value: string | undefined,
   fallback: string
@@ -139,14 +152,13 @@ function normalizeLlmBaseUrl(value: string): string {
     url.username ||
     url.password ||
     url.search ||
-    url.hash ||
-    url.pathname !== "/"
+    url.hash
   ) {
     throw new Error(
-      "POOLMATE_LLM_BASE_URL must be an HTTPS origin without credentials, path, query, or fragment."
+      "POOLMATE_LLM_BASE_URL must use HTTPS without credentials, query, or fragment."
     );
   }
-  return url.origin;
+  return url.toString().replace(/\/$/, "");
 }
 
 export function loadConfig(
@@ -156,17 +168,40 @@ export function loadConfig(
   const host = optional(env.POOLMATE_HOST) ?? "127.0.0.1";
   const port = parsePort(env.POOLMATE_PORT, 8788);
   const telegramToken = optional(env.TELEGRAM_BOT_TOKEN);
+  const aiPingApiKey = optional(env.AIPING_API_KEY);
+  const deepSeekApiKey = optional(env.DEEPSEEK_API_KEY);
+  const poolMateLlmApiKey = optional(env.POOLMATE_LLM_API_KEY);
+  const llmApiKey = poolMateLlmApiKey ?? aiPingApiKey ?? deepSeekApiKey;
+  const llmProvider = parseLlmProvider(
+    env.POOLMATE_LLM_PROVIDER,
+    aiPingApiKey ||
+      deepSeekApiKey ||
+      (!env.POOLMATE_LLM_BASE_URL && !env.POOLMATE_LLM_MODEL)
+      ? "deepseek"
+      : "responses"
+  );
   const llmEnabled = parseBoolean(
     env.POOLMATE_LLM_ENABLED,
-    false,
+    Boolean(llmApiKey),
     "POOLMATE_LLM_ENABLED"
   );
-  const llmBaseUrl = optional(env.POOLMATE_LLM_BASE_URL);
-  const llmApiKey = optional(env.POOLMATE_LLM_API_KEY);
-  const llmModel = optional(env.POOLMATE_LLM_MODEL);
+  const llmBaseUrl =
+    optional(env.POOLMATE_LLM_BASE_URL) ??
+    (llmProvider === "deepseek" && llmEnabled
+      ? aiPingApiKey
+        ? (optional(env.AIPING_BASE_URL) ?? "https://aiping.cn/api/v1")
+        : (optional(env.DEEPSEEK_BASE_URL) ?? "https://api.deepseek.com")
+      : undefined);
+  const llmModel =
+    optional(env.POOLMATE_LLM_MODEL) ??
+    (llmProvider === "deepseek" && llmEnabled
+      ? aiPingApiKey
+        ? (optional(env.AIPING_MODEL) ?? "DeepSeek-V3.2")
+        : (optional(env.DEEPSEEK_MODEL) ?? "deepseek-v4-pro")
+      : undefined);
   if (llmEnabled && (!llmBaseUrl || !llmApiKey || !llmModel)) {
     throw new Error(
-      "POOLMATE_LLM_BASE_URL, POOLMATE_LLM_API_KEY, and POOLMATE_LLM_MODEL are required when POOLMATE_LLM_ENABLED=true."
+      "The enabled LLM requires an API key, HTTPS base URL, and model. Set AIPING_API_KEY or DEEPSEEK_API_KEY for a default configuration, or provide the POOLMATE_LLM_* overrides."
     );
   }
   const publicBaseUrl = normalizePublicBaseUrl(
@@ -234,10 +269,11 @@ export function loadConfig(
     },
     llm: {
       enabled: llmEnabled,
+      provider: llmProvider,
       baseUrl: llmBaseUrl ? normalizeLlmBaseUrl(llmBaseUrl) : undefined,
       apiKey: llmApiKey,
       model: llmModel,
-      timeoutMs: parseTimeout(env.POOLMATE_LLM_TIMEOUT_MS, 10_000),
+      timeoutMs: parseTimeout(env.POOLMATE_LLM_TIMEOUT_MS, 30_000),
       maxInputChars: parseMaxInputChars(env.POOLMATE_LLM_MAX_INPUT_CHARS, 2_000)
     }
   };

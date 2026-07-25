@@ -38,6 +38,8 @@ export const orders = sqliteTable(
     state: text("state").notNull(),
     fundingMode: text("funding_mode").notNull(),
     targetUnits: integer("target_units").notNull(),
+    intentSchemaVersion: text("intent_schema_version"),
+    intentJson: text("intent_json"),
     sourceIdempotencyKey: text("source_idempotency_key").unique(),
     requestHash: text("request_hash"),
     terminalState: text("terminal_state"),

@@ -113,7 +113,7 @@
 **用户动作**
 
 ```text
-@PoolMate 拼三箱杨梅
+@PoolMate 拼单 3瓶可乐，美团外卖
 ```
 
 **Telegram 可见结果**
@@ -122,9 +122,15 @@
 
 ```text
 Draft created for review.
-Title: 杨梅拼单
-Target quantity: 3
+Title: 可乐拼单
 State: DRAFT
+Requested item: 可乐
+Requested quantity: 3 瓶
+Purchase channel preference: 美团外卖
+User price reference: Not specified
+Current execution mode: Demo Merchant (Mock).
+The requested channel is preserved as user intent, but no live channel integration is implied.
+Final merchant, payee, and amount will come only from a verified Checkout.
 
 No checkout, confirmation, or payment exists yet.
 
@@ -134,12 +140,12 @@ No checkout, confirmation, or payment exists yet.
 **系统内部动作**
 
 1. grammY Adapter 验证消息位于群聊，并且 Telegram `mention` entity 明确指向当前 Bot。
-2. 默认关闭的直接 HTTPS LLM Adapter 只提取 `title` 和 `targetUnits`。
-3. Structured Output 经过 strict JSON Schema 和 Zod 校验；任何额外付款字段、缺失、歧义、拒绝或超时都会 fail closed。
+2. 设置 `AIPING_API_KEY` 后，直接 HTTPS LLM Adapter 自动使用 `DeepSeek-V3.2`，提取标题、商品、数量、单位、采购渠道偏好和用户参考价。
+3. Structured Output 经过 strict JSON Schema 和 Zod 校验；任何 merchant/payee/final amount 等付款事实字段、缺失、歧义、拒绝或超时都会 fail closed。
 4. 使用 Telegram update ID 形成来源幂等键。
-5. 写入订单草稿；不写入商户、金额、payee、Checkout、确认或付款状态。
+5. 写入结构化采购意图和订单草稿；渠道只作为偏好保存，不写入可信商户、金额、payee、Checkout、确认或付款状态。
 
-如果 `POOLMATE_LLM_ENABLED=false`，Bot 提示使用 `/pool_new <targetUnits> <title>`，命令流程不受影响。
+如果未设置 `AIPING_API_KEY` 或其他 LLM Key，或显式设置 `POOLMATE_LLM_ENABLED=false`，Bot 提示使用 `/pool_new <targetUnits> <title>`，命令流程不受影响。
 
 **状态变化**
 

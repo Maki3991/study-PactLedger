@@ -102,6 +102,10 @@ export class PaymentOrchestrationService {
     this.now = options.now ?? (() => new Date());
   }
 
+  getSettlementMode(): SettlementMode {
+    return this.paymentBaseClient?.settlementMode ?? "disabled";
+  }
+
   async submit(orderId: string): Promise<OrderDetailView> {
     const snapshot = this.paymentSnapshot(orderId);
     if (this.isTerminalOrInFlight(snapshot.projection.status)) {
@@ -133,6 +137,7 @@ export class PaymentOrchestrationService {
       )
     );
     if (claimed === "expired") {
+      this.expireReadyPayment(orderId);
       throw new DomainError(
         "CHECKOUT_EXPIRED",
         "The payment request has expired."
@@ -276,6 +281,59 @@ export class PaymentOrchestrationService {
     };
   }
 
+  async submitReadyMockPayments(): Promise<{
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    completed: OrderDetailView[];
+  }> {
+    if (this.getSettlementMode() !== "mock") {
+      return { attempted: 0, succeeded: 0, failed: 0, completed: [] };
+    }
+    const orderIds = this.repository.read((transaction) =>
+      transaction.readyPaymentOrderIds(this.now().toISOString())
+    );
+    const results = await Promise.allSettled(
+      orderIds.map((orderId) => this.submit(orderId))
+    );
+    const fulfilled = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    return {
+      attempted: results.length,
+      succeeded: fulfilled.length,
+      failed: results.length - fulfilled.length,
+      completed: fulfilled.filter((order) => order.state === "DEMO_CONFIRMED")
+    };
+  }
+
+  async expireReadyPayments(): Promise<{
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    expired: OrderDetailView[];
+  }> {
+    const orderIds = this.repository.read((transaction) =>
+      transaction.expiredReadyPaymentOrderIds(this.now().toISOString())
+    );
+    const results = await Promise.allSettled(
+      orderIds.map((orderId) => this.expireReadyPayment(orderId))
+    );
+    const fulfilled = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    return {
+      attempted: results.length,
+      succeeded: fulfilled.length,
+      failed: results.length - fulfilled.length,
+      expired: fulfilled.filter(
+        (order) =>
+          order.state === "PAYMENT_FAILED" &&
+          order.paymentProjection?.errorCode === "PAYMENT_REQUEST_EXPIRED"
+      )
+    };
+  }
+
   private paymentSnapshot(orderId: string) {
     return this.repository.read((transaction) => {
       const request = transaction.paymentRequest(orderId);
@@ -306,6 +364,34 @@ export class PaymentOrchestrationService {
       status === "FAILED" ||
       status === "CONFIRMED" ||
       status === "DEMO_CONFIRMED"
+    );
+  }
+
+  private expireReadyPayment(orderId: string): OrderDetailView {
+    const snapshot = this.paymentSnapshot(orderId);
+    const expiresAt = new Date(snapshot.request.expiresAt).getTime();
+    if (
+      !Number.isFinite(expiresAt) ||
+      expiresAt > this.now().getTime() ||
+      (snapshot.projection.status !== "READY" &&
+        snapshot.projection.status !== "UNAVAILABLE")
+    ) {
+      return this.orderService.getOrder(orderId);
+    }
+    return this.updateState(
+      snapshot.request.id,
+      {
+        requestStatus: "failed",
+        projectionStatus: "FAILED",
+        settlementMode: snapshot.projection.settlementMode,
+        outboxStatus: "completed",
+        orderState: "PAYMENT_FAILED",
+        errorCode: "PAYMENT_REQUEST_EXPIRED",
+        errorMessage:
+          "The confirmed checkout expired before payment submission."
+      },
+      snapshot.projection.operationId,
+      ["READY", "UNAVAILABLE"]
     );
   }
 

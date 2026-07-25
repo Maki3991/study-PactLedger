@@ -4,6 +4,11 @@ import {
   MOCK_MERCHANT_ID,
   MockMerchantAdapter
 } from "../src/infrastructure/merchant/mockMerchantAdapter.js";
+import { fallbackOrderIntent } from "../src/domain/orderIntent.js";
+
+function orderIntent(title: string, quantity: number) {
+  return fallbackOrderIntent(title, quantity);
+}
 
 test("MockMerchantAdapter returns the verified demo merchant and exact USDC amount", async () => {
   const adapter = new MockMerchantAdapter({
@@ -13,7 +18,8 @@ test("MockMerchantAdapter returns the verified demo merchant and exact USDC amou
   const quote = await adapter.getQuote({
     orderId: "order-1",
     merchantId: MOCK_MERCHANT_ID,
-    totalUnits: 3
+    totalUnits: 3,
+    orderIntent: orderIntent("可乐", 3)
   });
 
   assert.match(quote.checkoutId, /^mock-checkout-/);
@@ -60,6 +66,7 @@ test("MockMerchantAdapter ignores caller-supplied payment fields", async () => {
     orderId: "order-2",
     merchantId: MOCK_MERCHANT_ID,
     totalUnits: 1,
+    orderIntent: orderIntent("可乐", 1),
     payeeId: "attacker",
     amountAtomic: "1",
     assetId: "FAKE",
@@ -83,7 +90,8 @@ test("MockMerchantAdapter rejects unknown merchants and invalid units", async ()
     adapter.getQuote({
       orderId: "order-3",
       merchantId: "merchant-unverified",
-      totalUnits: 1
+      totalUnits: 1,
+      orderIntent: orderIntent("可乐", 1)
     }),
     /not verified/
   );
@@ -91,7 +99,8 @@ test("MockMerchantAdapter rejects unknown merchants and invalid units", async ()
     adapter.getQuote({
       orderId: "order-3",
       merchantId: MOCK_MERCHANT_ID,
-      totalUnits: 0
+      totalUnits: 0,
+      orderIntent: orderIntent("可乐", 1)
     }),
     /between 1 and 1000/
   );

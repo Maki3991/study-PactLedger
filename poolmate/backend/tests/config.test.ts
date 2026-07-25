@@ -15,6 +15,7 @@ test("loadConfig uses safe independent defaults", () => {
   assert.equal(config.paymentBase.submitPath, undefined);
   assert.equal(config.paymentBase.timeoutMs, 10_000);
   assert.equal(config.llm.enabled, false);
+  assert.equal(config.llm.provider, "deepseek");
   assert.equal(config.llm.apiKey, undefined);
   assert.equal(config.llm.maxInputChars, 2_000);
   assert.match(config.database.path, /poolmate\.sqlite$/);
@@ -117,6 +118,7 @@ test("loadConfig normalizes non-secret runtime settings", () => {
   assert.equal(config.paymentBase.timeoutMs, 5_000);
   assert.deepEqual(config.llm, {
     enabled: true,
+    provider: "responses",
     baseUrl: "https://llm.example.test",
     apiKey: "llm-secret",
     model: "draft-model",
@@ -125,11 +127,61 @@ test("loadConfig normalizes non-secret runtime settings", () => {
   });
 });
 
+test("DEEPSEEK_API_KEY alone enables the default PoolMate LLM", () => {
+  const config = loadConfig(
+    { DEEPSEEK_API_KEY: "deepseek-secret" },
+    "/tmp/poolmate-config-test"
+  );
+
+  assert.deepEqual(config.llm, {
+    enabled: true,
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "deepseek-secret",
+    model: "deepseek-v4-pro",
+    timeoutMs: 30_000,
+    maxInputChars: 2_000
+  });
+});
+
+test("AIPING_API_KEY alone enables the ordinary AIPing chat model", () => {
+  const config = loadConfig(
+    { AIPING_API_KEY: "aiping-secret" },
+    "/tmp/poolmate-config-test"
+  );
+
+  assert.deepEqual(config.llm, {
+    enabled: true,
+    provider: "deepseek",
+    baseUrl: "https://aiping.cn/api/v1",
+    apiKey: "aiping-secret",
+    model: "DeepSeek-V3.2",
+    timeoutMs: 30_000,
+    maxInputChars: 2_000
+  });
+});
+
+test("the explicit LLM switch can disable DeepSeek without removing its key", () => {
+  const config = loadConfig(
+    {
+      DEEPSEEK_API_KEY: "deepseek-secret",
+      POOLMATE_LLM_ENABLED: "false"
+    },
+    "/tmp/poolmate-config-test"
+  );
+
+  assert.equal(config.llm.enabled, false);
+  assert.equal(config.llm.provider, "deepseek");
+  assert.equal(config.llm.apiKey, "deepseek-secret");
+  assert.equal(config.llm.baseUrl, undefined);
+  assert.equal(config.llm.model, undefined);
+});
+
 test("enabled LLM configuration requires a secure complete server-side contract", () => {
   assert.throws(
     () =>
       loadConfig({ POOLMATE_LLM_ENABLED: "true" }, "/tmp/poolmate-config-test"),
-    /are required/
+    /requires/
   );
   assert.throws(
     () =>
@@ -142,7 +194,7 @@ test("enabled LLM configuration requires a secure complete server-side contract"
         },
         "/tmp/poolmate-config-test"
       ),
-    /HTTPS origin/
+    /HTTPS/
   );
 });
 

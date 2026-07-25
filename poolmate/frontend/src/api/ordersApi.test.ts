@@ -113,6 +113,33 @@ describe("orders API", () => {
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
+  it("accepts legacy orders without intent and rejects mismatched intent quantities", async () => {
+    const legacyOrder = structuredClone(orderDetail);
+    delete legacyOrder.intent;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(legacyOrder)))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...orderDetail,
+            intent: {
+              ...orderDetail.intent,
+              items: [{ name: "可乐", quantity: 2, unit: "瓶" }]
+            }
+          })
+        )
+      );
+
+    await expect(
+      createOrdersApi().getOrder("order-1", "admin-secret")
+    ).resolves.toEqual(legacyOrder);
+    await expect(
+      createOrdersApi().getOrder("order-1", "admin-secret")
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("closes orders through the protected admin route", async () => {
     const canceledOrder = {
       ...orderDetail,

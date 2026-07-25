@@ -327,6 +327,43 @@ test("local Mock confirmation persists a Demo trace and never becomes paid", asy
   current.database.close();
 });
 
+test("automatic Mock sweep consumes each persisted ready outbox exactly once", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: current.database,
+      allowedPayeeIds: ["merchant-payee"],
+      supportedAssetIds: ["USDC"],
+      now: () => new Date("2026-07-25T12:01:00.000Z")
+    }),
+    now: () => new Date("2026-07-25T12:01:00.000Z")
+  });
+
+  const first = await service.submitReadyMockPayments();
+  assert.deepEqual(
+    {
+      attempted: first.attempted,
+      succeeded: first.succeeded,
+      failed: first.failed,
+      completed: first.completed.map((order) => order.id)
+    },
+    { attempted: 1, succeeded: 1, failed: 0, completed: [ready.id] }
+  );
+  assert.equal(current.orderService.getOrder(ready.id).state, "DEMO_CONFIRMED");
+
+  const replay = await service.submitReadyMockPayments();
+  assert.deepEqual(replay, {
+    attempted: 0,
+    succeeded: 0,
+    failed: 0,
+    completed: []
+  });
+  current.database.close();
+});
+
 test("invalid chain evidence never becomes paid", async () => {
   const current = openFixture();
   const ready = await createReadyOrder(current.orderService);
@@ -686,10 +723,55 @@ test("expired payment requests never call the payment base", async () => {
     (error) => error instanceof DomainError && error.code === "CHECKOUT_EXPIRED"
   );
   assert.equal(client.submitCalls, 0);
-  assert.equal(
-    current.orderService.getOrder(ready.id).state,
-    "READY_FOR_PAYMENT"
+  const expired = current.orderService.getOrder(ready.id);
+  assert.equal(expired.state, "PAYMENT_FAILED");
+  assert.equal(expired.paymentRequest?.status, "failed");
+  assert.equal(expired.paymentProjection?.status, "FAILED");
+  assert.equal(expired.paymentProjection?.errorCode, "PAYMENT_REQUEST_EXPIRED");
+  assert.equal(expired.paymentOutbox?.status, "completed");
+  await service.submit(ready.id);
+  assert.equal(client.submitCalls, 0);
+  current.database.close();
+});
+
+test("automatic expiration sweep closes stale ready Mock work exactly once", async () => {
+  const current = openFixture();
+  const ready = await createReadyOrder(current.orderService);
+  const afterExpiry = new Date("2026-07-25T12:11:00.000Z");
+  const service = new PaymentOrchestrationService({
+    repository: current.repository,
+    orderService: current.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: current.database,
+      allowedPayeeIds: ["merchant-payee"],
+      supportedAssetIds: ["USDC"],
+      now: () => afterExpiry
+    }),
+    now: () => afterExpiry
+  });
+
+  const first = await service.expireReadyPayments();
+  assert.deepEqual(
+    {
+      attempted: first.attempted,
+      succeeded: first.succeeded,
+      failed: first.failed,
+      expired: first.expired.map((order) => order.id)
+    },
+    { attempted: 1, succeeded: 1, failed: 0, expired: [ready.id] }
   );
+  assert.deepEqual(await service.submitReadyMockPayments(), {
+    attempted: 0,
+    succeeded: 0,
+    failed: 0,
+    completed: []
+  });
+  assert.deepEqual(await service.expireReadyPayments(), {
+    attempted: 0,
+    succeeded: 0,
+    failed: 0,
+    expired: []
+  });
   current.database.close();
 });
 

@@ -11,6 +11,7 @@ import type {
   GroupView,
   MerchantView,
   OrderDetailView,
+  OrderIntentView,
   OrderState,
   OrderSummaryView,
   ParticipantView,
@@ -90,6 +91,11 @@ const outboxStatuses = [
   "blocked",
   "unknown",
 ] as const;
+const orderIntentSources = [
+  "telegram_natural_language",
+  "telegram_command",
+  "admin",
+] as const;
 
 function isAtomicMoney(value: unknown): value is AtomicMoney {
   return (
@@ -97,6 +103,27 @@ function isAtomicMoney(value: unknown): value is AtomicMoney {
     isNonEmptyString(value.assetId) &&
     typeof value.amountAtomic === "string" &&
     /^\d+$/.test(value.amountAtomic)
+  );
+}
+
+function isOrderIntent(value: unknown): value is OrderIntentView {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === "poolmate-order-intent-v1" &&
+    isNonEmptyString(value.originalText) &&
+    isOneOf(value.source, orderIntentSources) &&
+    Array.isArray(value.items) &&
+    value.items.length === 1 &&
+    value.items.every(
+      (item) =>
+        isRecord(item) &&
+        isNonEmptyString(item.name) &&
+        isPositiveInteger(item.quantity) &&
+        (item.unit === undefined || isNonEmptyString(item.unit)),
+    ) &&
+    (value.purchaseChannelHint === undefined ||
+      isNonEmptyString(value.purchaseChannelHint)) &&
+    (value.userPriceHint === undefined || isNonEmptyString(value.userPriceHint))
   );
 }
 
@@ -382,6 +409,9 @@ export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
     isOneOf(value.state, orderStates) &&
     isOneOf(value.fundingMode, fundingModes) &&
     isPositiveInteger(value.targetUnits) &&
+    (value.intent === undefined ||
+      (isOrderIntent(value.intent) &&
+        value.intent.items[0]?.quantity === value.targetUnits)) &&
     isNonNegativeInteger(value.claimedUnits) &&
     value.claimedUnits <= value.targetUnits &&
     isNonNegativeInteger(value.participantCount) &&
@@ -530,7 +560,10 @@ export function isConfirmationResult(
     (value.confirmation.status === "confirmed" ||
       value.confirmation.status === "declined") &&
     isOneOf(value.orderState, orderStates) &&
-    typeof value.paymentRequestCreated === "boolean"
+    typeof value.actionRecorded === "boolean" &&
+    typeof value.paymentRequestCreated === "boolean" &&
+    (value.paymentProjection === undefined ||
+      isPaymentProjection(value.paymentProjection))
   );
 }
 

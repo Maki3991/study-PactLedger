@@ -48,8 +48,9 @@ function normalizeError(error: unknown): ApiRequestError {
 
 export function ConfirmationSurface({ token, api }: ConfirmationSurfaceProps) {
   const ordersApi = useMemo(() => api ?? createOrdersApi(), [api]);
+  const telegramWebApp = window.Telegram?.WebApp;
   const [telegramInitData] = useState(
-    () => window.Telegram?.WebApp?.initData?.trim() ?? "",
+    () => telegramWebApp?.initData?.trim() ?? "",
   );
   const loadConfirmation = useCallback(
     (signal: AbortSignal) => ordersApi.getConfirmation(token ?? "", signal),
@@ -64,6 +65,10 @@ export function ConfirmationSurface({ token, api }: ConfirmationSurfaceProps) {
     state: "idle",
   });
   const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    telegramWebApp?.ready?.();
+    telegramWebApp?.expand?.();
+  }, [telegramWebApp]);
   const confirmation =
     submission.state === "success"
       ? submission.result.confirmation
@@ -351,14 +356,20 @@ export function ConfirmationSurface({ token, api }: ConfirmationSurfaceProps) {
                   <strong>
                     {submission.action === "decline"
                       ? "Rejection recorded"
-                      : "Confirmation recorded"}
+                      : submission.result.paymentProjection?.status ===
+                          "DEMO_CONFIRMED"
+                        ? "Mock order completed"
+                        : "Confirmation recorded"}
                   </strong>
                   <p>
                     {submission.action === "decline"
                       ? "The allocation was declined. No payment request was created from this action."
-                      : submission.result.paymentRequestCreated
-                        ? "All confirmations are complete and one local payment request was created. No settlement Receipt is present."
-                        : "The allocation is confirmed. The order is still waiting for other required confirmations."}
+                      : submission.result.paymentProjection?.status ===
+                          "DEMO_CONFIRMED"
+                        ? `All confirmations are complete. The Mock payment passed policy and produced receipt ${submission.result.paymentProjection.receipt?.receiptId ?? "unavailable"}. No real funds moved and no chain transaction exists.`
+                        : submission.result.paymentRequestCreated
+                          ? "All confirmations are complete and one local payment request was created. No settlement Receipt is present."
+                          : "The allocation is confirmed. The order is still waiting for other required confirmations."}
                   </p>
                   <StateBadge
                     label={orderStateMeta[submission.result.orderState].label}
@@ -366,6 +377,15 @@ export function ConfirmationSurface({ token, api }: ConfirmationSurfaceProps) {
                       orderStateMeta[submission.result.orderState].severity
                     }
                   />
+                  {telegramWebApp?.close ? (
+                    <button
+                      type="button"
+                      className="confirm-button"
+                      onClick={() => telegramWebApp.close?.()}
+                    >
+                      Return to Telegram
+                    </button>
+                  ) : null}
                 </div>
               </section>
             ) : null}

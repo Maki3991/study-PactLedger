@@ -122,7 +122,7 @@ grammY 迁移验收：
 ```text
 Telegram 群消息明确 @mention Bot
   -> grammY Handler
-  -> Responses-compatible HTTPS Adapter
+  -> DeepSeek 或 Responses-compatible HTTPS Adapter
   -> strict Structured Output
   -> Zod 校验
   -> 持久化 DRAFT
@@ -132,11 +132,11 @@ Telegram 群消息明确 @mention Bot
 
 约束：
 
-- 默认 `POOLMATE_LLM_ENABLED=false`，命令流程始终可用；
-- 启用时必须配置 HTTPS origin、服务端 API Key 和模型名；
-- 模型只返回 `title`、`targetUnits`、`missingFields`、`ambiguousFields`；
+- 设置 `AIPING_API_KEY` 时自动使用 AIPing OpenAI-compatible endpoint 和普通模型 `DeepSeek-V3.2`；未设置或显式关闭时命令流程始终可用；
+- 高级 Provider、HTTPS origin 和模型名可以通过 `POOLMATE_LLM_*` 覆盖；
+- 模型只返回标题、商品、目标数量、单位、采购渠道偏好、用户参考价及缺失/歧义分类；
 - 缺失、歧义、拒绝、超时或 schema 不合法时不得创建订单；
-- 模型不得产生商户、收款方、资产、金额、Checkout、确认、付款或订单状态；
+- 渠道偏好不等于商户；模型不得产生可信商户、收款方、资产、最终金额、Checkout、确认、付款或订单状态；
 - 草稿必须由订单发起人显式发布，丢弃草稿只进入持久化 `CANCELED`，不创建 Checkout、确认或付款。
 
 ## 3. PoolMate 自有领域
@@ -243,7 +243,7 @@ amount       = 只在可无损转换时填入旧 number 字段
 | P3 基座联调 | 外部阻塞 | 仍无可从独立进程调用的稳定支付接口；未调用 Demo 端点、未修改 `web/`、未宣称真实付款 | 待基座发布契约 |
 | P4 管理面板 | 已完成 | 展示订单、确认、payment projection、outbox、恢复入口和 Receipt 证据；Mock 证据边界由 `1b8f132` 加固 | `82f9385`、`1b8f132` |
 | P5 安全关闭拼单 | 已完成 | Owner-only Telegram/API/UI 关闭、append-only cancellation evidence、确认失效、付款 claim 竞态和重启恢复 | `e7a43c5` |
-| P6 自然语言草稿 | 已完成 | 移除 Codex CLI/SDK/PTY Runtime，grammY mention gate、直接 HTTPS Structured Output、`DRAFT -> Confirm & publish`、默认关闭配置 | `13ddaf5` |
+| P6 自然语言草稿 | 已完成 | 移除 Codex CLI/SDK/PTY Runtime，grammY mention gate、直接 HTTPS Structured Output、结构化采购意图持久化、`AIPING_API_KEY` 自动启用普通模型、`DRAFT -> Confirm & publish` | `13ddaf5` + 当前阶段提交 |
 
 P3 的进入条件是支付基座已经存在可从独立进程调用的稳定接口。本方案不通过修改 `web/`、共享数据库、导入基座源码或调用 Demo 端点创造该条件。
 
@@ -264,13 +264,14 @@ P3 的进入条件是支付基座已经存在可从独立进程调用的稳定�
 
 ### 6.1 2026-07-25 验收证据
 
-- Backend CI：typecheck、lint、format、`114/114` tests、build 和空库 healthcheck 通过；production dependency audit 为 0 个 high/critical。
-- Frontend：lint、typecheck、`31/31` tests 和 build 全部通过；shared typecheck/build 通过。
-- Docker 从独立 volume 升级到 8 个 migration；Mock 模式在没有远程 URL/Key/path 时报告 `configured`，disabled 模式仍如实报告未配置。
+- Backend CI：typecheck、lint、format、`133/133` tests、build 和空库 healthcheck 通过；production dependency audit 为 0 个 high/critical。
+- Frontend：lint、typecheck、`32/32` tests 和 build 全部通过；shared typecheck/build 通过。
+- Docker 使用 10 个 migration；Mock 模式在没有远程 URL/Key/path 时报告 `configured`，disabled 模式仍如实报告未配置。
 - 真实浏览器检查覆盖桌面 `1440 x 900` 与移动 `390 x 844`：运行时页和管理员 gate 无横向溢出或控件重叠，浏览器控制台无 warning/error；未生成持久化截图文件。
 - 静态边界检查无嵌套 `.git`、无 submodule、无 Telegraf production import、无 `web/` import；grammY 类型未进入 Domain、Application、shared DTO 或数据库 schema。
 - Telegram user allowlist 由 `TELEGRAM_USER_ALLOWLIST_ENABLED` 显式控制，默认关闭；只有开启时空名单才会让 Bot fail closed。
-- 自然语言草稿由 `POOLMATE_LLM_ENABLED` 显式控制，默认关闭；启用后使用直接 HTTPS Adapter，不启动 Codex CLI/SDK/PTY session。
+- 设置 `AIPING_API_KEY` 后自然语言草稿自动使用 AIPing `DeepSeek-V3.2`；仍可通过 `POOLMATE_LLM_ENABLED=false` 显式关闭，不启动 Codex CLI/SDK/PTY session。
+- 真实 AIPing 请求已通过生产 `OrderDraftExtractor` 返回“可乐 / 3 / 瓶 / 美团外卖”，且通过严格 Zod schema；尚未执行真实 Telegram 群聊触发。
 - 本地 Mock API 集成测试证明只能返回 `DEMO_CONFIRMED`；Mock Receipt DTO 使用 `kind=mock`，不包含交易哈希或 Explorer 字段，管理页单独显示其 receipt ID 与记录时间。
 - 未执行真实 Telegram 群聊、外部 HTTPS Mini App 或 Injective Testnet/Live 付款，这些不属于已完成证据。
 

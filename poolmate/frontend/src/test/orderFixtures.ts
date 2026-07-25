@@ -14,6 +14,13 @@ const group = {
 export const orderSummary: OrderSummaryView = {
   id: "order-1",
   title: "Team dumplings",
+  intent: {
+    schemaVersion: "poolmate-order-intent-v1",
+    originalText: "@PoolMate 拼单 3瓶可乐，美团外卖",
+    source: "telegram_natural_language",
+    items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+    purchaseChannelHint: "美团外卖",
+  },
   group,
   state: "READY_FOR_PAYMENT",
   fundingMode: "sponsored_demo",
@@ -187,5 +194,6 @@ export const confirmationResult: ConfirmationResult = {
     confirmedAt: "2026-07-25T02:00:00.000Z",
   },
   orderState: "READY_FOR_PAYMENT",
+  actionRecorded: true,
   paymentRequestCreated: true,
 };

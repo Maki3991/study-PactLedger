@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
+import { DomainError } from "../src/domain/domainError.js";
 
 interface ApiCall {
   method: string;
@@ -93,7 +94,7 @@ function commandUpdate(updateId: number, userId: number, text: string) {
   };
 }
 
-function callbackUpdate(updateId: number, userId: number) {
+function callbackUpdate(updateId: number, userId: number, data = "probe") {
   return {
     update_id: updateId,
     callback_query: {
@@ -104,7 +105,7 @@ function callbackUpdate(updateId: number, userId: number) {
         first_name: "Test User"
       },
       chat_instance: "test-chat",
-      data: "probe"
+      data
     }
   };
 }
@@ -167,4 +168,24 @@ test("grammY does not register legacy command handlers", async () => {
   await bot.handleUpdate(commandUpdate(9, 101, "/repo"));
 
   assert.deepEqual(calls, []);
+});
+
+test("grammY reports expected domain conflicts instead of a generic failure", async () => {
+  const { bot, calls } = createHarness();
+  bot.callbackQuery("locked-action", async () => {
+    throw new DomainError(
+      "INVALID_ORDER_STATE",
+      "Claims are locked after checkout confirmation begins."
+    );
+  });
+
+  await bot.handleUpdate(callbackUpdate(10, 101, "locked-action"));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, "answerCallbackQuery");
+  assert.equal(calls[0]?.payload.show_alert, true);
+  assert.equal(
+    calls[0]?.payload.text,
+    "Claims are locked after checkout confirmation begins."
+  );
 });

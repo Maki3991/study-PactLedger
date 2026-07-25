@@ -482,6 +482,122 @@ test("payment submit API executes the persisted local Mock boundary", async () =
   current.database.close();
 });
 
+test("final Telegram confirmation automatically completes Mock payment and notifies the group", async () => {
+  const current = fixture();
+  const group = current.orderService.createGroup({
+    telegramChatId: "-10006",
+    title: "Automatic Mock group"
+  });
+  const draft = current.orderService.createOrder({
+    groupId: group.id,
+    ownerUserId: "101",
+    title: "Automatic cola",
+    targetUnits: 1
+  });
+  current.orderService.publishOrder(draft.id);
+  current.orderService.claimOrder(draft.id, {
+    userId: "101",
+    displayName: "Ada",
+    units: 1
+  });
+  const checkout = await current.orderService.finalizeCheckout(draft.id, {
+    merchantId: "merchant-demo"
+  });
+  const token = new URLSearchParams(
+    new URL(checkout.confirmationLinks[0]!.url).hash.slice(1)
+  ).get("token")!;
+  const paymentOrchestrationService = new PaymentOrchestrationService({
+    repository: new OrderRepository(current.database),
+    orderService: current.orderService,
+    paymentBaseClient: new MockPaymentBaseClient({
+      database: current.database,
+      allowedPayeeIds: ["payee-demo"],
+      supportedAssetIds: ["USDC"],
+      now: () => new Date("2026-07-25T12:01:00.000Z")
+    }),
+    now: () => new Date("2026-07-25T12:01:00.000Z")
+  });
+  const notifications: Array<{
+    telegramChatId: string;
+    actorReference: string;
+    action: string;
+    state: string;
+  }> = [];
+  const app = await createServer({
+    ...current,
+    paymentOrchestrationService,
+    identityVerifier: {
+      async verify() {
+        return { telegramUserId: "101", username: "ada" };
+      }
+    },
+    notifyConfirmation: async (notification) => {
+      notifications.push({
+        telegramChatId: notification.telegramChatId,
+        actorReference: notification.actorReference,
+        action: notification.action,
+        state: notification.order.state
+      });
+    },
+    getBotStatus: () => "running",
+    logger: false
+  });
+
+  const confirmed = await app.inject({
+    method: "POST",
+    url: "/api/public/confirmation/confirm",
+    headers: {
+      authorization: "tma valid-101",
+      "x-poolmate-confirmation-token": token
+    },
+    payload: {}
+  });
+
+  assert.equal(confirmed.statusCode, 200, confirmed.body);
+  assert.equal(confirmed.json().actionRecorded, true);
+  assert.equal(confirmed.json().paymentRequestCreated, true);
+  assert.equal(confirmed.json().orderState, "DEMO_CONFIRMED");
+  assert.equal(confirmed.json().paymentProjection.status, "DEMO_CONFIRMED");
+  assert.equal(confirmed.json().paymentProjection.settlementMode, "mock");
+  assert.equal(confirmed.json().paymentProjection.receipt.kind, "mock");
+  assert.deepEqual(notifications, [
+    {
+      telegramChatId: "-10006",
+      actorReference: "@ada",
+      action: "confirm",
+      state: "DEMO_CONFIRMED"
+    }
+  ]);
+
+  const replay = await app.inject({
+    method: "POST",
+    url: "/api/public/confirmation/confirm",
+    headers: {
+      authorization: "tma valid-101",
+      "x-poolmate-confirmation-token": token
+    },
+    payload: {}
+  });
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.equal(replay.json().actionRecorded, false);
+  assert.equal(replay.json().orderState, "DEMO_CONFIRMED");
+  assert.equal(notifications.length, 1);
+  assert.equal(
+    current.database.read(
+      (connection) =>
+        (
+          connection
+            .prepare("SELECT COUNT(*) AS count FROM pm_mock_payment_operations")
+            .get() as { count: number }
+        ).count
+    ),
+    1
+  );
+
+  await app.close();
+  current.database.close();
+});
+
 test("admin close API is protected, idempotent, and returns cancellation evidence", async () => {
   const current = fixture();
   const group = current.orderService.createGroup({

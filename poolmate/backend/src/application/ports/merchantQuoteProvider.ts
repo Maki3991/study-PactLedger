@@ -1,9 +1,14 @@
-import type { CheckoutItemView, MerchantView } from "@poolmate/shared";
+import type {
+  CheckoutItemView,
+  MerchantView,
+  OrderIntentView
+} from "@poolmate/shared";
 
 export interface MerchantQuoteRequest {
   orderId: string;
   merchantId: string;
   totalUnits: number;
+  orderIntent: OrderIntentView;
 }
 
 export interface MerchantQuote {
