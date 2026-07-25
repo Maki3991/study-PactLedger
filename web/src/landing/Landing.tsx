@@ -210,6 +210,9 @@ export function Landing() {
         <div className="pl-footer-brand">
           <strong>PactLedger</strong>
           <span>Agent Treasury · Agent Spend Control</span>
+          <a className="pl-built-with" href="https://kiro.dev/" target="_blank" rel="noreferrer">
+            Built with <b>Kiro</b>
+          </a>
         </div>
         <div className="pl-footer-flow">
           <span>CONTROL PATH</span>

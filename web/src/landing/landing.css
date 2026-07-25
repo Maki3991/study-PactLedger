@@ -569,6 +569,23 @@ a:focus-visible {
 .pl-footer-brand { gap: 5px; }
 .pl-footer-brand strong { color: var(--pl-text); font-family: var(--pl-font-display); font-size: 0.9375rem; font-weight: 650; }
 .pl-footer-brand span { color: var(--pl-dim); font-size: 0.6875rem; line-height: 1.5; }
+.pl-built-with {
+  width: max-content;
+  margin-top: 5px;
+  color: var(--pl-dim);
+  font-family: var(--pl-font-display);
+  font-size: 0.5625rem;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  text-transform: uppercase;
+  transition: color 160ms ease;
+}
+.pl-built-with b { color: var(--pl-muted); font-weight: 650; }
+.pl-built-with:hover,
+.pl-built-with:focus-visible { color: var(--pl-text); }
+.pl-built-with:hover b,
+.pl-built-with:focus-visible b { color: var(--pl-green); }
 .pl-footer-flow { gap: 7px; }
 .pl-footer-flow > span { color: var(--pl-dim); font-family: var(--pl-font-display); font-size: 0.5625rem; }
 .pl-footer-flow code { color: var(--pl-muted); font-family: var(--pl-font-display); font-size: 0.6875rem; line-height: 1.6; }
