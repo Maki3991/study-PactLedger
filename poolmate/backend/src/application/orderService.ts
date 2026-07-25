@@ -11,6 +11,7 @@ import type {
   FinalizeCheckoutResult,
   GroupView,
   OrderDetailView,
+  OrderIntentView,
   OrderState,
   OrderSummaryView,
   ParticipantView,
@@ -19,9 +20,10 @@ import type {
   PoolMatePaymentRequest,
   UpdateClaimRequest
 } from "@poolmate/shared";
-import { allocateExactly, parseAtomicAmount } from "../domain/allocation.js";
+import { allocateCheckout, parseAtomicAmount } from "../domain/allocation.js";
 import { hashCheckout } from "../domain/checkoutHash.js";
 import { DomainError } from "../domain/domainError.js";
+import { normalizeOrderIntent } from "../domain/orderIntent.js";
 import type {
   CheckoutRow,
   ConfirmationLookupRow,
@@ -54,6 +56,8 @@ interface PrivateConfirmationDelivery {
   telegramUserId: string;
   url: string;
 }
+
+const MAX_TOTAL_CLAIM_UNITS = 1_000;
 
 function stableDigest(material: string): string {
   return createHash("sha256").update(material).digest("hex");
@@ -128,6 +132,13 @@ function validateQuote(
     "quoteReference",
     256
   );
+  if (quote.sourceProtocol !== "A2A" && quote.sourceProtocol !== "MOCK") {
+    throw new DomainError(
+      "INVALID_CHECKOUT",
+      "The merchant quote source protocol is unsupported.",
+      422
+    );
+  }
   const merchant = {
     id: requireText(quote.merchant.id, "merchantId", 64),
     displayName: requireText(
@@ -223,6 +234,7 @@ function validateQuote(
 
   return {
     checkoutId,
+    sourceProtocol: quote.sourceProtocol,
     merchant,
     items,
     assetId,
@@ -367,10 +379,33 @@ export class OrderService {
     const groupId = requireText(request.groupId, "groupId", 64);
     const ownerUserId = requireText(request.ownerUserId, "ownerUserId", 64);
     const title = requireText(request.title, "title");
+    let intent: OrderIntentView;
+    try {
+      intent = normalizeOrderIntent(request.intent, {
+        title,
+        targetUnits: request.targetUnits
+      });
+    } catch {
+      throw new DomainError(
+        "INVALID_REQUEST",
+        "The order purchase intent is invalid.",
+        422
+      );
+    }
     const sourceIdempotencyKey = request.sourceIdempotencyKey
       ? requireText(request.sourceIdempotencyKey, "sourceIdempotencyKey", 160)
       : null;
     const requestHash = stableDigest(
+      JSON.stringify({
+        operation: "create-order-v1",
+        groupId,
+        ownerUserId,
+        title,
+        targetUnits: request.targetUnits,
+        intent
+      })
+    );
+    const legacyRequestHash = stableDigest(
       JSON.stringify({
         operation: "create-order-v1",
         groupId,
@@ -392,8 +427,10 @@ export class OrderService {
         state: "DRAFT",
         fundingMode: "sponsored_demo",
         targetUnits: request.targetUnits,
+        intent,
         sourceIdempotencyKey,
         requestHash,
+        cancellation: null,
         createdAt: now,
         updatedAt: now
       });
@@ -405,10 +442,14 @@ export class OrderService {
             groupId: order.groupId,
             ownerUserId: order.ownerUserId,
             title: order.title,
-            targetUnits: order.targetUnits
+            targetUnits: order.targetUnits,
+            intent: order.intent
           })
         );
-      if (persistedRequestHash !== requestHash) {
+      if (
+        persistedRequestHash !== requestHash &&
+        persistedRequestHash !== legacyRequestHash
+      ) {
         throw new DomainError(
           "IDEMPOTENCY_CONFLICT",
           "The idempotency key was already used for a different create-order request."
@@ -477,10 +518,10 @@ export class OrderService {
         .filter((participant) => participant.userId !== userId)
         .reduce((sum, participant) => sum + participant.units, 0);
       const projected = currentWithoutUser + request.units;
-      if (projected > order.targetUnits) {
+      if (projected > MAX_TOTAL_CLAIM_UNITS) {
         throw new DomainError(
           "CAPACITY_EXCEEDED",
-          "The claim exceeds the remaining order capacity."
+          "The claim exceeds the per-order claim limit."
         );
       }
       transaction.upsertParticipant({
@@ -492,11 +533,7 @@ export class OrderService {
         joinedAt: existing?.joinedAt ?? now,
         updatedAt: now
       });
-      transaction.updateOrderState(
-        order.id,
-        projected === order.targetUnits ? "QUOTE_PENDING" : "COLLECTING",
-        now
-      );
+      transaction.updateOrderState(order.id, "COLLECTING", now);
       const result = this.detail(
         transaction,
         this.requireOrder(transaction, order.id)
@@ -631,9 +668,29 @@ export class OrderService {
         }
       }
       this.requireCheckoutState(order.state);
+      const participants = transaction.participants(order.id);
+      const claimedUnits = participants.reduce(
+        (sum, participant) => sum + participant.units,
+        0
+      );
+      if (claimedUnits <= 0) {
+        throw new DomainError(
+          "INVALID_ORDER_STATE",
+          "Checkout requires at least one claimed unit."
+        );
+      }
+      let lockedOrder = order;
+      if (order.state === "COLLECTING") {
+        transaction.updateOrderState(
+          order.id,
+          "QUOTE_PENDING",
+          this.now().toISOString()
+        );
+        lockedOrder = this.requireOrder(transaction, order.id);
+      }
       return {
-        order,
-        participants: transaction.participants(order.id),
+        order: lockedOrder,
+        participants,
         duplicate: false
       };
     });
@@ -644,10 +701,10 @@ export class OrderService {
       (sum, participant) => sum + participant.units,
       0
     );
-    if (claimedUnits !== snapshot.order.targetUnits) {
+    if (claimedUnits <= 0) {
       throw new DomainError(
         "INVALID_ORDER_STATE",
-        "Checkout requires the exact target units to be claimed."
+        "Checkout requires at least one claimed unit."
       );
     }
     let receivedQuote: MerchantQuote;
@@ -655,7 +712,8 @@ export class OrderService {
       receivedQuote = await this.merchantQuoteProvider.getQuote({
         orderId: snapshot.order.id,
         merchantId,
-        totalUnits: claimedUnits
+        totalUnits: claimedUnits,
+        orderIntent: snapshot.order.intent
       });
     } catch {
       throw new DomainError(
@@ -712,14 +770,21 @@ export class OrderService {
         (sum, participant) => sum + participant.units,
         0
       );
-      if (units !== order.targetUnits) {
+      if (units <= 0 || units !== claimedUnits) {
         throw new DomainError(
           "INVALID_ORDER_STATE",
           "Participant claims changed before checkout was saved."
         );
       }
-      const allocations = allocateExactly(
-        { assetId: quote.assetId, amountAtomic: quote.totalAmountAtomic },
+      const allocations = allocateCheckout(
+        {
+          assetId: quote.assetId,
+          goodsAmountAtomic: quote.goodsAmountAtomic,
+          shippingAmountAtomic: quote.shippingAmountAtomic,
+          discountAmountAtomic: quote.discountAmountAtomic,
+          feeAmountAtomic: quote.feeAmountAtomic,
+          totalAmountAtomic: quote.totalAmountAtomic
+        },
         participants.map((participant) => ({
           id: participant.id,
           units: participant.units
@@ -740,13 +805,17 @@ export class OrderService {
         feeAmountAtomic: quote.feeAmountAtomic,
         totalAmountAtomic: quote.totalAmountAtomic,
         expiresAt: quote.expiresAt,
-        allocations
+        sourceProtocol: quote.sourceProtocol
       });
       const now = this.now().toISOString();
-      const checkoutId = quote.checkoutId;
+      const checkoutSnapshotId = stableId(
+        "pmco",
+        `${order.id}:${version}:${quote.checkoutId}`
+      );
       transaction.supersedeConfirmations(order.id, now);
       transaction.insertCheckout({
-        id: checkoutId,
+        id: checkoutSnapshotId,
+        checkoutId: quote.checkoutId,
         orderId: order.id,
         version,
         hash: hash.value,
@@ -767,6 +836,7 @@ export class OrderService {
         quoteReference: quote.quoteReference,
         sourceIdempotencyKey: normalizedSourceKey,
         requestHash,
+        sourceProtocol: quote.sourceProtocol,
         createdAt: now,
         allocations: allocations.map((allocation) => {
           const token = tokenByParticipant.get(allocation.participantId);
@@ -780,6 +850,12 @@ export class OrderService {
             id: this.createId(),
             participantId: allocation.participantId,
             assetId: allocation.money.assetId,
+            strategy: allocation.strategy,
+            status: allocation.status,
+            goodsAmountAtomic: allocation.goodsAmountAtomic,
+            shippingAmountAtomic: allocation.shippingAmountAtomic,
+            discountAmountAtomic: allocation.discountAmountAtomic,
+            feeAmountAtomic: allocation.feeAmountAtomic,
             amountAtomic: allocation.money.amountAtomic,
             confirmationId: this.createId(),
             tokenHash: tokenHash(token)
@@ -817,6 +893,107 @@ export class OrderService {
     );
   }
 
+  cancelOrder(
+    orderId: string,
+    input: {
+      actorType: "telegram_owner" | "admin";
+      actorId: string;
+      reasonCode: "owner_requested" | "admin_requested";
+      sourceIdempotencyKey?: string;
+    }
+  ): OrderDetailView {
+    const actorId = requireText(input.actorId, "actorId", 128);
+    const sourceIdempotencyKey = input.sourceIdempotencyKey
+      ? requireText(input.sourceIdempotencyKey, "sourceIdempotencyKey", 160)
+      : null;
+    const requestHash = stableDigest(
+      JSON.stringify({
+        operation: "cancel-order-v1",
+        orderId,
+        actorType: input.actorType,
+        actorId,
+        reasonCode: input.reasonCode
+      })
+    );
+    const now = this.now().toISOString();
+    return this.repository.immediate((transaction) => {
+      const order = this.requireOrder(transaction, orderId);
+      if (
+        input.actorType === "telegram_owner" &&
+        order.ownerUserId !== actorId
+      ) {
+        throw new DomainError(
+          "FORBIDDEN",
+          "Only the order owner can cancel this pool.",
+          403
+        );
+      }
+      if (
+        (input.actorType === "telegram_owner" &&
+          input.reasonCode !== "owner_requested") ||
+        (input.actorType === "admin" && input.reasonCode !== "admin_requested")
+      ) {
+        throw new DomainError(
+          "INVALID_REQUEST",
+          "Cancellation actor and reason do not match.",
+          400
+        );
+      }
+      if (sourceIdempotencyKey) {
+        const replay =
+          transaction.cancellationByIdempotencyKey(sourceIdempotencyKey);
+        if (replay && replay.id !== order.id) {
+          throw new DomainError(
+            "IDEMPOTENCY_CONFLICT",
+            "The idempotency key was already used for another order."
+          );
+        }
+      }
+      if (order.state === "CANCELED") {
+        return this.detail(transaction, order);
+      }
+      if (!this.cancelableState(order.state)) {
+        throw new DomainError(
+          "ORDER_CANCELLATION_NOT_ALLOWED",
+          "This order can no longer be canceled before settlement.",
+          409
+        );
+      }
+
+      const paymentRequest = transaction.paymentRequest(order.id);
+      const paymentProjection = paymentRequest
+        ? transaction.paymentProjection(paymentRequest.id)
+        : undefined;
+      if (
+        (order.state === "READY_FOR_PAYMENT" && !paymentRequest) ||
+        (paymentRequest &&
+          (!paymentProjection ||
+            (paymentProjection.status !== "READY" &&
+              paymentProjection.status !== "UNAVAILABLE") ||
+            paymentProjection.receiptId !== null))
+      ) {
+        throw new DomainError(
+          "ORDER_CANCELLATION_NOT_ALLOWED",
+          "Payment processing has already started or its state is uncertain.",
+          409
+        );
+      }
+
+      transaction.supersedeConfirmations(order.id, now);
+      transaction.terminatePaymentForCanceledOrder(order.id, now);
+      transaction.cancelOrder({
+        orderId: order.id,
+        idempotencyKey: sourceIdempotencyKey,
+        requestHash,
+        actorType: input.actorType,
+        actorId,
+        reasonCode: input.reasonCode,
+        now
+      });
+      return this.detail(transaction, this.requireOrder(transaction, order.id));
+    });
+  }
+
   getPrivateParticipants(orderId: string): ParticipantRow[] {
     return this.repository.read((transaction) => {
       this.requireOrder(transaction, orderId);
@@ -837,6 +1014,17 @@ export class OrderService {
       const order = this.requireOrder(transaction, orderId);
       const group = transaction.getGroup(order.groupId);
       return group?.telegramChatId === normalizedChatId;
+    });
+  }
+
+  getTelegramChatIdForOrder(orderId: string): string {
+    return this.repository.read((transaction) => {
+      const order = this.requireOrder(transaction, orderId);
+      const group = transaction.getGroup(order.groupId);
+      if (!group) {
+        throw new DomainError("GROUP_NOT_FOUND", "Order group not found.", 404);
+      }
+      return group.telegramChatId;
     });
   }
 
@@ -1027,6 +1215,7 @@ export class OrderService {
           return {
             confirmation: this.confirmationView(row),
             orderState: row.orderState,
+            actionRecorded: false,
             paymentRequestCreated: false
           };
         }
@@ -1061,6 +1250,7 @@ export class OrderService {
           return {
             confirmation: this.confirmationView(row),
             orderState: this.requireOrder(transaction, row.orderId).state,
+            actionRecorded: true,
             paymentRequestCreated: false
           };
         }
@@ -1089,7 +1279,8 @@ export class OrderService {
             paymentRequest: {
               id: paymentRequestId,
               orderId: row.orderId,
-              checkoutId: row.id,
+              checkoutSnapshotId: row.id,
+              checkoutId: row.checkoutId,
               checkoutVersion: row.version,
               checkoutHash: row.hash,
               confirmationSetId,
@@ -1114,6 +1305,7 @@ export class OrderService {
         return {
           confirmation: this.confirmationView(row),
           orderState: this.requireOrder(transaction, row.orderId).state,
+          actionRecorded: true,
           paymentRequestCreated
         };
       }
@@ -1173,11 +1365,25 @@ export class OrderService {
     return state === "COLLECTING";
   }
 
+  private cancelableState(state: OrderState): boolean {
+    return (
+      state === "DRAFT" ||
+      state === "COLLECTING" ||
+      state === "QUOTE_PENDING" ||
+      state === "CONFIRMATION_PENDING" ||
+      state === "READY_FOR_PAYMENT"
+    );
+  }
+
   private requireCheckoutState(state: OrderState): void {
-    if (state !== "QUOTE_PENDING" && state !== "CONFIRMATION_PENDING") {
+    if (
+      state !== "COLLECTING" &&
+      state !== "QUOTE_PENDING" &&
+      state !== "CONFIRMATION_PENDING"
+    ) {
       throw new DomainError(
         "INVALID_ORDER_STATE",
-        "Checkout requires a fully claimed order."
+        "Checkout requires an open or locked order with at least one claim."
       );
     }
   }
@@ -1206,6 +1412,7 @@ export class OrderService {
     return {
       id: order.id,
       title: order.title,
+      intent: order.intent,
       group: publicGroup(group),
       state: order.state,
       fundingMode: order.fundingMode,
@@ -1218,6 +1425,7 @@ export class OrderService {
       ...(checkout
         ? { checkoutVersion: checkout.version, expiresAt: checkout.expiresAt }
         : {}),
+      ...(order.cancellation ? { cancellation: order.cancellation } : {}),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt
     };
@@ -1260,7 +1468,7 @@ export class OrderService {
     checkout: CheckoutRow
   ): CheckoutView {
     return {
-      id: checkout.id,
+      id: checkout.checkoutId,
       version: checkout.version,
       hash: {
         algorithm: checkout.hashAlgorithm,
@@ -1295,11 +1503,35 @@ export class OrderService {
         amountAtomic: checkout.totalAmountAtomic
       },
       expiresAt: checkout.expiresAt,
+      sourceProtocol: checkout.sourceProtocol,
       createdAt: checkout.createdAt,
       allocations: transaction.allocations(checkout.id).map((allocation) => ({
+        id: allocation.id,
         participantId: allocation.participantId,
         displayName: allocation.displayName,
         units: allocation.units,
+        strategy: allocation.strategy,
+        status: allocation.status,
+        goods: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.goodsAmountAtomic
+        },
+        shipping: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.shippingAmountAtomic
+        },
+        discount: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.discountAmountAtomic
+        },
+        fee: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.feeAmountAtomic
+        },
+        total: {
+          assetId: allocation.assetId,
+          amountAtomic: allocation.amountAtomic
+        },
         money: {
           assetId: allocation.assetId,
           amountAtomic: allocation.amountAtomic
@@ -1319,8 +1551,12 @@ export class OrderService {
     return {
       orderId: row.orderId,
       orderTitle: row.orderTitle,
+      checkoutId: row.checkoutId,
       participantDisplayName: row.participantDisplayName,
       participantUnits: row.participantUnits,
+      allocationId: row.allocationId,
+      allocationStrategy: row.allocationStrategy,
+      allocationStatus: row.allocationStatus,
       checkoutVersion: row.version,
       checkoutHash: {
         algorithm: row.hashAlgorithm,
@@ -1336,19 +1572,19 @@ export class OrderService {
       items: row.items,
       goods: {
         assetId: row.assetId,
-        amountAtomic: row.goodsAmountAtomic
+        amountAtomic: row.allocationGoodsAmountAtomic
       },
       shipping: {
         assetId: row.assetId,
-        amountAtomic: row.shippingAmountAtomic
+        amountAtomic: row.allocationShippingAmountAtomic
       },
       discount: {
         assetId: row.assetId,
-        amountAtomic: row.discountAmountAtomic
+        amountAtomic: row.allocationDiscountAmountAtomic
       },
       fee: {
         assetId: row.assetId,
-        amountAtomic: row.feeAmountAtomic
+        amountAtomic: row.allocationFeeAmountAtomic
       },
       orderTotal: {
         assetId: row.assetId,

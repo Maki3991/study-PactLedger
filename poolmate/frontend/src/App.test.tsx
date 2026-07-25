@@ -32,7 +32,8 @@ const config: ConfigStatusResponse = {
     userAllowlistEnabled: false,
     allowedUserCount: 0
   },
-  paymentBase: { status: "not_configured", settlementMode: "disabled" }
+  paymentBase: { status: "not_configured", settlementMode: "disabled" },
+  llm: { status: "disabled" }
 };
 
 describe("PoolMate operations dashboard", () => {
@@ -63,6 +64,9 @@ describe("PoolMate operations dashboard", () => {
     expect(
       screen.getByText("Telegram user allowlist").parentElement
     ).toHaveTextContent("Disabled");
+    expect(
+      screen.getByText("Natural-language drafts").parentElement
+    ).toHaveTextContent("disabled");
     expect(screen.queryByText(/paid/i)).not.toBeInTheDocument();
   });
 

@@ -1,4 +1,4 @@
-import type { OrderDetailView } from "@poolmate/shared";
+import type { OrderDetailView, OrderIntentView } from "@poolmate/shared";
 
 export interface PoolMateBotActor {
   userId: string;
@@ -12,6 +12,16 @@ export interface CreatePoolFromBotInput {
   actor: PoolMateBotActor;
   title: string;
   targetUnits: number;
+  intent?: OrderIntentView;
+}
+
+export type CreateDraftFromBotInput = CreatePoolFromBotInput;
+
+export interface DraftActionFromBotInput {
+  sourceIdempotencyKey: string;
+  telegramChatId: string;
+  orderId: string;
+  actor: PoolMateBotActor;
 }
 
 export interface ClaimPoolFromBotInput {
@@ -23,6 +33,13 @@ export interface ClaimPoolFromBotInput {
 }
 
 export interface LeavePoolFromBotInput {
+  sourceIdempotencyKey: string;
+  telegramChatId: string;
+  orderId: string;
+  actor: PoolMateBotActor;
+}
+
+export interface ClosePoolFromBotInput {
   sourceIdempotencyKey: string;
   telegramChatId: string;
   orderId: string;
@@ -66,9 +83,13 @@ export interface GetPoolFromBotInput {
 }
 
 export interface PoolMateBotUseCases {
+  createDraft(input: CreateDraftFromBotInput): Promise<OrderDetailView>;
+  publishDraft(input: DraftActionFromBotInput): Promise<OrderDetailView>;
+  discardDraft(input: DraftActionFromBotInput): Promise<OrderDetailView>;
   createPool(input: CreatePoolFromBotInput): Promise<OrderDetailView>;
   claimPool(input: ClaimPoolFromBotInput): Promise<OrderDetailView>;
   leavePool(input: LeavePoolFromBotInput): Promise<OrderDetailView>;
+  closePool(input: ClosePoolFromBotInput): Promise<OrderDetailView>;
   quotePool(input: QuotePoolFromBotInput): Promise<QuotePoolFromBotResult>;
   remindPool(input: RemindPoolFromBotInput): Promise<RemindPoolFromBotResult>;
   getPool(input: GetPoolFromBotInput): Promise<OrderDetailView>;

@@ -7,11 +7,19 @@ import { DomainError } from "../src/domain/domainError.js";
 const BOT_TOKEN = "123456:test-token";
 const NOW = new Date("2026-07-25T12:00:00.000Z");
 
-function signedInitData(userId: number, authDate: number): string {
+function signedInitData(
+  userId: number,
+  authDate: number,
+  username?: string
+): string {
   const parameters = new URLSearchParams({
     auth_date: String(authDate),
     query_id: "AAEAAAE",
-    user: JSON.stringify({ id: userId, first_name: "Ada" })
+    user: JSON.stringify({
+      id: userId,
+      first_name: "Ada",
+      ...(username ? { username } : {})
+    })
   });
   const dataCheckString = [...parameters.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -37,6 +45,19 @@ test("Telegram WebApp identity verifies signature, freshness, and user id", asyn
   assert.deepEqual(await verifier.verify(signedInitData(101, authDate)), {
     telegramUserId: "101"
   });
+});
+
+test("Telegram WebApp identity preserves a signed @username for group feedback", async () => {
+  const verifier = new TelegramWebAppIdentityVerifier({
+    botToken: BOT_TOKEN,
+    now: () => NOW
+  });
+  const authDate = Math.floor(NOW.getTime() / 1000) - 30;
+
+  assert.deepEqual(
+    await verifier.verify(signedInitData(101, authDate, "ada_user")),
+    { telegramUserId: "101", username: "ada_user" }
+  );
 });
 
 test("Telegram WebApp identity rejects tampering and stale proofs", async () => {

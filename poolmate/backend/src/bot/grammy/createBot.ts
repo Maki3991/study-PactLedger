@@ -1,6 +1,7 @@
 import { Bot, type BotConfig, type PollingOptions } from "grammy";
 import type { BotStatus } from "@poolmate/shared";
-import type { AgentRuntimeStatus } from "../../agent/agentRuntime.js";
+import type { OrderDraftExtractor } from "../../application/ports/orderDraftExtractor.js";
+import type { CommandSkillInvoker } from "../help/commandSkillInvoker.js";
 import type { BotAdapter } from "../botAdapter.js";
 import type { PoolMateBotUseCases } from "../poolMateBotUseCases.js";
 import { message, resolveLocale } from "../i18n.js";
@@ -9,6 +10,7 @@ import { registerSystemHandlers } from "./handlers/systemHandlers.js";
 import { registerPoolHandlers } from "./handlers/poolHandlers.js";
 import { createAccessMiddleware } from "./middleware.js";
 import { createProxyFetch } from "./proxyFetch.js";
+import { DomainError } from "../../domain/domainError.js";
 
 const DEFAULT_API_ROOT = "https://api.telegram.org";
 
@@ -20,7 +22,8 @@ export interface CreateGrammyBotConfig {
   proxyUrl?: string;
   fetch?: NonNullable<BotConfig<PoolMateContext>["client"]>["fetch"];
   getBotStatus(): BotStatus;
-  getAgentStatus?(): AgentRuntimeStatus;
+  draftExtractor?: OrderDraftExtractor;
+  commandSkillInvoker?: CommandSkillInvoker;
   useCases?: PoolMateBotUseCases;
 }
 
@@ -30,11 +33,15 @@ export interface BotRuntimeConfig {
   allowedUserIds: string[];
   apiRoot?: string;
   proxyUrl?: string;
-  getAgentStatus?(): AgentRuntimeStatus;
+  draftExtractor?: OrderDraftExtractor;
+  commandSkillInvoker?: CommandSkillInvoker;
   useCases?: PoolMateBotUseCases;
 }
 
 interface GrammyBotController {
+  api?: {
+    sendMessage(chatId: string, text: string): Promise<unknown>;
+  };
   init(): Promise<void>;
   start(options?: PollingOptions): Promise<void>;
   stop(): Promise<void>;
@@ -46,6 +53,22 @@ export interface BotRuntimeDependencies {
 
 function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown Telegram error";
+}
+
+async function replyToDomainError(
+  context: PoolMateContext,
+  error: DomainError
+): Promise<void> {
+  if (context.callbackQuery) {
+    const answered = await context
+      .answerCallbackQuery({ text: error.message, show_alert: true })
+      .then(
+        () => true,
+        () => false
+      );
+    if (answered) return;
+  }
+  await context.reply(error.message).catch(() => undefined);
 }
 
 export function createPoolMateBot(
@@ -63,15 +86,35 @@ export function createPoolMateBot(
   bot.use(
     createAccessMiddleware(config.userAllowlistEnabled, config.allowedUserIds)
   );
+  bot.use(async (context, next) => {
+    try {
+      await next();
+    } catch (error) {
+      if (error instanceof DomainError) {
+        await replyToDomainError(context, error);
+        return;
+      }
+      throw error;
+    }
+  });
   registerSystemHandlers(bot, {
     getBotStatus: config.getBotStatus,
-    getAgentStatus: config.getAgentStatus
+    getLlmStatus: () => config.draftExtractor?.getStatus() ?? "disabled",
+    commandSkillInvoker: config.commandSkillInvoker
   });
   if (config.useCases) {
-    registerPoolHandlers(bot, { useCases: config.useCases });
+    registerPoolHandlers(bot, {
+      useCases: config.useCases,
+      draftExtractor: config.draftExtractor,
+      commandSkillInvoker: config.commandSkillInvoker
+    });
   }
 
   bot.catch(async ({ error, ctx }) => {
+    if (error instanceof DomainError) {
+      await replyToDomainError(ctx, error);
+      return;
+    }
     console.error(
       `[telegram] update handling failed: ${safeErrorMessage(error)}`
     );
@@ -108,13 +151,20 @@ export function createBotRuntime(
           apiRoot: config.apiRoot,
           fetch: createProxyFetch(config.proxyUrl),
           getBotStatus: () => status,
-          getAgentStatus: config.getAgentStatus,
+          draftExtractor: config.draftExtractor,
+          commandSkillInvoker: config.commandSkillInvoker,
           useCases: config.useCases
         })
       : null;
 
   return {
     getStatus: () => status,
+
+    async sendMessage(chatId: string, text: string): Promise<boolean> {
+      if (!bot?.api) return false;
+      await bot.api.sendMessage(chatId, text);
+      return true;
+    },
 
     async start(): Promise<void> {
       if (!bot || status === "running") return;

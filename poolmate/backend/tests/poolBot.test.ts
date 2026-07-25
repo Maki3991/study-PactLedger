@@ -3,14 +3,21 @@ import test from "node:test";
 import type { OrderDetailView } from "@poolmate/shared";
 import {
   claimCallbackData,
+  closeCallbackData,
+  discardDraftCallbackData,
   leaveCallbackData,
   parsePoolMateCallbackData,
+  publishDraftCallbackData,
   quoteCallbackData
 } from "../src/bot/callbackData.js";
+import type { OrderDraftExtractor } from "../src/application/ports/orderDraftExtractor.js";
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
+import type { CommandSkillInvoker } from "../src/bot/help/commandSkillInvoker.js";
 import type {
   ClaimPoolFromBotInput,
+  ClosePoolFromBotInput,
   CreatePoolFromBotInput,
+  DraftActionFromBotInput,
   LeavePoolFromBotInput,
   PoolMateBotUseCases,
   QuotePoolFromBotInput,
@@ -24,9 +31,13 @@ interface ApiCall {
 }
 
 interface UseCaseCalls {
+  draft: CreatePoolFromBotInput[];
+  publish: DraftActionFromBotInput[];
+  discard: DraftActionFromBotInput[];
   create: CreatePoolFromBotInput[];
   claim: ClaimPoolFromBotInput[];
   leave: LeavePoolFromBotInput[];
+  close: ClosePoolFromBotInput[];
   quote: QuotePoolFromBotInput[];
   remind: RemindPoolFromBotInput[];
   get: Array<{ telegramChatId: string; orderId: string }>;
@@ -55,6 +66,14 @@ const baseOrder: OrderDetailView = {
       joinedAt: "2026-07-25T10:01:00.000Z"
     }
   ]
+};
+
+const draftOrder: OrderDetailView = {
+  ...baseOrder,
+  state: "DRAFT",
+  claimedUnits: 0,
+  participantCount: 0,
+  participants: []
 };
 
 const quotedOrder: OrderDetailView = {
@@ -95,19 +114,36 @@ const quotedOrder: OrderDetailView = {
       amountAtomic: "285000000"
     },
     expiresAt: "2026-07-25T10:20:00.000Z",
+    sourceProtocol: "MOCK",
     createdAt: "2026-07-25T10:10:00.000Z",
     allocations: [
       {
+        id: "allocation-1",
         participantId: "participant-1",
         displayName: "Alice",
         units: 1,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMATION_PENDING",
+        goods: { assetId: "USDC", amountAtomic: "89000000" },
+        shipping: { assetId: "USDC", amountAtomic: "6000000" },
+        discount: { assetId: "USDC", amountAtomic: "0" },
+        fee: { assetId: "USDC", amountAtomic: "0" },
+        total: { assetId: "USDC", amountAtomic: "95000000" },
         money: { assetId: "USDC", amountAtomic: "95000000" },
         confirmationStatus: "pending"
       },
       {
+        id: "allocation-2",
         participantId: "participant-2",
         displayName: "Bob",
         units: 2,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMATION_PENDING",
+        goods: { assetId: "USDC", amountAtomic: "178000000" },
+        shipping: { assetId: "USDC", amountAtomic: "12000000" },
+        discount: { assetId: "USDC", amountAtomic: "0" },
+        fee: { assetId: "USDC", amountAtomic: "0" },
+        total: { assetId: "USDC", amountAtomic: "190000000" },
         money: { assetId: "USDC", amountAtomic: "190000000" },
         confirmationStatus: "pending"
       }
@@ -122,9 +158,13 @@ function createUseCases(
   }
 ): { useCases: PoolMateBotUseCases; calls: UseCaseCalls } {
   const calls: UseCaseCalls = {
+    draft: [],
+    publish: [],
+    discard: [],
     create: [],
     claim: [],
     leave: [],
+    close: [],
     quote: [],
     remind: [],
     get: []
@@ -132,9 +172,34 @@ function createUseCases(
   return {
     calls,
     useCases: {
+      createDraft: async (input) => {
+        calls.draft.push(input);
+        return {
+          ...draftOrder,
+          title: input.title,
+          targetUnits: input.targetUnits,
+          intent: input.intent
+        };
+      },
+      publishDraft: async (input) => {
+        calls.publish.push(input);
+        return baseOrder;
+      },
+      discardDraft: async (input) => {
+        calls.discard.push(input);
+        return { ...draftOrder, state: "CANCELED" };
+      },
       createPool: async (input) => {
         calls.create.push(input);
-        return baseOrder;
+        return {
+          ...baseOrder,
+          title: input.title,
+          targetUnits: input.targetUnits,
+          claimedUnits: 0,
+          participantCount: 0,
+          participants: [],
+          intent: input.intent
+        };
       },
       claimPool: async (input) => {
         calls.claim.push(input);
@@ -143,6 +208,10 @@ function createUseCases(
       leavePool: async (input) => {
         calls.leave.push(input);
         return { ...baseOrder, claimedUnits: 0, participantCount: 0 };
+      },
+      closePool: async (input) => {
+        calls.close.push(input);
+        return { ...baseOrder, state: "CANCELED" };
       },
       quotePool: async (input) => {
         calls.quote.push(input);
@@ -163,7 +232,9 @@ function createUseCases(
 function createHarness(
   useCases: PoolMateBotUseCases,
   failedPrivateChatId?: string,
-  privateFailureLimit = Number.POSITIVE_INFINITY
+  privateFailureLimit = Number.POSITIVE_INFINITY,
+  draftExtractor?: OrderDraftExtractor,
+  commandSkillInvoker?: CommandSkillInvoker
 ) {
   const apiCalls: ApiCall[] = [];
   let privateFailures = 0;
@@ -172,6 +243,8 @@ function createHarness(
     userAllowlistEnabled: true,
     allowedUserIds: ["101"],
     getBotStatus: () => "running",
+    draftExtractor,
+    commandSkillInvoker,
     useCases
   });
   bot.botInfo = {
@@ -219,6 +292,21 @@ function createHarness(
         }
       } as never;
     }
+    if (method === "editMessageText") {
+      return {
+        ok: true,
+        result: {
+          message_id: (payload as { message_id: number }).message_id,
+          date: 1_753_405_200,
+          chat: {
+            id: Number(chatId),
+            type: Number(chatId) < 0 ? "group" : "private",
+            title: "Friday Pool"
+          },
+          text: String((payload as { text: string }).text)
+        }
+      } as never;
+    }
     if (method === "answerCallbackQuery") {
       return { ok: true, result: true } as never;
     }
@@ -239,6 +327,7 @@ function commandUpdate(updateId: number, text: string) {
         is_bot: false,
         first_name: "Alice",
         last_name: "Chen",
+        username: "alice",
         language_code: "en"
       },
       chat: {
@@ -259,6 +348,61 @@ function commandUpdate(updateId: number, text: string) {
   };
 }
 
+function textUpdate(
+  updateId: number,
+  text: string,
+  mention: boolean | "text_mention" = false
+) {
+  const mentionText =
+    mention === "text_mention" ? "PoolMate" : "@poolmate_test_bot";
+  const mentionOffset = text.indexOf(mentionText);
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1_753_405_200,
+      from: {
+        id: 101,
+        is_bot: false,
+        first_name: "Alice",
+        last_name: "Chen",
+        username: "alice",
+        language_code: "zh"
+      },
+      chat: {
+        id: -500,
+        type: "group" as const,
+        title: "Friday Pool",
+        all_members_are_administrators: false
+      },
+      text,
+      ...(mention && mentionOffset >= 0
+        ? {
+            entities: [
+              mention === "text_mention"
+                ? {
+                    offset: mentionOffset,
+                    length: mentionText.length,
+                    type: "text_mention" as const,
+                    user: {
+                      id: 123456,
+                      is_bot: true,
+                      first_name: "PoolMate",
+                      username: "poolmate_test_bot"
+                    }
+                  }
+                : {
+                    offset: mentionOffset,
+                    length: mentionText.length,
+                    type: "mention" as const
+                  }
+            ]
+          }
+        : {})
+    }
+  };
+}
+
 function callbackUpdate(updateId: number, callbackId: string, data: string) {
   return {
     update_id: updateId,
@@ -268,7 +412,8 @@ function callbackUpdate(updateId: number, callbackId: string, data: string) {
         id: 101,
         is_bot: false,
         first_name: "Alice",
-        last_name: "Chen"
+        last_name: "Chen",
+        username: "alice"
       },
       chat_instance: "group-chat-instance",
       data,
@@ -331,9 +476,10 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
   await bot.handleUpdate(commandUpdate(100, "/pool_new 3 Fresh fruit"));
   await bot.handleUpdate(commandUpdate(101, "/pool_claim order-1 2"));
   await bot.handleUpdate(commandUpdate(102, "/pool_leave order-1"));
-  await bot.handleUpdate(commandUpdate(103, "/pool_quote order-1"));
-  await bot.handleUpdate(commandUpdate(104, "/pool_remind order-1"));
-  await bot.handleUpdate(commandUpdate(105, "/pool_status order-1"));
+  await bot.handleUpdate(commandUpdate(103, "/pool_close order-1"));
+  await bot.handleUpdate(commandUpdate(104, "/pool_quote order-1"));
+  await bot.handleUpdate(commandUpdate(105, "/pool_remind order-1"));
+  await bot.handleUpdate(commandUpdate(106, "/pool_status order-1"));
 
   assert.deepEqual(calls.create, [
     {
@@ -342,7 +488,13 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
       telegramChatTitle: "Friday Pool",
       actor: { userId: "101", displayName: "Alice Chen" },
       title: "Fresh fruit",
-      targetUnits: 3
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "/pool_new 3 Fresh fruit",
+        source: "telegram_command",
+        items: [{ name: "Fresh fruit", quantity: 3 }]
+      }
     }
   ]);
   assert.deepEqual(calls.claim[0], {
@@ -358,19 +510,522 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
     orderId: "order-1",
     actor: { userId: "101", displayName: "Alice Chen" }
   });
-  assert.deepEqual(calls.quote[0], {
+  assert.deepEqual(calls.close[0], {
     sourceIdempotencyKey: "telegram:update:v1:103",
     telegramChatId: "-500",
     orderId: "order-1",
-    requestedByUserId: "101"
+    actor: { userId: "101", displayName: "Alice Chen" }
   });
-  assert.deepEqual(calls.remind[0], {
+  assert.deepEqual(calls.quote[0], {
     sourceIdempotencyKey: "telegram:update:v1:104",
     telegramChatId: "-500",
     orderId: "order-1",
     requestedByUserId: "101"
   });
+  assert.deepEqual(calls.remind[0], {
+    sourceIdempotencyKey: "telegram:update:v1:105",
+    telegramChatId: "-500",
+    orderId: "order-1",
+    requestedByUserId: "101"
+  });
   assert.deepEqual(calls.get, [{ telegramChatId: "-500", orderId: "order-1" }]);
+});
+
+test("claim and leave replies identify the Telegram actor by @username", async () => {
+  const { useCases } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(commandUpdate(107, "/pool_claim order-1 1"));
+  await bot.handleUpdate(commandUpdate(108, "/pool_leave order-1"));
+  await bot.handleUpdate(
+    callbackUpdate(109, "callback-claim-actor", claimCallbackData("order-1", 1))
+  );
+  await bot.handleUpdate(
+    callbackUpdate(110, "callback-leave-actor", leaveCallbackData("order-1"))
+  );
+
+  const replies = apiCalls
+    .filter((call) => call.method === "sendMessage")
+    .map((call) => String(call.payload.text).split("\n", 1)[0]);
+  assert.deepEqual(replies, [
+    "<b>@alice 已更新认领</b>",
+    "<b>@alice 已退出拼单</b>",
+    "<b>@alice 已更新认领</b>",
+    "<b>@alice 已退出拼单</b>"
+  ]);
+  assert.equal(
+    apiCalls
+      .filter((call) => call.method === "sendMessage")
+      .every((call) => call.payload.parse_mode === "HTML"),
+    true
+  );
+});
+
+test("rich order cards escape user-provided Telegram HTML", async () => {
+  const { useCases } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(commandUpdate(115, "/pool_new 3 <b>Free</b> & fruit"));
+
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.equal(reply?.payload.parse_mode, "HTML");
+  assert.match(
+    String(reply?.payload.text),
+    /&lt;b&gt;Free&lt;\/b&gt; &amp; fruit/
+  );
+  assert.doesNotMatch(String(reply?.payload.text), /<b>Free<\/b>/);
+});
+
+test("pool_test command adds and removes deterministic virtual participants", async () => {
+  const addHarness = createUseCases();
+  const addBot = createHarness(addHarness.useCases).bot;
+  await addBot.handleUpdate(commandUpdate(113, "/pool_test order-1 +2"));
+  assert.deepEqual(
+    addHarness.calls.claim.map((call) => ({
+      sourceIdempotencyKey: call.sourceIdempotencyKey,
+      orderId: call.orderId,
+      actor: call.actor,
+      units: call.units
+    })),
+    [
+      {
+        sourceIdempotencyKey: "telegram:update:v1:113:virtual:add:001",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-001", displayName: "Virtual #001" },
+        units: 1
+      },
+      {
+        sourceIdempotencyKey: "telegram:update:v1:113:virtual:add:002",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-002", displayName: "Virtual #002" },
+        units: 1
+      }
+    ]
+  );
+
+  const removeHarness = createUseCases();
+  removeHarness.useCases.getPool = async (input) => {
+    removeHarness.calls.get.push(input);
+    return {
+      ...baseOrder,
+      claimedUnits: 3,
+      participantCount: 3,
+      participants: [
+        ...baseOrder.participants,
+        {
+          id: "participant-virtual-1",
+          displayName: "Virtual #001",
+          units: 1,
+          joinedAt: "2026-07-25T10:02:00.000Z"
+        },
+        {
+          id: "participant-virtual-2",
+          displayName: "Virtual #002",
+          units: 1,
+          joinedAt: "2026-07-25T10:03:00.000Z"
+        }
+      ]
+    };
+  };
+  const remove = createHarness(removeHarness.useCases);
+  await remove.bot.handleUpdate(commandUpdate(114, "/pool_test order-1 -2"));
+  assert.deepEqual(
+    removeHarness.calls.leave.map((call) => ({
+      sourceIdempotencyKey: call.sourceIdempotencyKey,
+      orderId: call.orderId,
+      actor: call.actor
+    })),
+    [
+      {
+        sourceIdempotencyKey: "telegram:update:v1:114:virtual:remove:002",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-002", displayName: "Virtual #002" }
+      },
+      {
+        sourceIdempotencyKey: "telegram:update:v1:114:virtual:remove:001",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-001", displayName: "Virtual #001" }
+      }
+    ]
+  );
+  const reply = remove.apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /Virtual participants removed: 2/);
+});
+
+test("natural language accepts exact username text and Telegram bot mention entities", async () => {
+  let extracted = 0;
+  let invoked = 0;
+  const naturalRequest =
+    "拼单 3瓶可乐，美团外卖 xx店铺名 https://example.test/item";
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      invoked += 1;
+      assert.equal(request.text, naturalRequest);
+      assert.equal(request.locale, "zh");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "create_pool",
+        confidence: 0.94,
+        reason: "The user is starting a group purchase."
+      };
+    }
+  };
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract(request) {
+      extracted += 1;
+      assert.equal(request.text, naturalRequest);
+      assert.equal(request.locale, "zh");
+      return {
+        title: "可乐拼单",
+        itemName: "可乐",
+        targetUnits: 3,
+        unit: "瓶",
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item",
+        userPriceHint: null,
+        missingFields: [],
+        ambiguousFields: []
+      };
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(110, "今晚吃什么"));
+  await bot.handleUpdate(
+    textUpdate(108, `@poolmate_test_bot_extra ${naturalRequest}`)
+  );
+  await bot.handleUpdate(
+    textUpdate(109, `@poolmate_test_bot ${naturalRequest}`)
+  );
+  await bot.handleUpdate(
+    textUpdate(111, `@poolmate_test_bot ${naturalRequest}`, true)
+  );
+  await bot.handleUpdate(
+    textUpdate(112, `PoolMate ${naturalRequest}`, "text_mention")
+  );
+
+  assert.equal(invoked, 3);
+  assert.equal(extracted, 3);
+  assert.deepEqual(calls.create, [
+    {
+      sourceIdempotencyKey: "telegram:update:v1:109",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: naturalRequest,
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
+      }
+    },
+    {
+      sourceIdempotencyKey: "telegram:update:v1:111",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: naturalRequest,
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
+      }
+    },
+    {
+      sourceIdempotencyKey: "telegram:update:v1:112",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: { userId: "101", displayName: "Alice Chen" },
+      title: "可乐拼单",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: naturalRequest,
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
+      }
+    }
+  ]);
+  assert.equal(calls.draft.length, 0);
+  assert.equal(calls.publish.length, 0);
+  const processingReplies = apiCalls.filter(
+    (call) =>
+      call.method === "sendMessage" &&
+      /PoolMate 正在创建拼单/.test(String(call.payload.text))
+  );
+  assert.equal(processingReplies.length, 3);
+  assert.match(String(processingReplies[0]?.payload.text), /发起人 · @alice/);
+  assert.match(String(processingReplies[0]?.payload.text), /发起时间 · /);
+  assert.equal(processingReplies[0]?.payload.parse_mode, "HTML");
+  const reply = apiCalls.find(
+    (call) =>
+      call.method === "editMessageText" &&
+      /<code>COLLECTING<\/code>/.test(String(call.payload.text))
+  );
+  assert.match(String(reply?.payload.text), /商品 · 可乐 × 3 瓶/);
+  assert.match(String(reply?.payload.text), /渠道 · 美团外卖/);
+  assert.match(String(reply?.payload.text), /店铺 · xx店铺名/);
+  assert.match(
+    String(reply?.payload.text),
+    /链接 · <code>https:\/\/example\.test\/item<\/code>/
+  );
+  assert.match(String(reply?.payload.text), /Demo Merchant · Mock · No Chain/);
+  assert.match(String(reply?.payload.text), /不代表已接入真实商户/);
+  assert.match(String(reply?.payload.text), /只来自可信 Checkout/);
+  assert.match(String(reply?.payload.text), /按当前实际份额请求最终报价/);
+  assert.equal(reply?.payload.parse_mode, "HTML");
+  const keyboard = reply?.payload.reply_markup as {
+    inline_keyboard: Array<Array<{ callback_data: string; text: string }>>;
+  };
+  assert.equal(
+    keyboard.inline_keyboard[0][0]?.callback_data,
+    claimCallbackData("order-1", 1)
+  );
+  assert.equal(keyboard.inline_keyboard[0][0]?.text, "➕ 认领 1 份");
+  assert.equal(
+    keyboard.inline_keyboard[1][0]?.callback_data,
+    quoteCallbackData("order-1")
+  );
+  assert.equal(keyboard.inline_keyboard[1][0]?.text, "🧾 请求最终报价");
+});
+
+test("natural-language mention calls general_help instead of order draft extraction", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      assert.equal(request.text, "怎么用");
+      assert.equal(request.locale, "zh");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "general_help",
+        confidence: 0.97,
+        reason: "The user asks how to use PoolMate."
+      };
+    }
+  };
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run for general_help");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(115, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /PoolMate help/);
+  assert.match(String(reply?.payload.text), /\/pool_new/);
+  assert.match(String(reply?.payload.text), /\/pool_test <orderId> \+N/);
+  assert.doesNotMatch(String(reply?.payload.text), /unambiguous title/);
+});
+
+test("natural-language mention calls general_help even when draft extraction is disabled", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      assert.equal(request.text, "怎么用");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "general_help",
+        confidence: 0.97,
+        reason: "The user asks how to use PoolMate."
+      };
+    }
+  };
+  const disabled: OrderDraftExtractor = {
+    getStatus: () => "disabled",
+    async extract() {
+      throw new Error("draft extraction should not run for general_help");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    disabled,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(116, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /PoolMate help/);
+  assert.doesNotMatch(
+    String(reply?.payload.text),
+    /Natural-language drafts are disabled/
+  );
+});
+
+test("natural-language mention reports command skill calling as not configured", async () => {
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run without skill calling");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor
+  );
+
+  await bot.handleUpdate(textUpdate(117, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(
+    String(reply?.payload.text),
+    /command skill calling is not configured/
+  );
+  assert.doesNotMatch(String(reply?.payload.text), /could not decide/);
+});
+
+test("natural-language mention reports an explicit LLM unknown without executing a command", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke() {
+      return {
+        skillId: "unknown",
+        confidence: 0.88,
+        reason: "The request is unrelated to PoolMate."
+      };
+    }
+  };
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run for unknown");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(118, "@poolmate_test_bot 今天天气怎么样"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(
+    String(reply?.payload.text),
+    /LLM did not call a PoolMate command skill/
+  );
+  assert.match(String(reply?.payload.text), /No command was executed/);
+});
+
+test("missing natural-language fields and disabled LLM never create drafts", async () => {
+  const createPoolSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke() {
+      return {
+        skillId: "create_pool",
+        confidence: 0.93,
+        reason: "The user is starting a group purchase."
+      };
+    }
+  };
+  const missing: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      return {
+        title: "Fruit",
+        itemName: "Fruit",
+        targetUnits: null,
+        unit: null,
+        purchaseChannelHint: null,
+        storeNameHint: null,
+        merchantLinkHint: null,
+        userPriceHint: null,
+        missingFields: ["targetUnits"],
+        ambiguousFields: []
+      };
+    }
+  };
+  const disabled: OrderDraftExtractor = {
+    getStatus: () => "disabled",
+    async extract() {
+      throw new Error("must not call disabled extractor");
+    }
+  };
+  const first = createUseCases();
+  const firstHarness = createHarness(
+    first.useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    missing,
+    createPoolSkillInvoker
+  );
+  await firstHarness.bot.handleUpdate(
+    textUpdate(120, "@poolmate_test_bot 拼水果", true)
+  );
+  assert.equal(first.calls.draft.length, 0);
+  assert.equal(first.calls.create.length, 0);
+  assert.match(
+    String(firstHarness.apiCalls[0]?.payload.text),
+    /PoolMate 正在创建拼单/
+  );
+  const missingReply = firstHarness.apiCalls.find((call) =>
+    /target quantity/.test(String(call.payload.text))
+  );
+  assert.equal(missingReply?.method, "editMessageText");
+  assert.match(String(missingReply?.payload.text), /target quantity/);
+
+  const second = createUseCases();
+  const secondHarness = createHarness(
+    second.useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    disabled
+  );
+  await secondHarness.bot.handleUpdate(
+    textUpdate(121, "@poolmate_test_bot 拼三箱水果", true)
+  );
+  assert.equal(second.calls.draft.length, 0);
+  assert.equal(second.calls.create.length, 0);
+  assert.match(
+    String(secondHarness.apiCalls[0]?.payload.text),
+    /command skill calling is not configured/
+  );
 });
 
 test("callback data is stable and repeated callbacks reuse one idempotency key", async () => {
@@ -387,6 +1042,18 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     action: "quote",
     orderId: "order-1"
   });
+  assert.deepEqual(parsePoolMateCallbackData(closeCallbackData("order-1")), {
+    action: "close",
+    orderId: "order-1"
+  });
+  assert.deepEqual(
+    parsePoolMateCallbackData(publishDraftCallbackData("order-1")),
+    { action: "publish", orderId: "order-1" }
+  );
+  assert.deepEqual(
+    parsePoolMateCallbackData(discardDraftCallbackData("order-1")),
+    { action: "discard", orderId: "order-1" }
+  );
 
   const { useCases, calls } = createUseCases();
   const { bot } = createHarness(useCases);
@@ -403,6 +1070,46 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     calls.claim[1].sourceIdempotencyKey,
     calls.claim[0].sourceIdempotencyKey
   );
+});
+
+test("draft callbacks publish or discard through deterministic use cases", async () => {
+  const { useCases, calls } = createUseCases();
+  const { bot } = createHarness(useCases);
+
+  await bot.handleUpdate(
+    callbackUpdate(205, "callback-publish", publishDraftCallbackData("order-1"))
+  );
+  await bot.handleUpdate(
+    callbackUpdate(206, "callback-discard", discardDraftCallbackData("order-1"))
+  );
+
+  assert.equal(calls.publish.length, 1);
+  assert.equal(calls.publish[0]?.actor.userId, "101");
+  assert.equal(calls.discard.length, 1);
+  assert.equal(calls.discard[0]?.actor.userId, "101");
+  assert.equal(calls.quote.length, 0);
+});
+
+test("close callback calls the owner-only use case and reports no receipt", async () => {
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(
+    callbackUpdate(210, "callback-close", closeCallbackData("order-1"))
+  );
+
+  assert.deepEqual(calls.close, [
+    {
+      sourceIdempotencyKey: "telegram:callback:v1:callback-close",
+      telegramChatId: "-500",
+      orderId: "order-1",
+      actor: { userId: "101", displayName: "Alice Chen" }
+    }
+  ]);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /未提交付款或生成结算凭证/);
+  assert.match(String(reply?.payload.text), /<code>CANCELED<\/code>/);
+  assert.equal(reply?.payload.parse_mode, "HTML");
 });
 
 test("quote reports private delivery failures without another business call", async () => {
@@ -438,12 +1145,10 @@ test("quote reports private delivery failures without another business call", as
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(groupReply?.payload.text), /delivered: 1\/2/);
-  assert.match(String(groupReply?.payload.text), /Delivery failed for: Bob/);
-  assert.match(
-    String(groupReply?.payload.text),
-    /No payment status was changed/
-  );
+  assert.match(String(groupReply?.payload.text), /1 \/ 2 已送达/);
+  assert.match(String(groupReply?.payload.text), /发送失败 · Bob/);
+  assert.match(String(groupReply?.payload.text), /不会改变订单或付款状态/);
+  assert.equal(groupReply?.payload.parse_mode, "HTML");
   const privateReply = apiCalls.find(
     (call) =>
       call.method === "sendMessage" &&
@@ -452,10 +1157,14 @@ test("quote reports private delivery failures without another business call", as
   const button = (
     privateReply?.payload.reply_markup as {
       inline_keyboard: Array<
-        Array<{ web_app?: { url?: string }; url?: string }>
+        Array<{ text: string; web_app?: { url?: string }; url?: string }>
       >;
     }
   ).inline_keyboard[0][0];
+  assert.equal(privateReply?.payload.parse_mode, "HTML");
+  assert.match(String(privateReply?.payload.text), /最终报价待你确认/);
+  assert.match(String(privateReply?.payload.text), /95000000 atomic USDC/);
+  assert.equal(button.text, "🔐 查看并确认");
   assert.equal(
     button.web_app?.url,
     "https://poolmate.example/confirm#token=token-a"
@@ -472,7 +1181,10 @@ test("invalid callback data never reaches a business use case", async () => {
   );
 
   assert.equal(
-    calls.create.length + calls.claim.length + calls.leave.length,
+    calls.create.length +
+      calls.claim.length +
+      calls.leave.length +
+      calls.close.length,
     0
   );
   assert.equal(calls.quote.length, 0);
@@ -499,11 +1211,12 @@ test("pool commands and callbacks fail closed outside a Telegram group", async (
   await bot.handleUpdate(privateCommandUpdate(600, "/pool_new 3 Fruit"));
   await bot.handleUpdate(privateCommandUpdate(601, "/pool_claim order-1 1"));
   await bot.handleUpdate(privateCommandUpdate(602, "/pool_leave order-1"));
-  await bot.handleUpdate(privateCommandUpdate(603, "/pool_quote order-1"));
-  await bot.handleUpdate(privateCommandUpdate(604, "/pool_remind order-1"));
+  await bot.handleUpdate(privateCommandUpdate(603, "/pool_close order-1"));
+  await bot.handleUpdate(privateCommandUpdate(604, "/pool_quote order-1"));
+  await bot.handleUpdate(privateCommandUpdate(605, "/pool_remind order-1"));
   await bot.handleUpdate(
     privateCallbackUpdate(
-      605,
+      606,
       "private-callback",
       claimCallbackData("order-1", 1)
     )
@@ -512,6 +1225,7 @@ test("pool commands and callbacks fail closed outside a Telegram group", async (
   assert.equal(calls.create.length, 0);
   assert.equal(calls.claim.length, 0);
   assert.equal(calls.leave.length, 0);
+  assert.equal(calls.close.length, 0);
   assert.equal(calls.quote.length, 0);
   assert.equal(calls.remind.length, 0);
 });
@@ -572,6 +1286,7 @@ test("quote summary reports declined confirmation without implying payment", asy
         allocation.participantId === "participant-1"
           ? {
               ...allocation,
+              status: "FAILED",
               confirmationStatus: "declined"
             }
           : allocation
@@ -612,8 +1327,8 @@ test("quote summary reports declined confirmation without implying payment", asy
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(summary?.payload.text), /1 declined/);
-  assert.match(String(summary?.payload.text), /not ready for payment/);
+  assert.match(String(summary?.payload.text), /1 已拒绝/);
+  assert.match(String(summary?.payload.text), /不会进入付款/);
   assert.doesNotMatch(String(summary?.payload.text), /payment confirmed/i);
 });
 
@@ -652,5 +1367,5 @@ test("confirmation delivery accepts only HTTPS WebApp fragment links", async () 
       call.method === "sendMessage" &&
       String((call.payload as { chat_id: number }).chat_id) === "-500"
   );
-  assert.match(String(summary?.payload.text), /delivered: 0\/2/);
+  assert.match(String(summary?.payload.text), /0 \/ 2 已送达/);
 });

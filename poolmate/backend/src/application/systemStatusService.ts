@@ -1,7 +1,8 @@
 import type {
   BotStatus,
   ConfigStatusResponse,
-  HealthResponse
+  HealthResponse,
+  LlmStatus
 } from "@poolmate/shared";
 import type { PoolMateConfig } from "../config.js";
 import type { PoolMateDatabase } from "../infrastructure/db/database.js";
@@ -10,6 +11,7 @@ export interface SystemStatusDependencies {
   config: PoolMateConfig;
   database: PoolMateDatabase;
   getBotStatus: () => BotStatus;
+  getLlmStatus?: () => LlmStatus;
 }
 
 export class SystemStatusService {
@@ -74,6 +76,12 @@ export class SystemStatusService {
             ? "configured"
             : "not_configured",
         settlementMode: config.paymentBase.settlementMode
+      },
+      llm: {
+        status:
+          this.dependencies.getLlmStatus?.() ??
+          (config.llm.enabled ? "unavailable" : "disabled"),
+        ...(config.llm.model ? { model: config.llm.model } : {})
       }
     };
   }

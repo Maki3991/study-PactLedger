@@ -17,12 +17,16 @@ import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
 const NOW = new Date("2026-07-25T12:00:00.000Z");
 
 class BotQuoteProvider implements MerchantQuoteProvider {
+  readonly requests: MerchantQuoteRequest[] = [];
+
   async getQuote(request: MerchantQuoteRequest): Promise<MerchantQuote> {
+    this.requests.push(request);
     const totalAmountAtomic = (
       BigInt(request.totalUnits) * 95_000_000n
     ).toString();
     return {
       checkoutId: `merchant-checkout-${request.orderId}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: request.merchantId,
         displayName: "Demo Merchant #001",
@@ -58,9 +62,10 @@ function fixture() {
   database.migrate();
   let id = 0;
   let token = 0;
+  const quoteProvider = new BotQuoteProvider();
   const service = new OrderService({
     repository: new OrderRepository(database),
-    merchantQuoteProvider: new BotQuoteProvider(),
+    merchantQuoteProvider: quoteProvider,
     publicBaseUrl: "https://poolmate.example",
     payerRef: "sponsored-treasury",
     now: () => NOW,
@@ -71,6 +76,7 @@ function fixture() {
     database,
     directory,
     facade: new OrderServiceBotUseCases(service),
+    quoteProvider,
     service
   };
 }
@@ -82,6 +88,84 @@ function actor(userId = "101") {
 function tokenFromFragment(value: string): string {
   return new URLSearchParams(new URL(value).hash.slice(1)).get("token")!;
 }
+
+test("bot facade keeps LLM output in DRAFT until the owner publishes or discards", async () => {
+  const { database, directory, facade } = fixture();
+  try {
+    const input = {
+      sourceIdempotencyKey: "telegram:update:v1:draft-1",
+      telegramChatId: "-500",
+      telegramChatTitle: "Friday Pool",
+      actor: actor(),
+      title: "Fresh fruit",
+      targetUnits: 3,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1" as const,
+        originalText: "拼单 3瓶可乐，美团外卖",
+        source: "telegram_natural_language" as const,
+        items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖"
+      }
+    };
+    const draft = await facade.createDraft(input);
+    assert.equal(draft.state, "DRAFT");
+    assert.equal(draft.paymentRequest, undefined);
+    assert.deepEqual(draft.intent, input.intent);
+
+    const restartedService = new OrderService({
+      repository: new OrderRepository(database),
+      merchantQuoteProvider: new BotQuoteProvider(),
+      publicBaseUrl: "https://poolmate.example",
+      payerRef: "sponsored-treasury",
+      now: () => NOW
+    });
+    assert.deepEqual(restartedService.getOrder(draft.id).intent, input.intent);
+
+    await assert.rejects(
+      facade.publishDraft({
+        sourceIdempotencyKey: "telegram:callback:v1:publish-other",
+        telegramChatId: "-500",
+        orderId: draft.id,
+        actor: actor("202")
+      }),
+      (error) => error instanceof DomainError && error.code === "FORBIDDEN"
+    );
+    const published = await facade.publishDraft({
+      sourceIdempotencyKey: "telegram:callback:v1:publish-owner",
+      telegramChatId: "-500",
+      orderId: draft.id,
+      actor: actor()
+    });
+    assert.equal(published.state, "COLLECTING");
+
+    const discardedDraft = await facade.createDraft({
+      ...input,
+      sourceIdempotencyKey: "telegram:update:v1:draft-2",
+      title: "Discard me"
+    });
+    await assert.rejects(
+      facade.discardDraft({
+        sourceIdempotencyKey: "telegram:callback:v1:discard-other",
+        telegramChatId: "-500",
+        orderId: discardedDraft.id,
+        actor: actor("202")
+      }),
+      (error) => error instanceof DomainError && error.code === "FORBIDDEN"
+    );
+    const discarded = await facade.discardDraft({
+      sourceIdempotencyKey: "telegram:callback:v1:discard-owner",
+      telegramChatId: "-500",
+      orderId: discardedDraft.id,
+      actor: actor()
+    });
+    assert.equal(discarded.state, "CANCELED");
+    assert.equal(discarded.checkout, undefined);
+    assert.equal(discarded.paymentRequest, undefined);
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("bot facade enforces group ownership and persists claim/leave idempotency", async () => {
   const { database, directory, facade } = fixture();
@@ -143,7 +227,7 @@ test("bot facade enforces group ownership and persists claim/leave idempotency",
 });
 
 test("bot facade restricts quote/remind to the order group and rotates pending links", async () => {
-  const { database, directory, facade, service } = fixture();
+  const { database, directory, facade, quoteProvider, service } = fixture();
   try {
     const order = await facade.createPool({
       sourceIdempotencyKey: "telegram:update:v1:10",
@@ -151,7 +235,14 @@ test("bot facade restricts quote/remind to the order group and rotates pending l
       telegramChatTitle: "Friday Pool",
       actor: actor(),
       title: "Fresh fruit",
-      targetUnits: 1
+      targetUnits: 1,
+      intent: {
+        schemaVersion: "poolmate-order-intent-v1",
+        originalText: "拼单 1瓶可乐，美团外卖",
+        source: "telegram_natural_language",
+        items: [{ name: "可乐", quantity: 1, unit: "瓶" }],
+        purchaseChannelHint: "美团外卖"
+      }
     });
     await facade.claimPool({
       sourceIdempotencyKey: "telegram:update:v1:11",
@@ -176,6 +267,7 @@ test("bot facade restricts quote/remind to the order group and rotates pending l
       orderId: order.id,
       requestedByUserId: "101"
     });
+    assert.deepEqual(quoteProvider.requests[0]?.orderIntent, order.intent);
     const originalToken = tokenFromFragment(
       quote.confirmationDeliveries[0]!.url
     );

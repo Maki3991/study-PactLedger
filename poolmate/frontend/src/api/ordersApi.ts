@@ -11,13 +11,14 @@ import type {
   GroupView,
   MerchantView,
   OrderDetailView,
+  OrderIntentView,
   OrderState,
   OrderSummaryView,
   ParticipantView,
   PaymentOutboxView,
   PaymentProjectionStatus,
   PaymentProjectionView,
-  PoolMatePaymentRequest
+  PoolMatePaymentRequest,
 } from "@poolmate/shared";
 import {
   configuredApiBaseUrl,
@@ -27,7 +28,7 @@ import {
   isOneOf,
   isPositiveInteger,
   isRecord,
-  requestJson
+  requestJson,
 } from "./apiClient";
 
 const orderStates: readonly OrderState[] = [
@@ -40,19 +41,29 @@ const orderStates: readonly OrderState[] = [
   "PAID",
   "DEMO_CONFIRMED",
   "PAYMENT_FAILED",
-  "PAYMENT_UNKNOWN"
+  "PAYMENT_UNKNOWN",
+  "CANCELED",
 ];
 const fundingModes: readonly FundingMode[] = [
   "sponsored_demo",
-  "prefunded_participants"
+  "prefunded_participants",
 ];
 const confirmationStatuses: readonly AllocationConfirmationStatus[] = [
   "pending",
   "confirmed",
   "declined",
   "superseded",
-  "expired"
+  "expired",
 ];
+const allocationStrategies = ["BY_QUANTITY", "EQUAL_SPLIT"] as const;
+const allocationStatuses = [
+  "CALCULATED",
+  "CONFIRMATION_PENDING",
+  "CONFIRMED",
+  "CAPTURED",
+  "FAILED",
+  "INVALIDATED",
+] as const;
 const paymentRequestStatuses = [
   "ready",
   "submitting",
@@ -60,7 +71,7 @@ const paymentRequestStatuses = [
   "confirmed",
   "demo_confirmed",
   "failed",
-  "unknown"
+  "unknown",
 ] as const;
 const paymentProjectionStatuses: readonly PaymentProjectionStatus[] = [
   "READY",
@@ -70,7 +81,7 @@ const paymentProjectionStatuses: readonly PaymentProjectionStatus[] = [
   "UNKNOWN",
   "FAILED",
   "CONFIRMED",
-  "DEMO_CONFIRMED"
+  "DEMO_CONFIRMED",
 ];
 const settlementModes = ["disabled", "mock", "testnet", "live"] as const;
 const outboxStatuses = [
@@ -78,7 +89,12 @@ const outboxStatuses = [
   "processing",
   "completed",
   "blocked",
-  "unknown"
+  "unknown",
+] as const;
+const orderIntentSources = [
+  "telegram_natural_language",
+  "telegram_command",
+  "admin",
 ] as const;
 
 function isAtomicMoney(value: unknown): value is AtomicMoney {
@@ -87,6 +103,31 @@ function isAtomicMoney(value: unknown): value is AtomicMoney {
     isNonEmptyString(value.assetId) &&
     typeof value.amountAtomic === "string" &&
     /^\d+$/.test(value.amountAtomic)
+  );
+}
+
+function isOrderIntent(value: unknown): value is OrderIntentView {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === "poolmate-order-intent-v1" &&
+    isNonEmptyString(value.originalText) &&
+    isOneOf(value.source, orderIntentSources) &&
+    Array.isArray(value.items) &&
+    value.items.length === 1 &&
+    value.items.every(
+      (item) =>
+        isRecord(item) &&
+        isNonEmptyString(item.name) &&
+        isPositiveInteger(item.quantity) &&
+        (item.unit === undefined || isNonEmptyString(item.unit)),
+    ) &&
+    (value.purchaseChannelHint === undefined ||
+      isNonEmptyString(value.purchaseChannelHint)) &&
+    (value.storeNameHint === undefined ||
+      isNonEmptyString(value.storeNameHint)) &&
+    (value.merchantLinkHint === undefined ||
+      isNonEmptyString(value.merchantLinkHint)) &&
+    (value.userPriceHint === undefined || isNonEmptyString(value.userPriceHint))
   );
 }
 
@@ -117,9 +158,8 @@ function sameAsset(monies: AtomicMoney[]): boolean {
 
 function itemTotal(items: CheckoutItemView[]): bigint {
   return items.reduce(
-    (sum, item) =>
-      sum + BigInt(item.quantity) * BigInt(item.unitAmountAtomic),
-    0n
+    (sum, item) => sum + BigInt(item.quantity) * BigInt(item.unitAmountAtomic),
+    0n,
   );
 }
 
@@ -129,7 +169,7 @@ function breakdownBalances(
   shipping: AtomicMoney,
   discount: AtomicMoney,
   fee: AtomicMoney,
-  total: AtomicMoney
+  total: AtomicMoney,
 ): boolean {
   return (
     sameAsset([goods, shipping, discount, fee, total]) &&
@@ -174,25 +214,58 @@ function isMerchantView(value: unknown): value is MerchantView {
 function isAllocationView(value: unknown): value is AllocationView {
   return (
     isRecord(value) &&
+    isNonEmptyString(value.id) &&
     isNonEmptyString(value.participantId) &&
     isNonEmptyString(value.displayName) &&
     isPositiveInteger(value.units) &&
+    isOneOf(value.strategy, allocationStrategies) &&
+    isOneOf(value.status, allocationStatuses) &&
+    isAtomicMoney(value.goods) &&
+    isAtomicMoney(value.shipping) &&
+    isAtomicMoney(value.discount) &&
+    isAtomicMoney(value.fee) &&
+    isAtomicMoney(value.total) &&
     isAtomicMoney(value.money) &&
+    sameAsset([
+      value.goods,
+      value.shipping,
+      value.discount,
+      value.fee,
+      value.total,
+      value.money,
+    ]) &&
+    BigInt(value.goods.amountAtomic) +
+      BigInt(value.shipping.amountAtomic) +
+      BigInt(value.fee.amountAtomic) -
+      BigInt(value.discount.amountAtomic) ===
+      BigInt(value.total.amountAtomic) &&
+    value.total.amountAtomic === value.money.amountAtomic &&
     isOneOf(value.confirmationStatus, confirmationStatuses) &&
     (value.confirmedAt === undefined || isIsoDate(value.confirmedAt))
   );
 }
 
 function allocationsBalance(
-  total: AtomicMoney,
-  allocations: AllocationView[]
+  checkout: Pick<
+    CheckoutView,
+    "goods" | "shipping" | "discount" | "fee" | "total"
+  >,
+  allocations: AllocationView[],
 ): boolean {
-  return (
-    allocations.every((item) => item.money.assetId === total.assetId) &&
+  const sum = (field: "goods" | "shipping" | "discount" | "fee" | "total") =>
     allocations.reduce(
-      (sum, item) => sum + BigInt(item.money.amountAtomic),
-      0n
-    ) === BigInt(total.amountAtomic)
+      (amount, allocation) => amount + BigInt(allocation[field].amountAtomic),
+      0n,
+    );
+  return (
+    allocations.every(
+      (item) => item.money.assetId === checkout.total.assetId,
+    ) &&
+    sum("goods") === BigInt(checkout.goods.amountAtomic) &&
+    sum("shipping") === BigInt(checkout.shipping.amountAtomic) &&
+    sum("discount") === BigInt(checkout.discount.amountAtomic) &&
+    sum("fee") === BigInt(checkout.fee.amountAtomic) &&
+    sum("total") === BigInt(checkout.total.amountAtomic)
   );
 }
 
@@ -211,6 +284,7 @@ function isCheckoutView(value: unknown): value is CheckoutView {
     !isAtomicMoney(value.fee) ||
     !isAtomicMoney(value.total) ||
     !isIsoDate(value.expiresAt) ||
+    !isOneOf(value.sourceProtocol, ["A2A", "MOCK"] as const) ||
     !isIsoDate(value.createdAt) ||
     !Array.isArray(value.allocations) ||
     !value.allocations.every(isAllocationView)
@@ -224,8 +298,18 @@ function isCheckoutView(value: unknown): value is CheckoutView {
       value.shipping,
       value.discount,
       value.fee,
-      value.total
-    ) && allocationsBalance(value.total, value.allocations)
+      value.total,
+    ) &&
+    allocationsBalance(
+      {
+        goods: value.goods,
+        shipping: value.shipping,
+        discount: value.discount,
+        fee: value.fee,
+        total: value.total,
+      },
+      value.allocations,
+    )
   );
 }
 
@@ -256,7 +340,8 @@ function isPaymentProjection(value: unknown): value is PaymentProjectionView {
     !isOneOf(value.status, paymentProjectionStatuses) ||
     !isOneOf(value.settlementMode, settlementModes) ||
     (value.errorCode !== undefined && !isNonEmptyString(value.errorCode)) ||
-    (value.errorMessage !== undefined && !isNonEmptyString(value.errorMessage)) ||
+    (value.errorMessage !== undefined &&
+      !isNonEmptyString(value.errorMessage)) ||
     !isNonNegativeInteger(value.attempts) ||
     !isIsoDate(value.updatedAt)
   ) {
@@ -306,6 +391,19 @@ function isPaymentOutbox(value: unknown): value is PaymentOutboxView {
   );
 }
 
+function isOrderCancellation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isOneOf(value.actorType, ["telegram_owner", "admin"] as const) &&
+    isNonEmptyString(value.actorId) &&
+    isOneOf(value.reasonCode, [
+      "owner_requested",
+      "admin_requested",
+    ] as const) &&
+    isIsoDate(value.canceledAt)
+  );
+}
+
 export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
   return (
     isRecord(value) &&
@@ -315,12 +413,17 @@ export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
     isOneOf(value.state, orderStates) &&
     isOneOf(value.fundingMode, fundingModes) &&
     isPositiveInteger(value.targetUnits) &&
+    (value.intent === undefined ||
+      (isOrderIntent(value.intent) &&
+        value.intent.items[0]?.quantity === value.targetUnits)) &&
     isNonNegativeInteger(value.claimedUnits) &&
-    value.claimedUnits <= value.targetUnits &&
     isNonNegativeInteger(value.participantCount) &&
     (value.checkoutVersion === undefined ||
       isPositiveInteger(value.checkoutVersion)) &&
     (value.expiresAt === undefined || isIsoDate(value.expiresAt)) &&
+    (value.cancellation === undefined ||
+      isOrderCancellation(value.cancellation)) &&
+    (value.state !== "CANCELED" || value.cancellation !== undefined) &&
     isIsoDate(value.createdAt) &&
     isIsoDate(value.updatedAt)
   );
@@ -347,7 +450,7 @@ export function isOrderDetailView(value: unknown): value is OrderDetailView {
   }
   const participantUnits = value.participants.reduce(
     (sum, participant) => sum + participant.units,
-    0
+    0,
   );
   if (
     value.participants.length !== value.participantCount ||
@@ -357,13 +460,13 @@ export function isOrderDetailView(value: unknown): value is OrderDetailView {
   }
   if (value.checkout) {
     const participantIds = new Set(
-      value.participants.map((participant) => participant.id)
+      value.participants.map((participant) => participant.id),
     );
     if (
       value.checkoutVersion !== value.checkout.version ||
       value.checkout.allocations.length !== value.participants.length ||
       value.checkout.allocations.some(
-        (allocation) => !participantIds.has(allocation.participantId)
+        (allocation) => !participantIds.has(allocation.participantId),
       )
     ) {
       return false;
@@ -410,7 +513,11 @@ export function isConfirmationView(value: unknown): value is ConfirmationView {
     !isRecord(value) ||
     !isNonEmptyString(value.orderId) ||
     !isNonEmptyString(value.orderTitle) ||
+    !isNonEmptyString(value.checkoutId) ||
     !isNonEmptyString(value.participantDisplayName) ||
+    !isNonEmptyString(value.allocationId) ||
+    !isOneOf(value.allocationStrategy, allocationStrategies) ||
+    !isOneOf(value.allocationStatus, allocationStatuses) ||
     !isPositiveInteger(value.checkoutVersion) ||
     !isCheckoutHash(value.checkoutHash) ||
     !isMerchantView(value.merchant) ||
@@ -436,22 +543,19 @@ export function isConfirmationView(value: unknown): value is ConfirmationView {
       value.discount,
       value.fee,
       value.orderTotal,
-      value.money
+      value.money,
     ]) &&
-    breakdownBalances(
-      value.items,
-      value.goods,
-      value.shipping,
-      value.discount,
-      value.fee,
-      value.orderTotal
-    ) &&
+    BigInt(value.goods.amountAtomic) +
+      BigInt(value.shipping.amountAtomic) +
+      BigInt(value.fee.amountAtomic) -
+      BigInt(value.discount.amountAtomic) ===
+      BigInt(value.money.amountAtomic) &&
     (value.status !== "confirmed" || value.confirmedAt !== undefined)
   );
 }
 
 export function isConfirmationResult(
-  value: unknown
+  value: unknown,
 ): value is ConfirmationResult {
   return (
     isRecord(value) &&
@@ -459,54 +563,60 @@ export function isConfirmationResult(
     (value.confirmation.status === "confirmed" ||
       value.confirmation.status === "declined") &&
     isOneOf(value.orderState, orderStates) &&
-    typeof value.paymentRequestCreated === "boolean"
+    typeof value.actionRecorded === "boolean" &&
+    typeof value.paymentRequestCreated === "boolean" &&
+    (value.paymentProjection === undefined ||
+      isPaymentProjection(value.paymentProjection))
   );
 }
 
 export interface OrdersApi {
   listOrders(
     adminApiKey: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<OrderSummaryView[]>;
   getOrder(
     id: string,
     adminApiKey: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<OrderDetailView>;
   submitPayment(
     id: string,
     adminApiKey: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<OrderDetailView>;
   recoverPayment(
     id: string,
     adminApiKey: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+  ): Promise<OrderDetailView>;
+  closeOrder(
+    id: string,
+    adminApiKey: string,
+    signal?: AbortSignal,
   ): Promise<OrderDetailView>;
   getConfirmation(
     token: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ConfirmationView>;
   confirm(
     token: string,
     telegramInitData: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ConfirmationResult>;
   decline(
     token: string,
     telegramInitData: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ConfirmationResult>;
 }
 
-export function createOrdersApi(
-  baseUrl = configuredApiBaseUrl()
-): OrdersApi {
+export function createOrdersApi(baseUrl = configuredApiBaseUrl()): OrdersApi {
   return {
     listOrders: (adminApiKey, signal) =>
       requestJson(baseUrl, "/api/orders", isOrderList, {
         signal,
-        headers: { Authorization: `Bearer ${adminApiKey}` }
+        headers: { Authorization: `Bearer ${adminApiKey}` },
       }),
     getOrder: (id, adminApiKey, signal) =>
       requestJson(
@@ -515,8 +625,23 @@ export function createOrdersApi(
         isOrderDetailView,
         {
           signal,
-          headers: { Authorization: `Bearer ${adminApiKey}` }
-        }
+          headers: { Authorization: `Bearer ${adminApiKey}` },
+        },
+      ),
+    closeOrder: (id, adminApiKey, signal) =>
+      requestJson(
+        baseUrl,
+        `/api/orders/${encodeURIComponent(id)}/close`,
+        isOrderDetailView,
+        {
+          signal,
+          method: "POST",
+          body: {},
+          headers: {
+            Authorization: `Bearer ${adminApiKey}`,
+            "Idempotency-Key": `admin-close:${id}`,
+          },
+        },
       ),
     submitPayment: (id, adminApiKey, signal) =>
       requestJson(
@@ -527,8 +652,8 @@ export function createOrdersApi(
           signal,
           method: "POST",
           body: {},
-          headers: { Authorization: `Bearer ${adminApiKey}` }
-        }
+          headers: { Authorization: `Bearer ${adminApiKey}` },
+        },
       ),
     recoverPayment: (id, adminApiKey, signal) =>
       requestJson(
@@ -539,19 +664,14 @@ export function createOrdersApi(
           signal,
           method: "POST",
           body: {},
-          headers: { Authorization: `Bearer ${adminApiKey}` }
-        }
+          headers: { Authorization: `Bearer ${adminApiKey}` },
+        },
       ),
     getConfirmation: (token, signal) =>
-      requestJson(
-        baseUrl,
-        "/api/public/confirmation",
-        isConfirmationView,
-        {
-          signal,
-          headers: { "X-PoolMate-Confirmation-Token": token }
-        }
-      ),
+      requestJson(baseUrl, "/api/public/confirmation", isConfirmationView, {
+        signal,
+        headers: { "X-PoolMate-Confirmation-Token": token },
+      }),
     confirm: (token, telegramInitData, signal) =>
       requestJson(
         baseUrl,
@@ -563,9 +683,9 @@ export function createOrdersApi(
           body: {},
           headers: {
             Authorization: `tma ${telegramInitData}`,
-            "X-PoolMate-Confirmation-Token": token
-          }
-        }
+            "X-PoolMate-Confirmation-Token": token,
+          },
+        },
       ),
     decline: (token, telegramInitData, signal) =>
       requestJson(
@@ -578,9 +698,9 @@ export function createOrdersApi(
           body: {},
           headers: {
             Authorization: `tma ${telegramInitData}`,
-            "X-PoolMate-Confirmation-Token": token
-          }
-        }
-      )
+            "X-PoolMate-Confirmation-Token": token,
+          },
+        },
+      ),
   };
 }

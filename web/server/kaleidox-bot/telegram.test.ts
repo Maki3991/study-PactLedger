@@ -236,7 +236,7 @@ test('群聊中拒绝批准支付', async () => {
 })
 
 test('私聊可以批准处于 awaiting_approval 的任务', async () => {
-  const { calls, fetch } = stubTelegramApi({ text: '/approve task-1' })
+  const { fetch } = stubTelegramApi({ text: '/approve task-1' })
   const { deps, approved } = stubDependencies()
   const runtime = new KaleidoxTelegramRuntime('token', deps, { operators: OPERATORS, fetch })
 

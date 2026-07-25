@@ -7,6 +7,7 @@ import {
   type BetterSQLite3Database
 } from "drizzle-orm/better-sqlite3";
 import { sql } from "drizzle-orm";
+import { schema } from "./schema.js";
 
 interface MigrationRecord {
   filename: string;
@@ -20,7 +21,7 @@ export interface MigrationState {
 }
 
 export class PoolMateDatabase {
-  readonly orm: BetterSQLite3Database;
+  readonly orm: BetterSQLite3Database<typeof schema>;
   private readonly sqlite: Database.Database;
   private migrationFailed = false;
 
@@ -33,7 +34,7 @@ export class PoolMateDatabase {
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.pragma("foreign_keys = ON");
     this.sqlite.pragma("busy_timeout = 5000");
-    this.orm = drizzle(this.sqlite);
+    this.orm = drizzle(this.sqlite, { schema });
   }
 
   migrate(): void {
@@ -138,6 +139,18 @@ export class PoolMateDatabase {
 
   immediate<T>(operation: (connection: Database.Database) => T): T {
     return this.sqlite.transaction(operation).immediate(this.sqlite);
+  }
+
+  ormRead<T>(
+    operation: (connection: BetterSQLite3Database<typeof schema>) => T
+  ): T {
+    return operation(this.orm);
+  }
+
+  ormImmediate<T>(
+    operation: (connection: BetterSQLite3Database<typeof schema>) => T
+  ): T {
+    return this.sqlite.transaction(() => operation(this.orm)).immediate();
   }
 
   close(): void {

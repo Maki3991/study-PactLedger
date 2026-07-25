@@ -24,6 +24,7 @@ class ExactQuoteProvider implements MerchantQuoteProvider {
     this.calls += 1;
     return {
       checkoutId: `checkout:${request.orderId}:${this.calls}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: request.merchantId,
         displayName: "Verified Merchant",
@@ -91,8 +92,7 @@ function createCollectingOrder(service: OrderService, targetUnits: number) {
     groupId: group.id,
     ownerUserId: "owner-1",
     title: "Noodle set",
-    targetUnits,
-    sourceIdempotencyKey: "create-update-1"
+    targetUnits
   });
   return service.publishOrder(draft.id);
 }
@@ -194,7 +194,7 @@ test("exact checkout confirmations create one stable payment request", async () 
     displayName: "Sam",
     units: 1
   });
-  assert.equal(full.state, "QUOTE_PENDING");
+  assert.equal(full.state, "COLLECTING");
 
   const checkout = await service.finalizeCheckout(
     order.id,
@@ -235,7 +235,9 @@ test("exact checkout confirmations create one stable payment request", async () 
   assert.equal(service.confirm(tokens[1]!, "102").paymentRequestCreated, false);
   const final = service.confirm(tokens[2]!, "103");
   const duplicate = service.confirm(tokens[2]!, "103");
+  assert.equal(final.actionRecorded, true);
   assert.equal(final.paymentRequestCreated, true);
+  assert.equal(duplicate.actionRecorded, false);
   assert.equal(duplicate.paymentRequestCreated, false);
   assert.equal(final.orderState, "READY_FOR_PAYMENT");
 
@@ -303,7 +305,7 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
   database.immediate((connection) => {
     connection
       .prepare(
-        "UPDATE pm_checkout_snapshots SET request_hash = NULL WHERE id = ?"
+        "UPDATE pm_checkout_snapshots SET request_hash = NULL WHERE checkout_id = ?"
       )
       .run(first.order.checkout!.id);
   });
@@ -321,7 +323,7 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
         (
           connection
             .prepare(
-              "SELECT request_hash FROM pm_checkout_snapshots WHERE id = ?"
+              "SELECT request_hash FROM pm_checkout_snapshots WHERE checkout_id = ?"
             )
             .get(first.order.checkout!.id) as { request_hash: string | null }
         ).request_hash?.length
@@ -360,30 +362,39 @@ test("checkout revisions supersede old confirmations and quote retries are idemp
   database.close();
 });
 
-test("incomplete and over-capacity orders cannot create checkout or payment rows", async () => {
+test("under-target and over-target claims can be locked into checkout snapshots", async () => {
   const { database, merchant, service } = fixture();
-  const order = createCollectingOrder(service, 2);
-  service.claimOrder(order.id, {
+  const underTargetOrder = createCollectingOrder(service, 3);
+  service.claimOrder(underTargetOrder.id, {
     userId: "101",
     displayName: "Ada",
     units: 1
   });
-  assert.throws(
-    () =>
-      service.claimOrder(order.id, {
-        userId: "102",
-        displayName: "Lin",
-        units: 2
-      }),
-    (error) =>
-      error instanceof DomainError && error.code === "CAPACITY_EXCEEDED"
+  const underTarget = await service.finalizeCheckout(
+    underTargetOrder.id,
+    { merchantId: "merchant-demo" },
+    "quote-under-target"
   );
-  await assert.rejects(
-    service.finalizeCheckout(order.id, { merchantId: "merchant-demo" }),
-    (error) =>
-      error instanceof DomainError && error.code === "INVALID_ORDER_STATE"
+  assert.equal(underTarget.order.state, "CONFIRMATION_PENDING");
+  assert.equal(underTarget.order.checkout?.items[0]?.quantity, "1");
+  assert.equal(underTarget.confirmationLinks.length, 1);
+
+  const overTargetOrder = createCollectingOrder(service, 2);
+  service.claimOrder(overTargetOrder.id, {
+    userId: "201",
+    displayName: "Lin",
+    units: 3
+  });
+  assert.equal(service.getOrder(overTargetOrder.id).claimedUnits, 3);
+  const overTarget = await service.finalizeCheckout(
+    overTargetOrder.id,
+    { merchantId: "merchant-demo" },
+    "quote-over-target"
   );
-  assert.equal(merchant.calls, 0);
+  assert.equal(overTarget.order.state, "CONFIRMATION_PENDING");
+  assert.equal(overTarget.order.checkout?.items[0]?.quantity, "3");
+  assert.equal(overTarget.confirmationLinks.length, 1);
+  assert.equal(merchant.calls, 2);
   assert.equal(
     database.read(
       (connection) =>
@@ -398,15 +409,20 @@ test("incomplete and over-capacity orders cannot create checkout or payment rows
   database.close();
 });
 
-test("quote pending locks participant claims and exits", () => {
+test("final quote locks participant claims and exits", async () => {
   const { database, service } = fixture();
   const order = createCollectingOrder(service, 1);
-  const locked = service.claimOrder(order.id, {
+  const claimed = service.claimOrder(order.id, {
     userId: "101",
     displayName: "Ada",
     units: 1
   });
-  assert.equal(locked.state, "QUOTE_PENDING");
+  assert.equal(claimed.state, "COLLECTING");
+  const checkout = await service.finalizeCheckout(order.id, {
+    merchantId: "merchant-demo"
+  });
+  const locked = checkout.order;
+  assert.equal(locked.state, "CONFIRMATION_PENDING");
   assert.throws(
     () =>
       service.claimOrder(order.id, {

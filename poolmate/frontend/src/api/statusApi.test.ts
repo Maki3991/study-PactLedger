@@ -29,7 +29,8 @@ const config: ConfigStatusResponse = {
     userAllowlistEnabled: false,
     allowedUserCount: 0
   },
-  paymentBase: { status: "not_configured", settlementMode: "disabled" }
+  paymentBase: { status: "not_configured", settlementMode: "disabled" },
+  llm: { status: "disabled" }
 };
 
 afterEach(() => {

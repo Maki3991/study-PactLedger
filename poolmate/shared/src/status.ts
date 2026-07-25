@@ -12,6 +12,8 @@ export type BotStatus = "disabled" | "configured" | "running" | "error";
 
 export type PaymentBaseStatus = "not_configured" | "configured" | "unavailable";
 
+export type LlmStatus = "disabled" | "configured" | "unavailable";
+
 export type ApiErrorCode =
   | "INVALID_REQUEST"
   | "UNAUTHORIZED"
@@ -22,6 +24,7 @@ export type ApiErrorCode =
   | "ORDER_NOT_FOUND"
   | "PARTICIPANT_NOT_FOUND"
   | "INVALID_ORDER_STATE"
+  | "ORDER_CANCELLATION_NOT_ALLOWED"
   | "CAPACITY_EXCEEDED"
   | "MERCHANT_NOT_VERIFIED"
   | "INVALID_CHECKOUT"
@@ -81,6 +84,10 @@ export interface ConfigStatusResponse {
   paymentBase: {
     status: PaymentBaseStatus;
     settlementMode: SettlementMode;
+  };
+  llm: {
+    status: LlmStatus;
+    model?: string;
   };
 }
 

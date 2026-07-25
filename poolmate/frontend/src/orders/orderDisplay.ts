@@ -30,7 +30,8 @@ export const orderStateMeta: Record<OrderState, StateMeta> = {
   PAID: { label: "Receipt required", severity: "error" },
   DEMO_CONFIRMED: { label: "Demo confirmed", severity: "warning" },
   PAYMENT_FAILED: { label: "Payment failed", severity: "error" },
-  PAYMENT_UNKNOWN: { label: "Payment unknown", severity: "error" }
+  PAYMENT_UNKNOWN: { label: "Payment unknown", severity: "error" },
+  CANCELED: { label: "Closed", severity: "neutral" }
 };
 
 export const confirmationStateMeta: Record<

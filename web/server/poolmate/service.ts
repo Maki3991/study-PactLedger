@@ -82,6 +82,21 @@ export class PoolMateService {
     return this.repository.cancelSession(sessionId, creatorId)
   }
 
+  async lockAndCheckoutSession(
+    sessionId: string,
+    creatorId: number,
+  ): Promise<PoolMateCheckoutResult> {
+    const locked = await this.repository.lockSession(sessionId, creatorId)
+    if (!locked.ok || !locked.session) {
+      return {
+        ok: false,
+        reason: locked.reason ?? '拼单无法锁定。',
+        session: locked.session,
+      }
+    }
+    return this.checkoutSession(sessionId)
+  }
+
   checkoutSession(sessionId: string): Promise<PoolMateCheckoutResult> {
     const pending = this.checkoutInFlight.get(sessionId)
     if (pending) return pending
@@ -123,7 +138,7 @@ export class PoolMateService {
       return { ok: false, reason: '结算正在处理，系统不会重复提交付款。', session: initial }
     }
     if (initial.status !== 'funded') {
-      return { ok: false, reason: '拼单尚未凑满', session: initial }
+      return { ok: false, reason: '拼单尚未由发起人锁定', session: initial }
     }
 
     const claim = await this.repository.claimCheckout(sessionId, intentId)
@@ -228,12 +243,17 @@ export class PoolMateServiceError extends Error {
 }
 
 export function parsePoolRequest(text: string): ParsedPoolRequest | undefined {
-  const normalized = text.replaceAll('，', ',').trim()
+  const normalized = text
+    .replace(/@[A-Za-z0-9_]+/gu, '')
+    .replaceAll('，', ',')
+    .trim()
   const priceMatch = normalized.match(/(?:每|一)[\p{L}箱个件份盒斤]*\s*(\d+(?:\.\d{1,2})?)/u)
     ?? normalized.match(/(\d+(?:\.\d{1,2})?)\s*元/u)
-  const slotsMatch = normalized.match(/(?:需要|共)\s*(\d+)\s*(?:人|份|个|件|箱|盒)?/u)
+  const slotsMatch = normalized.match(/(?:期望|需要|共)\s*(\d+)\s*(?:人|份|个|件|箱|盒|瓶|杯|包)?/u)
     ?? normalized.match(/(\d+)\s*(?:人|份)(?:\s|$)/u)
-  const productMatch = normalized.match(/拼\s*(.+?)(?=,|，|每|一[箱个件份盒斤]|需要|共|\d+\s*元|$)/u)
+  const productMatch = normalized.match(
+    /拼(?:单)?[\s,:：]*(?:期望\s*\d+\s*(?:人|份|个|件|箱|盒|瓶|杯|包)?\s*)?(.+?)(?=,|每|一[箱个件份盒斤瓶杯包]|需要|共|\d+\s*元|$)/u,
+  )
   if (!priceMatch || !productMatch) return undefined
   const priceEach = Number(priceMatch[1])
   const slotsTotal = slotsMatch ? Number(slotsMatch[1]) : 3

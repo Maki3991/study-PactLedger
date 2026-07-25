@@ -9,13 +9,14 @@ import {
   confirmation,
   confirmationResult,
   orderDetail,
-  orderSummary
+  orderSummary,
 } from "../test/orderFixtures";
 
 function ordersApi(overrides: Partial<OrdersApi> = {}): OrdersApi {
   return {
     listOrders: vi.fn(async () => [orderSummary]),
     getOrder: vi.fn(async () => orderDetail),
+    closeOrder: vi.fn(async () => orderDetail),
     submitPayment: vi.fn(async () => orderDetail),
     recoverPayment: vi.fn(async () => orderDetail),
     getConfirmation: vi.fn(async () => confirmation),
@@ -26,12 +27,13 @@ function ordersApi(overrides: Partial<OrdersApi> = {}): OrdersApi {
         confirmation: {
           ...confirmationResult.confirmation,
           status: "declined",
-          confirmedAt: undefined
+          confirmedAt: undefined,
         },
-        paymentRequestCreated: false
-      })
+        actionRecorded: true,
+        paymentRequestCreated: false,
+      }),
     ),
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -39,10 +41,18 @@ function authenticateAdmin(): void {
   window.sessionStorage.setItem("poolmate.admin-api-key", "admin-secret");
 }
 
-function openConfirmation(token = "token-1", initData?: string): void {
+function openConfirmation(
+  token = "token-1",
+  initData?: string,
+  webApp: {
+    ready?: () => void;
+    expand?: () => void;
+    close?: () => void;
+  } = {},
+): void {
   window.history.replaceState({}, "", `/confirm#token=${token}`);
   if (initData !== undefined) {
-    window.Telegram = { WebApp: { initData } };
+    window.Telegram = { WebApp: { initData, ...webApp } };
   }
 }
 
@@ -72,22 +82,47 @@ describe("orders console", () => {
 
     render(<App ordersApi={api} />);
 
-    expect(await screen.findByRole("heading", { name: "Team dumplings" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Team dumplings" }),
+    ).toBeVisible();
     expect(screen.getByText("3 / 3 units")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Purchase intent" }),
+    ).toBeVisible();
+    expect(screen.getByText("@PoolMate 拼单 3瓶可乐，美团外卖")).toBeVisible();
+    expect(screen.getByText("可乐")).toBeVisible();
+    expect(screen.getByText("3 瓶")).toBeVisible();
+    expect(screen.getByText("美团外卖")).toBeVisible();
+    expect(screen.getByText(/untrusted user request/i)).toBeVisible();
+    expect(screen.getByText(/not a live integration claim/i)).toBeVisible();
     expect(screen.getByText("sha256:checkout-v1")).toBeVisible();
     expect(screen.getByText("SHA-256")).toBeVisible();
     expect(screen.getByText("poolmate-checkout-json-v1")).toBeVisible();
     expect(screen.getByText("Dumpling box")).toBeVisible();
     expect(screen.getByText("DUMPLING-BOX")).toBeVisible();
-    expect(screen.getByText("1500 inj atomic", { selector: ".amount-breakdown__total dd" })).toBeVisible();
+    expect(
+      screen.getByText("1500 inj atomic", {
+        selector: ".amount-breakdown__total dd",
+      }),
+    ).toBeVisible();
     expect(screen.getAllByText("1500 inj atomic")).toHaveLength(3);
-    expect(screen.getAllByText("500 inj atomic")).toHaveLength(2);
-    expect(screen.getByText("1000 inj atomic")).toBeVisible();
-    expect(screen.getByText("Sponsored demo / participants not funded")).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Payment operation" })).toBeVisible();
-    expect(screen.getByText("pmop_poolmate-order-1-checkout-1-v1")).toBeVisible();
+    expect(screen.getAllByText("500 inj atomic")).toHaveLength(3);
+    expect(screen.getAllByText("1000 inj atomic")).toHaveLength(2);
+    expect(screen.getByText("allocation-1")).toBeVisible();
+    expect(screen.getAllByText("BY_QUANTITY").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Sponsored demo / participants not funded"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Payment operation" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("pmop_poolmate-order-1-checkout-1-v1"),
+    ).toBeVisible();
     expect(screen.getByText("disabled")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Submit payment" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Submit payment" }),
+    ).toBeVisible();
     expect(screen.getByText("READY_FOR_PAYMENT")).toBeVisible();
     expect(screen.queryByText(/^Paid$/i)).not.toBeInTheDocument();
   });
@@ -103,9 +138,9 @@ describe("orders console", () => {
         ...orderDetail.paymentProjection!,
         status: "UNKNOWN",
         settlementMode: "testnet",
-        errorCode: "PAYMENT_OPERATION_UNKNOWN"
+        errorCode: "PAYMENT_OPERATION_UNKNOWN",
       },
-      paymentOutbox: { ...orderDetail.paymentOutbox!, status: "unknown" }
+      paymentOutbox: { ...orderDetail.paymentOutbox!, status: "unknown" },
     };
     const api = ordersApi({
       getOrder: vi
@@ -114,20 +149,73 @@ describe("orders console", () => {
         .mockResolvedValueOnce(unknownOrder)
         .mockResolvedValue(unknownOrder),
       submitPayment: vi.fn(async () => unknownOrder),
-      recoverPayment: vi.fn(async () => unknownOrder)
+      recoverPayment: vi.fn(async () => unknownOrder),
     });
     const user = userEvent.setup();
 
     render(<App ordersApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "Submit payment" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Submit payment" }),
+    );
     expect(api.submitPayment).toHaveBeenCalledWith("order-1", "admin-secret");
     expect(
-      await screen.findByRole("button", { name: "Recover original operation" })
+      await screen.findByRole("button", { name: "Recover original operation" }),
     ).toBeVisible();
     await user.click(
-      screen.getByRole("button", { name: "Recover original operation" })
+      screen.getByRole("button", { name: "Recover original operation" }),
     );
     expect(api.recoverPayment).toHaveBeenCalledWith("order-1", "admin-secret");
+  });
+
+  it("closes a pool only after explicit confirmation and hides payment actions", async () => {
+    window.history.replaceState({}, "", "/?view=orders");
+    authenticateAdmin();
+    const canceledOrder: typeof orderDetail = {
+      ...orderDetail,
+      state: "CANCELED",
+      cancellation: {
+        actorType: "admin",
+        actorId: "admin-api",
+        reasonCode: "admin_requested",
+        canceledAt: "2026-07-25T02:02:00.000Z",
+      },
+      paymentRequest: { ...orderDetail.paymentRequest!, status: "failed" },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "FAILED",
+        errorCode: "ORDER_CANCELED",
+        errorMessage: "Order canceled before payment submission.",
+      },
+      paymentOutbox: {
+        ...orderDetail.paymentOutbox!,
+        status: "completed",
+        lastErrorCode: "ORDER_CANCELED",
+      },
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const api = ordersApi({
+      getOrder: vi
+        .fn()
+        .mockResolvedValueOnce(orderDetail)
+        .mockResolvedValue(canceledOrder),
+      closeOrder: vi.fn(async () => canceledOrder),
+    });
+    const user = userEvent.setup();
+
+    render(<App ordersApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "Close pool" }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(api.closeOrder).toHaveBeenCalledWith("order-1", "admin-secret");
+    expect(
+      await screen.findByText(/No settlement Receipt was created/),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Submit payment" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Close pool" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps mock evidence visibly separate from verified settlement", async () => {
@@ -138,7 +226,7 @@ describe("orders console", () => {
       state: "DEMO_CONFIRMED",
       paymentRequest: {
         ...orderDetail.paymentRequest!,
-        status: "demo_confirmed"
+        status: "demo_confirmed",
       },
       paymentProjection: {
         ...orderDetail.paymentProjection!,
@@ -147,16 +235,18 @@ describe("orders console", () => {
         receipt: {
           kind: "mock",
           receiptId: "mock-receipt-1",
-          confirmedAt: "2026-07-25T02:01:00.000Z"
-        }
+          confirmedAt: "2026-07-25T02:01:00.000Z",
+        },
       },
       paymentOutbox: {
         ...orderDetail.paymentOutbox!,
-        status: "completed"
-      }
+        status: "completed",
+      },
     };
 
-    render(<App ordersApi={ordersApi({ getOrder: vi.fn(async () => demoOrder) })} />);
+    render(
+      <App ordersApi={ordersApi({ getOrder: vi.fn(async () => demoOrder) })} />,
+    );
 
     expect(await screen.findByText("Demo confirmed")).toBeVisible();
     expect(screen.getByText(/No chain payment occurred/)).toBeVisible();
@@ -164,33 +254,37 @@ describe("orders console", () => {
     expect(screen.getByText("None - Mock only")).toBeVisible();
     expect(screen.getByText("None - no chain transaction")).toBeVisible();
     expect(screen.queryByText("Paid / verified")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Open receipt" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Open receipt" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps stale list data visible while a refresh is pending", async () => {
     window.history.replaceState({}, "", "/?view=orders");
     authenticateAdmin();
-    let resolveRefresh!: (value: typeof orderSummary[]) => void;
-    const pendingRefresh = new Promise<typeof orderSummary[]>((resolve) => {
+    let resolveRefresh!: (value: (typeof orderSummary)[]) => void;
+    const pendingRefresh = new Promise<(typeof orderSummary)[]>((resolve) => {
       resolveRefresh = resolve;
     });
     const api = ordersApi({
       listOrders: vi
         .fn()
         .mockResolvedValueOnce([orderSummary])
-        .mockImplementationOnce(() => pendingRefresh)
+        .mockImplementationOnce(() => pendingRefresh),
     });
     const user = userEvent.setup();
 
     render(<App ordersApi={api} />);
-    expect((await screen.findAllByText("Friday lunch")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Friday lunch")).length).toBeGreaterThan(
+      0,
+    );
     await user.click(screen.getByRole("button", { name: "Refresh orders" }));
 
     expect(screen.getByText("Refreshing list")).toBeVisible();
     expect(screen.getAllByText("Friday lunch").length).toBeGreaterThan(0);
     resolveRefresh([orderSummary]);
     await waitFor(() =>
-      expect(screen.queryByText("Refreshing list")).not.toBeInTheDocument()
+      expect(screen.queryByText("Refreshing list")).not.toBeInTheDocument(),
     );
   });
 
@@ -201,9 +295,9 @@ describe("orders console", () => {
       listOrders: vi
         .fn()
         .mockRejectedValueOnce(
-          new ApiRequestError("Orders are unavailable.", "NOT_READY")
+          new ApiRequestError("Orders are unavailable.", "NOT_READY"),
         )
-        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]),
     });
     const user = userEvent.setup();
 
@@ -222,30 +316,42 @@ describe("orders console", () => {
 
     render(<App ordersApi={api} />);
 
-    expect(screen.getByRole("heading", { name: "Administrator access" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Administrator access" }),
+    ).toBeVisible();
     expect(api.listOrders).not.toHaveBeenCalled();
-    await user.type(screen.getByLabelText("Administrator API key"), "admin-secret");
+    await user.type(
+      screen.getByLabelText("Administrator API key"),
+      "admin-secret",
+    );
     await user.click(screen.getByRole("button", { name: "Unlock orders" }));
 
     await waitFor(() => expect(api.listOrders).toHaveBeenCalled());
-    expect(api.listOrders).toHaveBeenCalledWith("admin-secret", expect.any(AbortSignal));
-    expect(window.sessionStorage.getItem("poolmate.admin-api-key")).toBe("admin-secret");
+    expect(api.listOrders).toHaveBeenCalledWith(
+      "admin-secret",
+      expect.any(AbortSignal),
+    );
+    expect(window.sessionStorage.getItem("poolmate.admin-api-key")).toBe(
+      "admin-secret",
+    );
 
     await user.click(screen.getByRole("button", { name: "Exit" }));
-    expect(screen.getByRole("heading", { name: "Administrator access" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Administrator access" }),
+    ).toBeVisible();
     expect(window.sessionStorage.getItem("poolmate.admin-api-key")).toBeNull();
   });
 
   it.each([
     ["UNAUTHORIZED", "Administrator key is required."],
-    ["FORBIDDEN", "Administrator key was rejected."]
+    ["FORBIDDEN", "Administrator key was rejected."],
   ])("returns to the gate on %s", async (code, message) => {
     window.history.replaceState({}, "", "/?view=orders");
     authenticateAdmin();
     const api = ordersApi({
       listOrders: vi.fn(async () => {
         throw new ApiRequestError("Access denied.", code);
-      })
+      }),
     });
 
     render(<App ordersApi={api} />);
@@ -261,7 +367,7 @@ describe("orders console", () => {
     const api = ordersApi({
       listOrders: vi.fn(async () => {
         throw new ApiRequestError("Order storage is unavailable.", "HTTP_503");
-      })
+      }),
     });
 
     render(<App ordersApi={api} />);
@@ -269,24 +375,64 @@ describe("orders console", () => {
     expect(await screen.findByText("Orders API is not ready")).toBeVisible();
     expect(screen.getByText("HTTP_503")).toBeVisible();
     expect(screen.getByRole("button", { name: "Exit" })).toBeVisible();
-    expect(window.sessionStorage.getItem("poolmate.admin-api-key")).toBe("admin-secret");
+    expect(window.sessionStorage.getItem("poolmate.admin-api-key")).toBe(
+      "admin-secret",
+    );
   });
 });
 
 describe("trusted confirmation surface", () => {
   it("consumes the fragment secret and confirms with Telegram initData", async () => {
-    openConfirmation("token-1", "signed-init-data");
-    const api = ordersApi();
+    const ready = vi.fn();
+    const expand = vi.fn();
+    const close = vi.fn();
+    openConfirmation("token-1", "signed-init-data", {
+      ready,
+      expand,
+      close,
+    });
+    const completedResult: ConfirmationResult = {
+      ...confirmationResult,
+      orderState: "DEMO_CONFIRMED",
+      paymentProjection: {
+        paymentRequestId: "payment-request-1",
+        operationId: "pmop_poolmate-order-1-checkout-1-v1",
+        status: "DEMO_CONFIRMED",
+        settlementMode: "mock",
+        receipt: {
+          kind: "mock",
+          receiptId: "mock-receipt-1",
+          confirmedAt: "2026-07-25T02:00:01.000Z",
+        },
+        attempts: 1,
+        updatedAt: "2026-07-25T02:00:01.000Z",
+      },
+    };
+    const api = ordersApi({
+      confirm: vi.fn(async () => completedResult),
+    });
     const user = userEvent.setup();
 
     render(<App ordersApi={api} />);
 
+    expect(ready).toHaveBeenCalledOnce();
+    expect(expand).toHaveBeenCalledOnce();
+
     expect(window.location.hash).toBe("");
     expect(
-      await screen.findByRole("heading", { name: "500 inj atomic" })
+      await screen.findByRole("heading", { name: "500 inj atomic" }),
     ).toBeVisible();
     expect(screen.getByText("Dumpling box")).toBeVisible();
-    expect(screen.getByText("1500 inj atomic", { selector: ".amount-breakdown__total dd" })).toBeVisible();
+    expect(
+      screen.getByText("500 inj atomic", {
+        selector: ".amount-breakdown__total dd",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("1500 inj atomic", {
+        selector: ".confirmation-facts dd",
+      }),
+    ).toBeVisible();
     expect(screen.getByText("SHA-256")).toBeVisible();
     expect(screen.getByText("poolmate-checkout-json-v1")).toBeVisible();
     expect(screen.getByText("Sponsored demo")).toBeVisible();
@@ -294,12 +440,20 @@ describe("trusted confirmation surface", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Confirm allocation" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm allocation" }),
+    );
 
-    expect(await screen.findByText("Confirmation recorded")).toBeVisible();
+    expect(await screen.findByText("Mock order completed")).toBeVisible();
     expect(api.confirm).toHaveBeenCalledWith("token-1", "signed-init-data");
-    expect(screen.getByText(/No settlement Receipt is present/)).toBeVisible();
+    expect(screen.getByText(/mock-receipt-1/)).toBeVisible();
+    expect(screen.getByText(/No real funds moved/)).toBeVisible();
     expect(screen.queryByText(/^Paid$/i)).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Return to Telegram" }),
+    );
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("records an explicit rejection without creating a payment request", async () => {
@@ -312,7 +466,10 @@ describe("trusted confirmation surface", () => {
     await user.click(screen.getByRole("button", { name: "Reject" }));
 
     expect(await screen.findByText("Rejection recorded")).toBeVisible();
-    expect(api.decline).toHaveBeenCalledWith("decline-token", "signed-init-data");
+    expect(api.decline).toHaveBeenCalledWith(
+      "decline-token",
+      "signed-init-data",
+    );
     expect(screen.getByText(/No payment request was created/)).toBeVisible();
   });
 
@@ -323,7 +480,9 @@ describe("trusted confirmation surface", () => {
     render(<App ordersApi={api} />);
 
     expect(await screen.findByText(/read-only mode/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Confirm allocation" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Confirm allocation" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
     expect(api.confirm).not.toHaveBeenCalled();
     expect(api.decline).not.toHaveBeenCalled();
@@ -332,17 +491,19 @@ describe("trusted confirmation surface", () => {
   it.each([
     ["confirmed", "already confirmed"],
     ["superseded", "invalidated Checkout version"],
-    ["expired", "link has expired"]
+    ["expired", "link has expired"],
   ] as const)("disables a %s confirmation", async (status, message) => {
     openConfirmation(status, "signed-init-data");
     const api = ordersApi({
-      getConfirmation: vi.fn(async () => ({ ...confirmation, status }))
+      getConfirmation: vi.fn(async () => ({ ...confirmation, status })),
     });
 
     render(<App ordersApi={api} />);
 
     expect(await screen.findByText(new RegExp(message, "i"))).toBeVisible();
-    expect(screen.getByRole("button", { name: "Confirm allocation" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Confirm allocation" }),
+    ).toBeDisabled();
     expect(api.confirm).not.toHaveBeenCalled();
   });
 });

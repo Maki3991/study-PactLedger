@@ -1,21 +1,21 @@
 # PoolMate Telegram Agent MVP 实施方案
 
-**版本：** v3.0  
-**实施假设：** 两名工程师并行  
-**目标形态：** Telegram 群内拼单 Agent + Trusted Confirmation Surface + React 运营后台 + Merchant/Payment A2A 演示  
+**版本：** v3.1
+**实施假设：** 三名工程师在契约 Gate 后并行
+**目标形态：** Telegram 群内拼单 Agent + Trusted Confirmation Surface + React 运营后台 + 可替换 Payment Base
 **交易模式：** Human Present  
 **支付原则：** 最终报价、精确分摊、逐人确认、一次商户付款；正常主流程不执行交付后退差  
-**协议范围：** 本阶段实现 A2A 外层协议、稳定 canonical 接口、Mock Merchant、Mock Payment Foundation 和可替换 Provider Adapter；不声明正式 AP2 兼容
+**协议范围：** 当前实现稳定 canonical 接口、本地 Mock Merchant、持久化 Mock Payment Base 和可替换远程 PaymentBaseClient；A2A 与 AP2 保留演进边界，不声明已经接入
 
 ---
 
 ## 1. 文档目标
 
-本方案用于指导 PoolMate Human Present MVP 的两日开发与演示交付。
+本方案用于指导 PoolMate Human Present MVP 的分阶段开发与演示交付。并行组织以《PoolMate 独立方案》的三工程师 Gate 和目录所有权为准。
 
 重点不是完成生产级钱包、链上支付或 AP2 密码学实现，而是交付一条可以稳定演示的完整垂直链路：
 
-1. Telegram 群成员通过自然语言创建拼单；
+1. Telegram 群成员通过命令，或在明确 @mention Bot 后通过自然语言创建待确认草稿；
 2. 其他群成员认领并修改自己的商品份额；
 3. 认领阶段只记录份额，不创建金额上限授权；
 4. 份额满足后，PoolMate 通过 A2A 请求 Merchant Agent 生成最终 Checkout；
@@ -37,7 +37,7 @@
 - A2A 只承担外层协作，不成为资金事实来源；
 - Payment Foundation 与 Provider 可替换；
 - 不保留退差和批量结算的无效复杂度；
-- 两日内可以完成演示。
+- 三名工程师可以在契约冻结后分工实现 Domain/API、Bot/Adapter、Frontend/Delivery，并在阶段 Gate 汇合。
 
 ---
 
@@ -81,6 +81,9 @@
 - Payment Checkout A2A Task；
 - A2A Task、Message、Artifact 和内部状态分离；
 - AP2 演进字段预留。
+- 发起人在付款提交前安全关闭拼单，并留下不可变取消证据；
+- 设置 `AIPING_API_KEY` 即启用普通模型的直接 HTTPS LLM 草稿提取器；
+- `DRAFT -> Confirm & publish -> COLLECTING` 显式发布门。
 
 ---
 
@@ -93,9 +96,9 @@ Agent 负责：
 - 理解 Telegram 自然语言；
 - 提取订单草稿字段；
 - 识别缺失和歧义字段；
-- 根据 Skill 选择工作方法；
-- 解释 Merchant 和 Payment 返回结果；
-- 生成面向用户的自然语言说明。
+- 只返回经过严格 schema 校验的 Draft Patch。
+
+该能力由可选的直接 HTTPS Adapter 提供，不依赖 Codex CLI、Codex SDK、PTY session 或通用 Agent Runtime。未配置 API Key 或显式关闭时，全部命令和确定性业务流程照常工作。
 
 确定性业务代码负责：
 
@@ -305,7 +308,7 @@ PAYMENT CONFIRMED
                ▼
 ┌──────────────────────────────────────────────────────┐
 │ PoolMate Backend                                     │
-│ Fastify + Telegraf                                   │
+│ Fastify + grammY                                     │
 │                                                      │
 │ ┌────────────────┐   ┌────────────────────────────┐  │
 │ │ Telegram Bot   │   │ REST API + Swagger + SSE   │  │
@@ -321,14 +324,14 @@ PAYMENT CONFIRMED
 │       ┌────────┼───────────────┐                     │
 │       ▼        ▼               ▼                     │
 │ ┌──────────┐ ┌──────────────┐ ┌──────────────────┐   │
-│ │ Domain   │ │ Agent Runtime│ │ Durable Scheduler│   │
-│ │ Core     │ │ + Skills     │ │ Outbox + Jobs    │   │
+│ │ Domain   │ │ LLM Draft    │ │ Durable Scheduler│   │
+│ │ Core     │ │ HTTP Adapter │ │ Outbox + Jobs    │   │
 │ └────┬─────┘ └──────┬───────┘ └────────┬─────────┘   │
 │      │              │                  │             │
 │      ▼              ▼                  ▼             │
 │ ┌──────────┐ ┌──────────────┐ ┌──────────────────┐   │
-│ │ Drizzle  │ │ A2A Clients  │ │ Worker           │   │
-│ │ ORM      │ │ + Gateways   │ │                  │   │
+│ │ Drizzle  │ │ Merchant /   │ │ Worker           │   │
+│ │ ORM      │ │ Payment Ports│ │                  │   │
 │ └──────────┘ └──────┬───────┘ └──────────────────┘   │
 └─────────────────────┼────────────────────────────────┘
                       │
@@ -355,10 +358,9 @@ PAYMENT CONFIRMED
 ```text
 /
 ├── src/
-│   ├── agent/
-│   │   ├── agentRuntime.ts
-│   │   ├── skillRegistry.ts
-│   │   └── agentRunService.ts
+│   ├── application/
+│   │   └── ports/
+│   │       └── orderDraftExtractor.ts
 │   │
 │   ├── a2a/
 │   │   ├── client/
@@ -441,6 +443,10 @@ PAYMENT CONFIRMED
 │   │           ├── providerWebhook.ts
 │   │           └── protocolTypes.ts
 │   │
+│   ├── infrastructure/
+│   │   └── llm/
+│   │       └── httpOrderDraftExtractor.ts
+│   │
 │   ├── persistence/
 │   │   ├── db.ts
 │   │   ├── schema/
@@ -453,17 +459,6 @@ PAYMENT CONFIRMED
 │   │
 │   ├── config.ts
 │   └── main.ts
-│
-├── .agents/
-│   └── skills/
-│       ├── poolmate-core/
-│       │   └── SKILL.md
-│       ├── order-intake/
-│       │   └── SKILL.md
-│       ├── merchant-coordination/
-│       │   └── SKILL.md
-│       └── payment-coordination/
-│           └── SKILL.md
 │
 ├── web/
 │   ├── confirmation/
@@ -520,37 +515,34 @@ PAYMENT CONFIRMED
 
 ## 6. CodexClaw 改造策略
 
-### 6.1 保留或演进
+### 6.1 定位
+
+CodexClaw 是一次性导入的初始源码基线，目标是尽量复用工程骨架并减少大幅重写。导入后已经删除嵌套 `.git`，PoolMate 不是子仓库，也不在运行时依赖上游项目。
+
+### 6.2 保留或演进
 
 保留或演进：
 
-- `PtyManager` → `AgentRuntime`；
-- Codex SDK/CLI session；
-- PTY preflight；
-- Runtime state 持久化；
-- `SkillRegistry`；
-- Telegram formatter；
-- i18n；
-- Telegraf 初始化；
-- 配置加载；
-- healthcheck；
-- lint、format、test 和 CI 配置。
+- 配置加载、healthcheck、lint、format、test 和 CI 配置；
+- Telegram formatter、i18n 和 Bot 生命周期结构；
+- 可复用的 Fastify、错误处理和工程化约定；
+- Telegraf 初始化一次性迁移到 grammY；
+- 原有适配器边界改造成 PoolMate 的 Merchant、Payment 和 LLM 端口。
 
-### 6.2 删除候选
+### 6.3 必须删除
 
 删除或隔离：
 
+- Codex CLI、Codex SDK 和 PTY session；
+- 通用 Agent Runtime、Session Resume 和 Codex 工作目录管理；
 - Git/GitHub 自动提交 handler；
 - 编码助手 proactive summary；
 - shell command handler；
 - 项目切换和 coding command 路由；
-- 旧工作流阶段展示；
 - 与 PoolMate 无关的 Web 开发服务器控制；
-- 旧 Payment Authorization 和 Settlement 代码；
-- 旧 MCP Merchant/Payment transport；
-- 退差、Batch Payout 和 Settlement 页面。
+- 旧 Payment Authorization、退差、Batch Payout 和 Settlement 页面。
 
-### 6.3 不建设通用平台
+### 6.4 不建设通用平台
 
 本阶段不实现：
 
@@ -565,69 +557,68 @@ PAYMENT CONFIRMED
 
 ---
 
-## 7. Agent Runtime 与 Skill
+## 7. 轻量 LLM 草稿适配器
 
-### 7.1 Runtime Mode
+### 7.1 运行方式
 
-保留：
-
-```ts
-type AgentRuntimeMode = "pty" | "exec" | "sdk";
-```
-
-MVP 不拆分多个 Runtime Backend。
-
-### 7.2 Session Key
-
-建议：
+PoolMate 只实现一个可选的 `OrderDraftExtractor` 端口。默认 DeepSeek Provider 通过直接 HTTPS 请求 `/chat/completions`；高级配置仍可切换 Responses-compatible `/v1/responses`。两种方式都不启动 CLI、SDK、PTY、子进程或通用会话运行时。
 
 ```text
-conversation:{chatId}:{userId}
-draft:{chatId}:{userId}
-order:{orderId}
-agent-run:{runId}
+明确 @mention Bot 的群消息
+  -> grammY
+  -> OrderDraftExtractor
+  -> strict JSON Schema
+  -> Zod strict validation
+  -> createDraft()
 ```
 
-`chatId` 只表示消息目标，不作为唯一 Agent session key。
+### 7.2 配置
 
-### 7.3 Agent Run
+```text
+AIPING_API_KEY=
+AIPING_BASE_URL=https://aiping.cn/api/v1
+AIPING_MODEL=DeepSeek-V3.2
+
+# 以下为可选高级覆盖
+POOLMATE_LLM_ENABLED=
+POOLMATE_LLM_PROVIDER=deepseek
+POOLMATE_LLM_BASE_URL=
+POOLMATE_LLM_API_KEY=
+POOLMATE_LLM_MODEL=
+POOLMATE_LLM_TIMEOUT_MS=30000
+POOLMATE_LLM_MAX_INPUT_CHARS=2000
+```
+
+只设置 `AIPING_API_KEY` 即自动启用 AIPing Provider、`/api/v1` Base URL 和普通模型 `DeepSeek-V3.2`。显式设置 `POOLMATE_LLM_ENABLED=false` 可以关闭；官方 DeepSeek 或高级 Provider、URL 和模型仍可覆盖。Base URL 可以包含安全的 API path prefix，但必须使用 HTTPS 且不能包含凭证、query 或 fragment。API Key 只从服务端环境变量读取，状态端点只返回 `disabled | configured | unavailable` 和可选模型名，不返回 Key。
+
+### 7.3 输出边界
+
+模型只能输出：
 
 ```ts
-interface AgentRunInput {
-  runId: string;
-  sessionKey: string;
-  mode?: AgentRuntimeMode;
-  task: string;
-  workdir: string;
-  outputTarget: "telegram" | "admin" | "silent";
-  resumeSessionId?: string;
+interface OrderDraftExtraction {
+  title: string | null;
+  itemName: string | null;
+  targetUnits: number | null;
+  unit: string | null;
+  purchaseChannelHint: string | null;
+  storeNameHint: string | null;
+  merchantLinkHint: string | null;
+  userPriceHint: string | null;
+  missingFields: Array<"itemName" | "targetUnits">;
+  ambiguousFields: Array<
+    | "itemName"
+    | "targetUnits"
+    | "unit"
+    | "purchaseChannelHint"
+    | "storeNameHint"
+    | "merchantLinkHint"
+    | "userPriceHint"
+  >;
 }
 ```
 
-### 7.4 MVP Skills
-
-只实现四个 Skill：
-
-1. `poolmate-core`  
-   定义状态边界、不得虚构金额、不得代表用户确认等规则。
-
-2. `order-intake`  
-   提取订单草稿字段、识别缺失和歧义字段。
-
-3. `merchant-coordination`  
-   判断何时请求最终 Checkout，以及如何向用户解释报价。
-
-4. `payment-coordination`  
-   判断何时可以创建 Payment Task，以及如何解释 Payment Artifact。
-
-Skill 不负责：
-
-- Checkout hash；
-- 分配金额；
-- 确认验证；
-- A2A Task 状态迁移；
-- 支付策略；
-- AP2 验证。
+自然语言的必填字段只有 `itemName` 和 `targetUnits`。`title` 只是展示字段，用户未明确提供时由服务端根据商品名确定性生成，例如“可乐拼单”，不得作为缺失或歧义字段阻止创建。采购渠道、店铺、链接和用户参考价只是不可信业务意图。任何 merchant、payee、asset、final amount、Checkout、确认、付款、状态等额外字段，以及拒绝、超时、非 2xx、无效 JSON、必填字段缺失或歧义，都会 fail closed。LLM 输出只创建 `DRAFT`；只有发起人点击 `Confirm & publish` 才进入 `COLLECTING`。`Discard draft` 使用确定性取消服务并留下持久化取消证据。
 
 ---
 
@@ -637,27 +628,20 @@ Skill 不负责：
 
 ```ts
 interface OrderDraftExtraction {
-  fields: {
-    productName?: string;
-    targetQuantity?: string;
-    unit?: string;
-    estimatedUnitPrice?: string;
-    estimatedShipping?: string;
-    recognitionDeadlineAt?: string;
-    merchantReference?: string;
-    asset?: string;
-    splitRule?: "BY_QUANTITY" | "EQUAL_SPLIT";
-  };
-  missingFields: string[];
-  ambiguousFields: Array<{
-    field: string;
-    reason: string;
-    candidates?: string[];
-  }>;
+  title: string | null;
+  itemName: string | null;
+  targetUnits: number | null;
+  unit: string | null;
+  purchaseChannelHint: string | null;
+  storeNameHint: string | null;
+  merchantLinkHint: string | null;
+  userPriceHint: string | null;
+  missingFields: Array<"itemName" | "targetUnits">;
+  ambiguousFields: string[];
 }
 ```
 
-模型输出只生成 Draft Patch。
+模型输出只生成 Draft Patch。它可以保留用户明确说出的渠道偏好、店铺、链接和参考价，但不能生成可信商户、资产、最终金额、payee、确认或状态。展示标题不属于用户必填意图，缺失时由服务端派生。
 
 应用收到结果后必须执行 Zod 校验。
 
@@ -672,7 +656,7 @@ PaymentGateway.createCheckout()
 
 Gateway 内部使用 A2A Client。
 
-Agent Prompt 和 Skill 不直接构造：
+LLM Adapter 和 Telegram Handler 不直接构造：
 
 - A2A JSON-RPC；
 - Agent Card；
@@ -1757,6 +1741,16 @@ Bot 私聊发送一次性入口：
 - 修改 Checkout hash；
 - 绕过 Compliance Gate。
 
+### 18.5 Telegram Mini App 公网入口
+
+公网入口属于部署生命周期，不允许依赖手工启动的临时进程：
+
+- `POOLMATE_TUNNEL_MODE=quick` 仅用于本地联调和短期演示。一键脚本负责启动 Compose 内的 Quick Tunnel、读取随机 `trycloudflare.com` URL、写回服务端环境、重建应用并执行公网 Smoke Test。URL 变化后，旧 Telegram 确认链接失效，必须通过提醒流程签发新链接。
+- `POOLMATE_TUNNEL_MODE=named` 用于长期部署。Cloudflare 远程管理 Tunnel 使用固定域名，`CLOUDFLARE_TUNNEL_TOKEN` 只通过服务端 `TUNNEL_TOKEN` 环境变量提供，公开 hostname 路由到 Compose 内的 `http://frontend:8080`。
+- `POOLMATE_TUNNEL_MODE=external` 用于已有稳定 HTTPS 入口的服务器，由 Caddy、Nginx、负载均衡或其他基础设施转发到 Frontend。
+
+任何模式完成部署后，都必须从公网验证首页、`/health` 和 `/api/public/config-status`，并确认返回的 `publicBaseUrl` 与实际 HTTPS 入口完全一致。Quick Tunnel 没有 SLA，不能作为正式 Telegram Mini App 地址。
+
 ---
 
 ## 19. 幂等与并发
@@ -1980,13 +1974,12 @@ Evidence Bundle
 
 ---
 
-## 22. 两日实施计划
+## 22. 分阶段实施计划（三工程师）
 
 ### Day 1：Domain、Checkout 和确认链路
 
 #### 工程师 A：后端与 Domain
 
-- 演进 `AgentRuntime`；
 - 建立 Fastify API；
 - 引入 Drizzle ORM；
 - 建立订单和参与人 schema；
@@ -2001,15 +1994,18 @@ Evidence Bundle
 - 实现 A2A Merchant Gateway；
 - 建立 Scheduler 和 Outbox 基础。
 
-#### 工程师 B：Telegram、Agent 和 Web
+#### 工程师 B：Telegram 与 LLM Adapter
 
 - 改造 Telegram handlers；
 - 删除预授权相关文案和按钮；
 - 实现订单草稿和字段补全；
 - 实现认领和修改份额；
-- 建立四个 Skill；
-- 接入 Structured Output；
+- 接入直接 HTTPS Structured Output；
+- 实现真实 mention gate、`Confirm & publish` 和 `Discard draft`；
 - 实现 Merchant Agent Card；
+
+#### 工程师 C：Trusted Surface 与管理面板
+
 - 创建 Trusted Confirmation Surface；
 - 实现确认详情页、确认和拒绝；
 - 创建 React Admin；
@@ -2027,7 +2023,7 @@ Evidence Bundle
 - Confirmation Surface 可以显示 canonical 数据；
 - 用户确认可以落库；
 - 后台可以查看订单、Checkout 和确认进度；
-- Agent Run 和 Merchant A2A Trace 可查看。
+- 自然语言请求只形成待发布草稿，命令流程在 LLM 关闭时仍可用。
 
 ### Day 2：Payment A2A、履约、恢复和验收
 
@@ -2047,12 +2043,16 @@ Evidence Bundle
 - 实现订单完成；
 - 完成并发和边界测试。
 
-#### 工程师 B：交互、Trace 和演示
+#### 工程师 B：Telegram 交互与恢复文案
 
 - 实现 Payment Agent Card；
 - 完成确认进度 Telegram 卡片；
 - 完成付款成功、失败和未知文案；
 - 完成个人账单；
+- 覆盖重复 update/callback、关闭拼单和 LLM 不可用降级。
+
+#### 工程师 C：Trace、交付与演示
+
 - 完成 A2A Task/Artifact Trace 页面；
 - 完成 Payment Operation 页面；
 - 完成失败 Job 页面；
@@ -2363,9 +2363,9 @@ Telegram Update
 
 ### Agent
 
-- 使用 Codex 原生 Skill；
+- 设置 `AIPING_API_KEY` 即启用普通模型的直接 HTTPS LLM Adapter；
 - Structured Output 只用于草稿数据；
-- Agent Run 可追踪；
+- Adapter 状态和模型名可查询，API Key 不暴露；
 - Agent 无法指定任意金额和 payee；
 - Agent 无法生成确认记录；
 - Agent 无法直接修改订单状态。

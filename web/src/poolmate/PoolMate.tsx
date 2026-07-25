@@ -82,7 +82,10 @@ function BotStatusWidget() {
     }
   }, [])
 
-  useEffect(() => { void check() }, [check])
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => { void check() }, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [check])
 
   const dotClass = checking ? 'checking' : status?.ok ? 'online' : 'offline'
   const label = checking

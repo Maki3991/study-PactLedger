@@ -10,11 +10,11 @@
 >
 > 产品类别：Agent Treasury / Agent Spend Control
 >
-> 运行时基线：API tests `94/94` 已通过；全仓 build 当前被既有 `web/server/treasury-integration/` 类型问题阻塞，lint 另有既有脚本与 Hook 规则问题
+> 运行时基线：lint / build / API tests `42/42` 已通过
 >
-> 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
+> 部署状态：公网 `https://pactledger.xyz` 已提供最新 Fastify 首页、Health、公开 Base Status 与 Agent Card；A2A 0.3 Task 兼容修复待部署后复测，PandaData 当前公网示例仍安全降级为 Replay
 >
-> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base 和管理面板；本地 Backend tests `100/100`、Frontend tests `29/29`，远程支付基座契约与真实链上结算仍未接通
+> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base、安全关闭拼单、结构化采购意图和管理面板；最后一名参与者在 Telegram WebApp 确认后，本地 Mock 会自动经过 Policy、持久化 Mock Receipt 并回群播报，不再需要管理员手动提交；设置 `AIPING_API_KEY` 即自动使用普通模型 `DeepSeek-V3.2`，真实抽取请求已验证；新的产品故事已在本地代码实现：@Bot 后立即返回处理中卡片、解析后编辑同一卡片为可点击认领卡片，并允许未达/超过期望数量时按实际锁定份额报价和付款；Bot 指令帮助由单一 Markdown skill `poolmate/backend/src/bot/help/SKILL.md` 维护，覆盖普通指令、LLM command skill calling 和 `/pool_test` 虚拟参与人调试指令；本地 Backend tests `150/150`、Frontend tests `32/32`、后端 lint/typecheck/build 与前端 lint/build 已通过；真实 Telegram 群、公网部署、远程支付基座契约与真实链上结算仍未接通
 
 ---
 
@@ -360,13 +360,16 @@ PoolMate 是 PactLedger 的跨场景复用证明：
 ### 6.2 目标流程
 
 ```text
-群里发起拼单
-  -> PoolMate 解析商品、单价、份额和截止时间
-  -> 成员确认份额
-  -> 凑满后生成 merchant_pay Payment Intent
+群里 @PoolMate 发起拼单
+  -> Bot 立即返回处理中卡片，展示发起人和发起时间
+  -> LLM 解析商品、期望数量、渠道/店铺/链接等用户意图
+  -> Bot 更新同一张卡片为可点击认领状态
+  -> 成员认领份额，期望数量只作为进度参考
+  -> 发起人按当前实际份额锁单，可少于、等于或超过期望数量
+  -> 商户 Checkout 生成后，锁定参与人逐人确认精确金额
+  -> 生成 merchant_pay Payment Intent
   -> PactLedger 检查商户白名单、金额、用途和审批阈值
   -> Injective 结算并生成 Receipt
-  -> 优惠退差或失败退款
   -> 群内推送账单卡和 Explorer 链接
 ```
 
@@ -418,26 +421,28 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 | Injective 官方 SDK Testnet Adapter | 已实现 | 官方 SDK `MsgSend`、收款白名单、denom/精度、原子金额、签名地址、区块确认 Receipt 与稳定错误已通过单元测试 |
 | Injective Testnet 真实支付 | 待实现 | 缺少配置的钱包、白名单收款地址、支付 denom/精度与测试币；尚无 Explorer 可确认交易，赛道“实际集成”硬门槛未通过 |
 | Settlement Receipt 独立持久化 | 已实现 | PostgreSQL Intent / Decision / Receipt 三表、单进程同 Intent 并发去重、重启恢复已确认/失败 Receipt；中断 `settling` 会隔离，链上查询恢复仍待实现 |
-| A2A Agent Card / 任务协议 | 已实现 | Fastify Agent Card、REST 任务、JSON-RPC 与 API-key 保护均已通过本地测试；待生产重新部署与公网 Smoke Test |
+| A2A Agent Card / 任务协议 | 已实现 / 修复待部署 | `https://pactledger.xyz/.well-known/agent-card.json` 与 `/a2a` 已公网可访问；本地已补齐 A2A 0.3 Task `kind` 与状态 Message `kind/messageId` 并通过测试，待生产部署后用官方自测台复验 |
 | x402 / ACP / AP2 | 原型 | 当前主要作为协议标签；尚无完整握手、鉴权和支付 Connector |
-| Telegram 群机器人 | 已实现 | Bot、会话与状态端点已迁入 `web/server/` Fastify；群消息可形成持久化拼单和标准 `AgentPaymentIntent -> Policy -> Mock Receipt`，陌生收款人产生真实拒绝 Trace；尚未配置生产 Token，明确为 `Mock · No Chain`，也不满足 Photon iMessage 门槛 |
-| PoolMate 独立参考应用 | 已实现 | 顶层 `poolmate/` 已从固定 CodexClaw commit 导入并移除嵌套 `.git`；独立 Fastify / SQLite / React / grammY 实现订单、不可变 Checkout、原子金额分摊、Telegram WebApp 逐人确认、payment projection/outbox、幂等与只读恢复；Telegram user allowlist 默认关闭、可显式 fail closed 开启；Backend tests `100/100`、Frontend tests `29/29`、空 volume Docker 及桌面/移动浏览器检查通过 |
-| PoolMate 本地 Mock Payment Base | 已实现 | `PAYMENT_SETTLEMENT_MODE=mock` 无需远程 URL/Key；白名单、资产、正原子金额、有效期和 operation identity 经 Policy 检查后，operation/decision/Mock Receipt 追加写入独立 SQLite；重试和重启只恢复原 operation，只能进入 `DEMO_CONFIRMED`，API 不返回 tx hash 或 Explorer |
+| Telegram 群机器人 | 已实现 | 权威运行时保留在 `web/server/` Fastify，并复用现有 PostgreSQL Session 与进程内 PactLedger；自然语言建单会先返回 `PARSING` 处理中卡片，再编辑同一卡片为可认领状态；期望份额仅作为进度参考，允许未达、达到或超过期望后由发起人显式锁单并确认结算；Payment Intent 保留 `AP2` protocol tag，Mock 成功明确显示 `Mock Receipt · No Chain`，陌生收款人产生真实拒绝 Trace；尚未完成真实 Telegram 群公网验收，也不满足 Photon iMessage 门槛 |
+| PoolMate 独立参考应用 | 已实现 / 新故事本地已实现 | 顶层 `poolmate/` 已从固定 CodexClaw commit 导入并移除嵌套 `.git`；CodexClaw 仅作为尽量少改代码的初始源码基线，运行时不依赖 Codex CLI/SDK/PTY；独立 Fastify / SQLite / React / grammY 实现订单、不可变 Checkout、原子金额分摊、Telegram WebApp 逐人确认、payment projection/outbox、幂等与只读恢复；最后一名参与者确认后，Mock 模式会自动完成受控付款、返回 Mock Receipt、由 Bot 回原群播报，确认页可明确返回 Telegram；过期且尚未提交的确认 Checkout 会幂等进入 `PAYMENT_FAILED / PAYMENT_REQUEST_EXPIRED` 并明确说明无付款、无 Receipt；Owner-only 安全关闭会持久化 cancellation evidence 并处理付款 claim 竞态；自然语言入口已实现“立即处理中卡片 -> LLM 解析 -> 同卡片更新为 `COLLECTING` 可认领卡片”，可提取商品、数量、单位、采购渠道偏好、店铺名、可选链接和用户参考价；`targetUnits` 当前兼容字段承担期望数量语义，发起人可在未达/达到/超过期望数量时按实际认领份额请求最终报价；采购渠道、店铺和链接仍是用户偏好，固定 Demo Merchant 的 merchant/payee/amount 只来自可信 Checkout；Telegram user allowlist 默认关闭、可显式 fail closed 开启；Backend tests `150/150`、Frontend tests `32/32`，后端 lint/typecheck/build 与前端 lint/build 已通过；真实 Telegram 群、公网部署、远程 PactLedger Payment Base 和链上付款仍待外部验收 |
+| PoolMate 本地 Mock Payment Base | 已实现 | `PAYMENT_SETTLEMENT_MODE=mock` 无需远程 URL/Key；白名单、资产、正原子金额、有效期和 operation identity 经 Policy 检查后，operation/decision/Mock Receipt 追加写入独立 SQLite；最终确认会立即提交现有 Payment Orchestration，后台同时补扫持久化的 ready outbox 以恢复确认后中断；超过 Checkout 有效期的未提交请求会原子终止为 `PAYMENT_FAILED / PAYMENT_REQUEST_EXPIRED`，绝不补付或生成 Mock Receipt；重试和重启只处理原 operation，只能进入 `DEMO_CONFIRMED`，API 和群消息明确不返回 tx hash 或 Explorer、不宣称真实付款 |
 | PoolMate 独立远程 Payment Base 联调 | 实现中 | Testnet/Live HTTPS Client、稳定 operation ID、服务端鉴权、超时和错误归一化已实现；因 PactLedger 尚未发布稳定远端支付 API，远程模式默认 fail closed 为 `PAYMENT_BASE_UNAVAILABLE`，未调用 Demo 端点、未产生真实 Injective Receipt |
 | 链上 Treasury 合约 | 待实现 | 仓库当前无可验证部署 Manifest |
 
 ### 7.1 源码完成度与生产部署必须分开判断
 
-2026-07-24 对公网 `http://129.226.91.246:8787` 的实测结果：
+2026-07-25 对公网 `https://pactledger.xyz` 的实测结果：
 
-| 检查 | 最新源码应有结果 | 当前公网实际结果 |
-|---|---|---|
-| `GET /api/health` | `service: pactledger-api` | `200`，但仍为旧 `service: kaleidox-api` |
-| `GET /api/public/base-status` | 无需登录返回 `200` | `401` |
-| `GET /.well-known/agent-card.json` | 返回 Agent Card `200` | `404` |
+| 检查 | 当前公网实际结果 |
+|---|---|
+| `GET /` | `200`，PactLedger 前端可访问 |
+| `GET /api/health` | `200`，`service: pactledger-api` |
+| `GET /api/public/base-status` | 无需登录返回 `200`，执行模式明确为 `mock` |
+| `GET /.well-known/agent-card.json` | `200`，声明 A2A JSON-RPC 0.3 Endpoint `https://pactledger.xyz/a2a` |
+| `POST /a2a` | 可创建并查询任务；当前生产响应尚缺 A2A 0.3 Task `kind`，本地修复待部署 |
+| PandaAI 数据证据 | 当前公网示例任务返回 `provider: replay`，必须修复 PandaData 生产调用或继续明确标注降级，不得宣称该任务使用真实行情 |
 
-因此当前结论是：**源码与本地测试完成，生产部署尚未更新。** 下一位部署 Agent 必须拉取最新 `main`、重新构建并重启 Fastify，再直接请求公网 URL 做 Smoke Test。旧 `/api/health` 中的 `panda: live`、`pandaModel: live`、`injective: ready` 不能作为新运行时或真实 Testnet Receipt 的证明。
-
+因此当前结论是：**公网入口已经上线，但正式提交前仍需部署 A2A 0.3 兼容修复，并完成至少 3 个真实任务复验。** 当前赛道文档允许 DeepSeek V4 Pro 或火山低延迟模型；生产 Health 显示火山 Ark Endpoint。数据提供方仍必须以每个 Task Artifact 的实际标记为准。
 真实链上完成只能由 `mode=testnet`、确认交易哈希、可打开的 Explorer、PostgreSQL Receipt 四项共同证明。
 
 ---
@@ -748,7 +753,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - 多 Agent 研究、策略、回测和风控协作。
 - 模型负责解释，确定性引擎负责计算，风险边界明确。
 
-**硬门槛：以自行托管的 A2A Remote Agent 提交，公开 Agent Card 必须真实可访问，总响应时间不得超过 20 分钟，底座模型统一使用赛事提供的 DeepSeek V4 Pro。** 提交材料还需列出数据/投研 Skills、鉴权方式、示例问题与预期输出；至少完成 3 个示例任务，并在结果中包含必要风险提示。
+**硬门槛：以自行托管的 A2A Remote Agent 提交，公开 Agent Card 必须真实可访问，总响应时间不得超过 20 分钟，底座模型使用赛事允许的 DeepSeek V4 Pro 或火山低延迟模型。** 提交材料还需列出数据/投研 Skills、鉴权方式、示例问题与预期输出；至少完成 3 个示例任务，并在结果中包含必要风险提示。
 
 ### Photon / 消息场景
 
@@ -785,7 +790,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - **产品门**：PactLedger 已统一为主产品。
 - **基座门**：通用 Policy / Trace、Receipt 持久化与幂等已通过 API tests。
 - **复用门**：PoolMate 已调用同一 Fastify 基座 API，合法与拒绝 Trace 均可复现。
-- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4 已完成本地验收，本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
+- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4、安全关闭拼单和新自然语言故事已完成本地验收；@Bot 后可立即发送处理中卡片、解析后同卡片进入 `COLLECTING`，并允许未达/达到/超过期望数量时按实际份额锁单；本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；未配置 LLM Key 时命令流程继续可用；`/help`、`/pool_help <用户请求>` 和 `/pool_test <orderId> +/-N` 已由单一 Markdown command skill 覆盖，调试指令只增减虚拟认领人，不创建 Checkout、付款或 Receipt；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
 
 从当前提交继续时，严格按以下顺序：
 
@@ -819,15 +824,16 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 
 #### 3. 比赛证据包
 
-- DeepSeek V4 Pro 完成 3 个 A2A 示例任务，均小于 20 分钟并带风险提示。
+- 使用赛事允许的 DeepSeek V4 Pro 或火山低延迟模型完成 3 个 A2A 示例任务，均小于 20 分钟并带风险提示。
 - 保存 PandaData 数据源、股票代码、日期区间和数据量证据。
 - 保存 Injective Explorer、Receipt JSON、数据库查询和 Mock 降级画面。
-- 保存 API tests `94/94` 结果；修复既有 `web/server/treasury-integration/` 质量门问题后，再保存全仓 lint、build 与生产 Smoke 结果。
+- 保存 lint、build、API tests `42/42` 与生产 Smoke 结果。
 
 ### P1：提升完整度
 
 - 统一 Protocol Router Connector 接口。
-- 使用已配置的生产 Telegram Bot 完成真实群聊收发，并固化本地 Mock Receipt 与拒绝 Policy 证据。
+- 使用已配置的生产 Telegram Bot 固化真实群聊证据：最终 WebApp 确认后自动进入 `DEMO_CONFIRMED`、群内展示带 `@username` 的确认进度与 Mock Receipt，并保留拒绝 Policy 证据。
+- 使用已验证的 AIPing `DeepSeek-V3.2` 配置，固化一次真实 Telegram 群聊 `@PoolMate 我们要拼单，期望3瓶可乐，美团外卖 xx 店铺名` → 立即处理中卡片 → 解析后同卡片更新为可认领拼单 → 群成员认领 → 发起人可在未达/达到/超过期望数量时按实际份额请求最终报价的外部证据；源码已支持该流程，仍需真实群聊、公网和视频/截图证据；采购渠道只作为意图保留，Demo Merchant 继续负责当前模拟 Checkout；没有可用 Key 时保持关闭，不影响命令流程。
 - 为独立 PoolMate 发布并冻结非 Demo 的远端支付提交/按 operation ID 查询契约，再配置 `PAYMENT_BASE_URL`、提交路径、恢复路径和服务端凭证完成 P3。
 - Receipt 总账页同时展示两个应用。
 - Policy 管理界面和人工审批队列。
@@ -939,8 +945,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - [x] Mock / Replay / Testnet / Live 在 UI 和 API 中无歧义。
 - [ ] A2A Agent Card 与任务端点在生产 Fastify 服务可访问。
 - [ ] PandaAI 使用的底座模型、Skills 清单和鉴权方式符合赛题要求，3 个示例任务在 20 分钟内完成并包含风险提示。
-- [x] 本地 API tests `94/94` 全部通过。
-- [ ] 全仓 lint、build 通过（build 当前被既有 `web/server/treasury-integration/` 类型问题阻塞，lint 另有既有脚本与 Hook 规则问题）。
+- [x] 本地 lint、build 与 API tests `42/42` 全部通过。
 - [ ] 最新 Fastify 已部署，生产 smoke 全部通过。
 - [ ] 网络失败时能安全降级，且不伪造链上证据。
 

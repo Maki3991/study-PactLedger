@@ -6,6 +6,8 @@ import type {
   PoolMateSessionStatus,
 } from './types.js'
 
+const MAX_CLAIMED_SLOTS_PER_SESSION = 100
+
 interface CreateSessionInput {
   id: string
   chatId: number
@@ -248,7 +250,9 @@ export class PoolMateRepository {
       if (session.status !== 'collecting') return rollback(client, '拼单已停止收集份额', session)
       if (session.deadline <= new Date()) return rollback(client, '拼单已超过截止时间', session)
       if (!Number.isInteger(slots) || slots < 1) return rollback(client, '份额必须是正整数', session)
-      if (session.slotsFilled + slots > session.slotsTotal) return rollback(client, '剩余份额不足', session)
+      if (session.slotsFilled + slots > MAX_CLAIMED_SLOTS_PER_SESSION) {
+        return rollback(client, `单次拼单最多认领 ${MAX_CLAIMED_SLOTS_PER_SESSION} 份`, session)
+      }
       const existing = await client.query('SELECT 1 FROM poolmate_members WHERE session_id = $1 AND user_id = $2', [sessionId, userId])
       if (existing.rowCount) return rollback(client, '你已经加入该拼单', session)
 
@@ -257,13 +261,12 @@ export class PoolMateRepository {
         VALUES ($1, $2, $3, $4, $5)
       `, [sessionId, userId, username, slots, slots * session.priceEach])
       const nextFilled = session.slotsFilled + slots
-      const nextStatus: PoolMateSessionStatus = nextFilled >= session.slotsTotal ? 'funded' : 'collecting'
       const updated = await client.query<SessionRow>(`
         UPDATE poolmate_sessions
-        SET slots_filled = $2, status = $3, updated_at = NOW()
+        SET slots_filled = $2, updated_at = NOW()
         WHERE id = $1
         RETURNING *
-      `, [sessionId, nextFilled, nextStatus])
+      `, [sessionId, nextFilled])
       await client.query('COMMIT')
       return { ok: true, session: rowToSession(updated.rows[0]) }
     } catch (error) {
@@ -333,6 +336,50 @@ export class PoolMateRepository {
     return {
       ok: false,
       reason: session.creatorId !== creatorId ? '只有发起人可以取消拼单' : '当前状态不能取消',
+      session,
+    }
+  }
+
+  async lockSession(sessionId: string, creatorId: number): Promise<PoolMateMutationResult> {
+    if (!this.pool) {
+      const session = this.sessions.get(sessionId)
+      if (!session) return { ok: false, reason: '拼单不存在' }
+      if (session.creatorId !== creatorId) {
+        return { ok: false, reason: '只有发起人可以锁单并确认结算', session: cloneSession(session) }
+      }
+      if (session.status !== 'collecting' && session.status !== 'cancelled') {
+        return { ok: true, session: cloneSession(session) }
+      }
+      if (session.status !== 'collecting') {
+        return { ok: false, reason: '当前状态不能锁单', session: cloneSession(session) }
+      }
+      if (session.slotsFilled <= 0) {
+        return { ok: false, reason: '至少需要一份有效认领才能锁单', session: cloneSession(session) }
+      }
+      session.status = 'funded'
+      session.updatedAt = new Date()
+      return { ok: true, session: cloneSession(session) }
+    }
+
+    const result = await this.pool.query<SessionRow>(`
+      UPDATE poolmate_sessions
+      SET status = 'funded', updated_at = NOW()
+      WHERE id = $1 AND creator_id = $2 AND status = 'collecting' AND slots_filled > 0
+      RETURNING *
+    `, [sessionId, creatorId])
+    if (result.rows[0]) return { ok: true, session: rowToSession(result.rows[0]) }
+
+    const session = await this.findSession(sessionId)
+    if (!session) return { ok: false, reason: '拼单不存在' }
+    if (session.creatorId !== creatorId) {
+      return { ok: false, reason: '只有发起人可以锁单并确认结算', session }
+    }
+    if (session.status !== 'collecting' && session.status !== 'cancelled') {
+      return { ok: true, session }
+    }
+    return {
+      ok: false,
+      reason: session.slotsFilled <= 0 ? '至少需要一份有效认领才能锁单' : '当前状态不能锁单',
       session,
     }
   }
@@ -424,7 +471,13 @@ export class PoolMateRepository {
     if (session.status !== 'collecting') return { ok: false, reason: '拼单已停止收集份额', session: cloneSession(session) }
     if (session.deadline <= new Date()) return { ok: false, reason: '拼单已超过截止时间', session: cloneSession(session) }
     if (!Number.isInteger(slots) || slots < 1) return { ok: false, reason: '份额必须是正整数', session: cloneSession(session) }
-    if (session.slotsFilled + slots > session.slotsTotal) return { ok: false, reason: '剩余份额不足', session: cloneSession(session) }
+    if (session.slotsFilled + slots > MAX_CLAIMED_SLOTS_PER_SESSION) {
+      return {
+        ok: false,
+        reason: `单次拼单最多认领 ${MAX_CLAIMED_SLOTS_PER_SESSION} 份`,
+        session: cloneSession(session),
+      }
+    }
     const sessionMembers = this.members.get(sessionId) ?? new Map<number, PoolMateMember>()
     if (sessionMembers.has(userId)) return { ok: false, reason: '你已经加入该拼单', session: cloneSession(session) }
     this.memberSequence += 1
@@ -440,7 +493,6 @@ export class PoolMateRepository {
     })
     this.members.set(sessionId, sessionMembers)
     session.slotsFilled += slots
-    if (session.slotsFilled >= session.slotsTotal) session.status = 'funded'
     session.updatedAt = new Date()
     return { ok: true, session: cloneSession(session) }
   }

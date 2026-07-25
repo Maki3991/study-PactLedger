@@ -4,7 +4,10 @@ import type {
   OrderDetailView,
   PaymentProjectionStatus
 } from "@poolmate/shared";
-import { formatPaymentStatus } from "../src/bot/formatter.js";
+import {
+  formatConfirmationUpdate,
+  formatPaymentStatus
+} from "../src/bot/formatter.js";
 
 function order(status?: PaymentProjectionStatus): OrderDetailView {
   return {
@@ -62,7 +65,15 @@ function order(status?: PaymentProjectionStatus): OrderDetailView {
                     confirmedAt: "2026-07-25T12:01:00.000Z"
                   }
                 }
-              : {}),
+              : status === "DEMO_CONFIRMED"
+                ? {
+                    receipt: {
+                      kind: "mock" as const,
+                      receiptId: "mock-receipt-1",
+                      confirmedAt: "2026-07-25T12:01:00.000Z"
+                    }
+                  }
+                : {}),
             attempts: 1,
             updatedAt: "2026-07-25T12:01:00.000Z"
           }
@@ -126,4 +137,31 @@ test("confirmed status without verifiable receipt never claims the merchant was 
   const result = formatPaymentStatus(malformed);
   assert.match(result, /Payment evidence is incomplete/);
   assert.doesNotMatch(result, /Merchant paid/);
+});
+
+test("expired checkout copy says no payment or receipt exists", () => {
+  const expired = order("FAILED");
+  expired.state = "PAYMENT_FAILED";
+  expired.paymentProjection = {
+    ...expired.paymentProjection!,
+    errorCode: "PAYMENT_REQUEST_EXPIRED"
+  };
+
+  const result = formatPaymentStatus(expired);
+  assert.match(result, /expired before payment submission/);
+  assert.match(result, /No payment was made/);
+  assert.match(result, /no settlement receipt was created/i);
+  assert.doesNotMatch(result, /Merchant paid/);
+});
+
+test("confirmation updates identify the actor and include the persisted Mock receipt", () => {
+  const completed = order("DEMO_CONFIRMED");
+  completed.state = "DEMO_CONFIRMED";
+
+  const result = formatConfirmationUpdate("@ada", "confirm", completed);
+
+  assert.match(result, /^@ada confirmed the final quote\./);
+  assert.match(result, /Mock demo completed/);
+  assert.match(result, /Mock receipt: mock-receipt-1/);
+  assert.match(result, /No real funds moved/);
 });

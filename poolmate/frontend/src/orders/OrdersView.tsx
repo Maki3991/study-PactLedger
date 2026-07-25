@@ -7,34 +7,32 @@ import {
   Play,
   RefreshCw,
   SearchCheck,
-  Users
+  Users,
+  XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CheckoutView,
   OrderDetailView,
-  OrderSummaryView
+  OrderSummaryView,
 } from "@poolmate/shared";
 import { createOrdersApi, type OrdersApi } from "../api/ordersApi";
 import { ApiRequestError } from "../api/apiClient";
-import {
-  ConsoleHeader,
-  type ConsoleView
-} from "../components/ConsoleHeader";
+import { ConsoleHeader, type ConsoleView } from "../components/ConsoleHeader";
 import { useApiResource } from "../hooks/useApiResource";
 import {
   confirmationStateMeta,
   formatAtomicMoney,
   formatDateTime,
   orderStateMeta,
-  verifiableSettlementReceipt
+  verifiableSettlementReceipt,
 } from "./orderDisplay";
 import { StateBadge } from "./StateBadge";
 import { AdminAccessGate } from "./AdminAccessGate";
 import {
   clearAdminSessionKey,
   readAdminSessionKey,
-  writeAdminSessionKey
+  writeAdminSessionKey,
 } from "./adminSession";
 
 interface OrdersViewProps {
@@ -50,7 +48,7 @@ interface AuthenticatedOrdersViewProps extends OrdersViewProps {
 function OrderListRow({
   order,
   selected,
-  onSelect
+  onSelect,
 }: {
   order: OrderSummaryView;
   selected: boolean;
@@ -177,12 +175,18 @@ function CheckoutSection({ checkout }: { checkout: CheckoutView }) {
       </dl>
       <div className="table-wrap">
         <table>
-          <caption>Atomic allocations and confirmations</caption>
+          <caption>Canonical payment allocations and confirmations</caption>
           <thead>
             <tr>
               <th scope="col">Participant</th>
               <th scope="col">Units</th>
-              <th scope="col">Allocation</th>
+              <th scope="col">Goods</th>
+              <th scope="col">Shipping</th>
+              <th scope="col">Discount</th>
+              <th scope="col">Fee</th>
+              <th scope="col">Total</th>
+              <th scope="col">Strategy</th>
+              <th scope="col">Allocation status</th>
               <th scope="col">Confirmation</th>
             </tr>
           </thead>
@@ -195,7 +199,24 @@ function CheckoutSection({ checkout }: { checkout: CheckoutView }) {
                   <td>{allocation.displayName}</td>
                   <td>{allocation.units}</td>
                   <td className="mono-value">
-                    {formatAtomicMoney(allocation.money)}
+                    {formatAtomicMoney(allocation.goods)}
+                  </td>
+                  <td className="mono-value">
+                    {formatAtomicMoney(allocation.shipping)}
+                  </td>
+                  <td className="mono-value">
+                    -{formatAtomicMoney(allocation.discount)}
+                  </td>
+                  <td className="mono-value">
+                    {formatAtomicMoney(allocation.fee)}
+                  </td>
+                  <td className="mono-value">
+                    {formatAtomicMoney(allocation.total)}
+                  </td>
+                  <td className="mono-value">{allocation.strategy}</td>
+                  <td>
+                    <span className="mono-value">{allocation.status}</span>
+                    <span className="cell-note">{allocation.id}</span>
                   </td>
                   <td>
                     <StateBadge
@@ -221,11 +242,16 @@ function CheckoutSection({ checkout }: { checkout: CheckoutView }) {
 function OrderDetail({
   order,
   action,
+  onCloseOrder,
   onSubmitPayment,
-  onRecoverPayment
+  onRecoverPayment,
 }: {
   order: OrderDetailView;
-  action?: { kind: "submit" | "recover"; error?: ApiRequestError };
+  action?: {
+    kind: "close" | "submit" | "recover";
+    error?: ApiRequestError;
+  };
+  onCloseOrder(): void;
   onSubmitPayment(): void;
   onRecoverPayment(): void;
 }) {
@@ -242,6 +268,12 @@ function OrderDetail({
     order.fundingMode === "sponsored_demo"
       ? "Sponsored demo / participants not funded"
       : "Participant-prefunded";
+  const canClose =
+    order.state === "DRAFT" ||
+    order.state === "COLLECTING" ||
+    order.state === "QUOTE_PENDING" ||
+    order.state === "CONFIRMATION_PENDING" ||
+    order.state === "READY_FOR_PAYMENT";
   return (
     <article className="order-detail">
       <header className="order-detail__header">
@@ -264,6 +296,17 @@ function OrderDetail({
           <span>
             Settlement evidence is unavailable in this response. A Receipt is
             required before this console can show a successful settlement.
+          </span>
+        </div>
+      ) : null}
+
+      {order.cancellation ? (
+        <div className="inline-warning" role="status">
+          <XCircle size={16} aria-hidden="true" />
+          <span>
+            Closed {formatDateTime(order.cancellation.canceledAt)} before
+            payment submission. No settlement Receipt was created; this is not a
+            refund.
           </span>
         </div>
       ) : null}
@@ -293,7 +336,87 @@ function OrderDetail({
         </div>
       </dl>
 
-      <section className="detail-section" aria-labelledby="participants-heading">
+      {order.intent ? (
+        <section
+          className="detail-section"
+          aria-labelledby="purchase-intent-heading"
+        >
+          <div className="detail-section__heading">
+            <div>
+              <p className="section-kicker">Untrusted user request</p>
+              <h3 id="purchase-intent-heading">Purchase intent</h3>
+            </div>
+            <StateBadge label="Intent only" severity="neutral" />
+          </div>
+          <p className="truth-note">
+            This preserves what the user asked for. Merchant, payee, and amount
+            become authoritative only in the verified Checkout.
+          </p>
+          <dl className="detail-facts">
+            <div>
+              <dt>Original request</dt>
+              <dd>{order.intent.originalText}</dd>
+            </div>
+            <div>
+              <dt>Requested item</dt>
+              <dd>{order.intent.items[0]?.name}</dd>
+            </div>
+            <div>
+              <dt>Requested quantity</dt>
+              <dd>
+                {order.intent.items[0]?.quantity}
+                {order.intent.items[0]?.unit
+                  ? ` ${order.intent.items[0].unit}`
+                  : " units"}
+              </dd>
+            </div>
+            <div>
+              <dt>Channel preference</dt>
+              <dd>{order.intent.purchaseChannelHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>Store hint</dt>
+              <dd>{order.intent.storeNameHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>Merchant link hint</dt>
+              <dd>{order.intent.merchantLinkHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>User price reference</dt>
+              <dd>{order.intent.userPriceHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd className="mono-value">{order.intent.source}</dd>
+            </div>
+          </dl>
+          <div className="inline-warning" role="status">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>
+              Current quotes use the configured Demo Merchant. A requested
+              channel such as Meituan is preserved for routing but is not a live
+              integration claim.
+            </span>
+          </div>
+        </section>
+      ) : null}
+
+      {canClose ? (
+        <button type="button" onClick={onCloseOrder} disabled={Boolean(action)}>
+          {action?.kind === "close" ? (
+            <RefreshCw className="spin" size={16} aria-hidden="true" />
+          ) : (
+            <XCircle size={16} aria-hidden="true" />
+          )}
+          Close pool
+        </button>
+      ) : null}
+
+      <section
+        className="detail-section"
+        aria-labelledby="participants-heading"
+      >
         <div className="detail-section__heading">
           <div>
             <p className="section-kicker">Claimed units</p>
@@ -413,7 +536,8 @@ function OrderDetail({
             <div className="inline-warning inline-warning--error" role="alert">
               <AlertTriangle size={16} aria-hidden="true" />
               <span>
-                {projection.errorMessage ?? "Payment operation requires attention."}{" "}
+                {projection.errorMessage ??
+                  "Payment operation requires attention."}{" "}
                 <code>{projection.errorCode}</code>
               </span>
             </div>
@@ -435,7 +559,11 @@ function OrderDetail({
               <div>
                 <dt>Explorer</dt>
                 <dd>
-                  <a href={receipt.explorerUrl} target="_blank" rel="noreferrer">
+                  <a
+                    href={receipt.explorerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open receipt <ExternalLink size={13} aria-hidden="true" />
                   </a>
                 </dd>
@@ -514,7 +642,10 @@ function OrderDetail({
   );
 }
 
-function errorHeading(error: ApiRequestError, scope: "list" | "detail"): string {
+function errorHeading(
+  error: ApiRequestError,
+  scope: "list" | "detail",
+): string {
   if (error.code === "NOT_READY" || error.code === "HTTP_503") {
     return "Orders API is not ready";
   }
@@ -527,24 +658,24 @@ function AuthenticatedOrdersView({
   api,
   onNavigate,
   adminApiKey,
-  onExit
+  onExit,
 }: AuthenticatedOrdersViewProps) {
   const ordersApi = useMemo(() => api ?? createOrdersApi(), [api]);
   const loadOrders = useCallback(
     (signal: AbortSignal) => ordersApi.listOrders(adminApiKey, signal),
-    [adminApiKey, ordersApi]
+    [adminApiKey, ordersApi],
   );
   const { resource: list, reload: reloadList } = useApiResource(
     loadOrders,
-    "orders"
+    "orders",
   );
   const orders = useMemo(
     () => (list.state !== "idle" ? (list.data ?? []) : []),
-    [list]
+    [list],
   );
   const [selectedId, setSelectedId] = useState<string>();
   const [paymentAction, setPaymentAction] = useState<{
-    kind: "submit" | "recover";
+    kind: "close" | "submit" | "recover";
     error?: ApiRequestError;
   }>();
 
@@ -561,23 +692,33 @@ function AuthenticatedOrdersView({
   const loadDetail = useCallback(
     (signal: AbortSignal) =>
       ordersApi.getOrder(selectedId ?? "", adminApiKey, signal),
-    [adminApiKey, ordersApi, selectedId]
+    [adminApiKey, ordersApi, selectedId],
   );
   const { resource: detail, reload: reloadDetail } = useApiResource(
     loadDetail,
     selectedId ?? "none",
-    Boolean(selectedId)
+    Boolean(selectedId),
   );
   const isRefreshing = list.state === "loading" || detail.state === "loading";
   const refresh = () => {
     reloadList();
     if (selectedId) reloadDetail();
   };
-  const runPaymentAction = async (kind: "submit" | "recover") => {
+  const runOrderAction = async (kind: "close" | "submit" | "recover") => {
     if (!selectedId || paymentAction) return;
+    if (
+      kind === "close" &&
+      !window.confirm(
+        "Close this pool before payment submission? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
     setPaymentAction({ kind });
     try {
-      if (kind === "submit") {
+      if (kind === "close") {
+        await ordersApi.closeOrder(selectedId, adminApiKey);
+      } else if (kind === "submit") {
         await ordersApi.submitPayment(selectedId, adminApiKey);
       } else {
         await ordersApi.recoverPayment(selectedId, adminApiKey);
@@ -591,7 +732,7 @@ function AuthenticatedOrdersView({
         error:
           error instanceof ApiRequestError
             ? error
-            : new ApiRequestError("Payment operation failed.", "UNKNOWN_ERROR")
+            : new ApiRequestError("Order operation failed.", "UNKNOWN_ERROR"),
       });
     }
   };
@@ -639,7 +780,8 @@ function AuthenticatedOrdersView({
             <h2>Orders</h2>
           </div>
           <span className="record-count">
-            <ClipboardList size={14} aria-hidden="true" /> {orders.length} records
+            <ClipboardList size={14} aria-hidden="true" /> {orders.length}{" "}
+            records
           </span>
         </div>
 
@@ -716,8 +858,9 @@ function AuthenticatedOrdersView({
                   <OrderDetail
                     order={detail.data}
                     action={paymentAction}
-                    onSubmitPayment={() => void runPaymentAction("submit")}
-                    onRecoverPayment={() => void runPaymentAction("recover")}
+                    onCloseOrder={() => void runOrderAction("close")}
+                    onSubmitPayment={() => void runOrderAction("submit")}
+                    onRecoverPayment={() => void runOrderAction("recover")}
                   />
                 </>
               ) : null}
@@ -741,14 +884,11 @@ export function OrdersView({ api, onNavigate }: OrdersViewProps) {
     setNotice(undefined);
     setAdminApiKey(value);
   };
-  const exit = useCallback(
-    (nextNotice?: { code: string; message: string }) => {
-      clearAdminSessionKey();
-      setAdminApiKey("");
-      setNotice(nextNotice);
-    },
-    []
-  );
+  const exit = useCallback((nextNotice?: { code: string; message: string }) => {
+    clearAdminSessionKey();
+    setAdminApiKey("");
+    setNotice(nextNotice);
+  }, []);
 
   if (!adminApiKey) {
     return (

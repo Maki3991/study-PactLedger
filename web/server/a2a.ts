@@ -15,13 +15,20 @@ export function parseA2AInput(text: string): CreateTaskInput {
 }
 
 export function toA2ATask(snapshot: TaskSnapshot) {
+  const latestTimelineEvent = snapshot.timeline.at(-1)
   return {
+    kind: 'task',
     id: snapshot.id,
     contextId: snapshot.missionId,
     status: {
       state: phaseToA2AState(snapshot.phase),
-      message: snapshot.timeline.at(-1)
-        ? { role: 'agent', parts: [{ kind: 'text', text: snapshot.timeline.at(-1)!.title }] }
+      message: latestTimelineEvent
+        ? {
+            kind: 'message',
+            messageId: `${snapshot.id}-status-${snapshot.timeline.length}`,
+            role: 'agent',
+            parts: [{ kind: 'text', text: latestTimelineEvent.title }],
+          }
         : undefined,
       timestamp: snapshot.updatedAt,
     },

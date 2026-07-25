@@ -2,18 +2,25 @@ import type {
   ConfirmationResult,
   ConfirmationView,
   OrderDetailView,
-  OrderSummaryView
+  OrderSummaryView,
 } from "@poolmate/shared";
 
 const group = {
   id: "group-1",
   title: "Friday lunch",
-  createdAt: "2026-07-25T01:00:00.000Z"
+  createdAt: "2026-07-25T01:00:00.000Z",
 } as const;
 
 export const orderSummary: OrderSummaryView = {
   id: "order-1",
   title: "Team dumplings",
+  intent: {
+    schemaVersion: "poolmate-order-intent-v1",
+    originalText: "@PoolMate 拼单 3瓶可乐，美团外卖",
+    source: "telegram_natural_language",
+    items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
+    purchaseChannelHint: "美团外卖",
+  },
   group,
   state: "READY_FOR_PAYMENT",
   fundingMode: "sponsored_demo",
@@ -23,7 +30,7 @@ export const orderSummary: OrderSummaryView = {
   checkoutVersion: 1,
   expiresAt: "2099-07-25T04:00:00.000Z",
   createdAt: "2026-07-25T01:10:00.000Z",
-  updatedAt: "2026-07-25T02:00:00.000Z"
+  updatedAt: "2026-07-25T02:00:00.000Z",
 };
 
 export const orderDetail: OrderDetailView = {
@@ -33,14 +40,14 @@ export const orderDetail: OrderDetailView = {
       id: "participant-1",
       displayName: "Alex",
       units: 1,
-      joinedAt: "2026-07-25T01:20:00.000Z"
+      joinedAt: "2026-07-25T01:20:00.000Z",
     },
     {
       id: "participant-2",
       displayName: "Bo",
       units: 2,
-      joinedAt: "2026-07-25T01:25:00.000Z"
-    }
+      joinedAt: "2026-07-25T01:25:00.000Z",
+    },
   ],
   checkout: {
     id: "checkout-1",
@@ -48,21 +55,21 @@ export const orderDetail: OrderDetailView = {
     hash: {
       algorithm: "SHA-256",
       canonicalizationVersion: "poolmate-checkout-json-v1",
-      value: "sha256:checkout-v1"
+      value: "sha256:checkout-v1",
     },
     merchant: {
       id: "merchant-1",
       displayName: "Verified Kitchen",
       payeeId: "merchant-demo",
-      verified: true
+      verified: true,
     },
     items: [
       {
         sku: "DUMPLING-BOX",
         name: "Dumpling box",
         quantity: "3",
-        unitAmountAtomic: "500"
-      }
+        unitAmountAtomic: "500",
+      },
     ],
     goods: { assetId: "inj", amountAtomic: "1500" },
     shipping: { assetId: "inj", amountAtomic: "100" },
@@ -70,25 +77,42 @@ export const orderDetail: OrderDetailView = {
     fee: { assetId: "inj", amountAtomic: "0" },
     total: { assetId: "inj", amountAtomic: "1500" },
     expiresAt: "2099-07-25T04:00:00.000Z",
+    sourceProtocol: "MOCK",
     createdAt: "2026-07-25T01:50:00.000Z",
     allocations: [
       {
+        id: "allocation-1",
         participantId: "participant-1",
         displayName: "Alex",
         units: 1,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMED",
+        goods: { assetId: "inj", amountAtomic: "500" },
+        shipping: { assetId: "inj", amountAtomic: "34" },
+        discount: { assetId: "inj", amountAtomic: "34" },
+        fee: { assetId: "inj", amountAtomic: "0" },
+        total: { assetId: "inj", amountAtomic: "500" },
         money: { assetId: "inj", amountAtomic: "500" },
         confirmationStatus: "confirmed",
-        confirmedAt: "2026-07-25T01:55:00.000Z"
+        confirmedAt: "2026-07-25T01:55:00.000Z",
       },
       {
+        id: "allocation-2",
         participantId: "participant-2",
         displayName: "Bo",
         units: 2,
+        strategy: "BY_QUANTITY",
+        status: "CONFIRMED",
+        goods: { assetId: "inj", amountAtomic: "1000" },
+        shipping: { assetId: "inj", amountAtomic: "66" },
+        discount: { assetId: "inj", amountAtomic: "66" },
+        fee: { assetId: "inj", amountAtomic: "0" },
+        total: { assetId: "inj", amountAtomic: "1000" },
         money: { assetId: "inj", amountAtomic: "1000" },
         confirmationStatus: "confirmed",
-        confirmedAt: "2026-07-25T01:58:00.000Z"
-      }
-    ]
+        confirmedAt: "2026-07-25T01:58:00.000Z",
+      },
+    ],
   },
   paymentRequest: {
     id: "payment-request-1",
@@ -103,7 +127,7 @@ export const orderDetail: OrderDetailView = {
     money: { assetId: "inj", amountAtomic: "1500" },
     expiresAt: "2099-07-25T04:00:00.000Z",
     status: "ready",
-    createdAt: "2026-07-25T02:00:00.000Z"
+    createdAt: "2026-07-25T02:00:00.000Z",
   },
   paymentProjection: {
     paymentRequestId: "payment-request-1",
@@ -111,7 +135,7 @@ export const orderDetail: OrderDetailView = {
     status: "READY",
     settlementMode: "disabled",
     attempts: 0,
-    updatedAt: "2026-07-25T02:00:00.000Z"
+    updatedAt: "2026-07-25T02:00:00.000Z",
   },
   paymentOutbox: {
     id: "outbox-1",
@@ -120,51 +144,56 @@ export const orderDetail: OrderDetailView = {
     status: "pending",
     attempts: 0,
     availableAt: "2026-07-25T02:00:00.000Z",
-    updatedAt: "2026-07-25T02:00:00.000Z"
-  }
+    updatedAt: "2026-07-25T02:00:00.000Z",
+  },
 };
 
 export const confirmation: ConfirmationView = {
   orderId: "order-1",
   orderTitle: "Team dumplings",
+  checkoutId: "checkout-1",
   participantDisplayName: "Alex",
+  allocationId: "allocation-1",
+  allocationStrategy: "BY_QUANTITY",
+  allocationStatus: "CONFIRMED",
   checkoutVersion: 1,
   checkoutHash: {
     algorithm: "SHA-256",
     canonicalizationVersion: "poolmate-checkout-json-v1",
-    value: "sha256:checkout-v1"
+    value: "sha256:checkout-v1",
   },
   merchant: {
     id: "merchant-1",
     displayName: "Verified Kitchen",
     payeeId: "merchant-demo",
-    verified: true
+    verified: true,
   },
   items: [
     {
       sku: "DUMPLING-BOX",
       name: "Dumpling box",
       quantity: "3",
-      unitAmountAtomic: "500"
-    }
+      unitAmountAtomic: "500",
+    },
   ],
   participantUnits: 1,
-  goods: { assetId: "inj", amountAtomic: "1500" },
-  shipping: { assetId: "inj", amountAtomic: "100" },
-  discount: { assetId: "inj", amountAtomic: "100" },
+  goods: { assetId: "inj", amountAtomic: "500" },
+  shipping: { assetId: "inj", amountAtomic: "34" },
+  discount: { assetId: "inj", amountAtomic: "34" },
   fee: { assetId: "inj", amountAtomic: "0" },
   orderTotal: { assetId: "inj", amountAtomic: "1500" },
   money: { assetId: "inj", amountAtomic: "500" },
   expiresAt: "2099-07-25T04:00:00.000Z",
-  status: "pending"
+  status: "pending",
 };
 
 export const confirmationResult: ConfirmationResult = {
   confirmation: {
     ...confirmation,
     status: "confirmed",
-    confirmedAt: "2026-07-25T02:00:00.000Z"
+    confirmedAt: "2026-07-25T02:00:00.000Z",
   },
   orderState: "READY_FOR_PAYMENT",
-  paymentRequestCreated: true
+  actionRecorded: true,
+  paymentRequestCreated: true,
 };

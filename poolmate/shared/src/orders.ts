@@ -1,5 +1,27 @@
 export type FundingMode = "sponsored_demo" | "prefunded_participants";
 
+export type OrderIntentSource =
+  | "telegram_natural_language"
+  | "telegram_command"
+  | "admin";
+
+export interface OrderIntentItemView {
+  name: string;
+  quantity: number;
+  unit?: string;
+}
+
+export interface OrderIntentView {
+  schemaVersion: "poolmate-order-intent-v1";
+  originalText: string;
+  source: OrderIntentSource;
+  items: OrderIntentItemView[];
+  purchaseChannelHint?: string;
+  storeNameHint?: string;
+  merchantLinkHint?: string;
+  userPriceHint?: string;
+}
+
 export type OrderState =
   | "DRAFT"
   | "COLLECTING"
@@ -10,7 +32,15 @@ export type OrderState =
   | "PAID"
   | "DEMO_CONFIRMED"
   | "PAYMENT_FAILED"
-  | "PAYMENT_UNKNOWN";
+  | "PAYMENT_UNKNOWN"
+  | "CANCELED";
+
+export interface OrderCancellationView {
+  actorType: "telegram_owner" | "admin";
+  actorId: string;
+  reasonCode: "owner_requested" | "admin_requested";
+  canceledAt: string;
+}
 
 export interface AtomicMoney {
   assetId: string;
@@ -57,10 +87,28 @@ export type AllocationConfirmationStatus =
   | "superseded"
   | "expired";
 
+export type AllocationStrategy = "BY_QUANTITY" | "EQUAL_SPLIT";
+
+export type PaymentAllocationStatus =
+  | "CALCULATED"
+  | "CONFIRMATION_PENDING"
+  | "CONFIRMED"
+  | "CAPTURED"
+  | "FAILED"
+  | "INVALIDATED";
+
 export interface AllocationView {
+  id: string;
   participantId: string;
   displayName: string;
   units: number;
+  strategy: AllocationStrategy;
+  status: PaymentAllocationStatus;
+  goods: AtomicMoney;
+  shipping: AtomicMoney;
+  discount: AtomicMoney;
+  fee: AtomicMoney;
+  total: AtomicMoney;
   money: AtomicMoney;
   confirmationStatus: AllocationConfirmationStatus;
   confirmedAt?: string;
@@ -78,6 +126,7 @@ export interface CheckoutView {
   fee: AtomicMoney;
   total: AtomicMoney;
   expiresAt: string;
+  sourceProtocol: "A2A" | "MOCK";
   createdAt: string;
   allocations: AllocationView[];
 }
@@ -155,6 +204,7 @@ export interface PaymentOutboxView {
 export interface OrderSummaryView {
   id: string;
   title: string;
+  intent?: OrderIntentView;
   group: GroupView;
   state: OrderState;
   fundingMode: FundingMode;
@@ -163,6 +213,7 @@ export interface OrderSummaryView {
   participantCount: number;
   checkoutVersion?: number;
   expiresAt?: string;
+  cancellation?: OrderCancellationView;
   createdAt: string;
   updatedAt: string;
 }
@@ -178,12 +229,16 @@ export interface OrderDetailView extends OrderSummaryView {
 export interface ConfirmationView {
   orderId: string;
   orderTitle: string;
+  checkoutId: string;
   participantDisplayName: string;
   checkoutVersion: number;
   checkoutHash: CheckoutHashView;
   merchant: MerchantView;
   items: CheckoutItemView[];
   participantUnits: number;
+  allocationId: string;
+  allocationStrategy: AllocationStrategy;
+  allocationStatus: PaymentAllocationStatus;
   goods: AtomicMoney;
   shipping: AtomicMoney;
   discount: AtomicMoney;
@@ -198,7 +253,9 @@ export interface ConfirmationView {
 export interface ConfirmationResult {
   confirmation: ConfirmationView;
   orderState: OrderState;
+  actionRecorded: boolean;
   paymentRequestCreated: boolean;
+  paymentProjection?: PaymentProjectionView;
 }
 
 export interface CreateGroupRequest {
@@ -211,6 +268,7 @@ export interface CreateOrderRequest {
   ownerUserId: string;
   title: string;
   targetUnits: number;
+  intent?: OrderIntentView;
   sourceIdempotencyKey?: string;
 }
 

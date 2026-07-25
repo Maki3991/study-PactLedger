@@ -398,13 +398,16 @@ test('Agent Card and A2A task routes are accessible in safe Mock mode', async ()
     },
   })
   assert.equal(sendResponse.statusCode, 202)
-  const submitted = sendResponse.json<{ id: string; status: { state: string } }>()
+  const submitted = sendResponse.json<{ kind: string; id: string; status: { state: string } }>()
+  assert.equal(submitted.kind, 'task')
   assert.ok(submitted.id)
   assert.equal(submitted.status.state, 'submitted')
 
   const getResponse = await app.inject({ method: 'GET', url: `/a2a/tasks/${submitted.id}` })
   assert.equal(getResponse.statusCode, 200)
-  assert.equal(getResponse.json<{ id: string }>().id, submitted.id)
+  const fetched = getResponse.json<{ kind: string; id: string }>()
+  assert.equal(fetched.kind, 'task')
+  assert.equal(fetched.id, submitted.id)
 
   const rpcResponse = await app.inject({
     method: 'POST',
@@ -412,6 +415,7 @@ test('Agent Card and A2A task routes are accessible in safe Mock mode', async ()
     payload: { jsonrpc: '2.0', id: 7, method: 'tasks/get', params: { id: submitted.id } },
   })
   assert.equal(rpcResponse.statusCode, 200)
+  assert.equal(rpcResponse.json().result.kind, 'task')
   assert.equal(rpcResponse.json().result.id, submitted.id)
   await app.close()
 })

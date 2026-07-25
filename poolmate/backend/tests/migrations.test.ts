@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PoolMateDatabase } from "../src/infrastructure/db/database.js";
+import { OrderRepository } from "../src/infrastructure/db/orderRepository.js";
 
 function fixtureDirectory(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "poolmate-migrations-"));
@@ -561,6 +562,269 @@ test("0006 rejects Mock confirmation with fabricated chain evidence", () => {
         )
         .run(now, now, now)
     )
+  );
+  database.close();
+});
+
+test("0008 adds append-only cancellation evidence without breaking foreign keys", () => {
+  const database = openMigratedDatabase();
+  const now = "2026-07-25T12:00:00.000Z";
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups
+         (id, telegram_chat_id, title, created_at, updated_at)
+         VALUES ('group-cancel', '-10008', 'Cancel group', ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode,
+          target_units, created_at, updated_at)
+         VALUES ('order-cancel', 'group-cancel', '100', 'Cancel order',
+                 'COLLECTING', 'sponsored_demo', 1, ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_order_cancellations
+         (order_id, idempotency_key, request_hash, actor_type, actor_id,
+          reason_code, created_at)
+         VALUES ('order-cancel', 'cancel-once', 'request-hash',
+                 'telegram_owner', '100', 'owner_requested', ?)`
+      )
+      .run(now);
+    connection
+      .prepare(
+        `UPDATE pm_orders SET terminal_state = 'CANCELED', updated_at = ?
+         WHERE id = 'order-cancel'`
+      )
+      .run(now);
+    assert.deepEqual(connection.pragma("foreign_key_check"), []);
+    assert.throws(() =>
+      connection
+        .prepare(
+          `UPDATE pm_order_cancellations SET actor_id = 'other'
+           WHERE order_id = 'order-cancel'`
+        )
+        .run()
+    );
+  });
+  database.close();
+});
+
+test("0009 separates canonical checkout identity and invalidates legacy allocations", () => {
+  const directory = fixtureDirectory();
+  const migrationsDir = path.join(directory, "migrations");
+  const sourceMigrations = path.resolve("../migrations");
+  fs.mkdirSync(migrationsDir);
+  for (const filename of fs
+    .readdirSync(sourceMigrations)
+    .filter(
+      (filename) =>
+        filename.endsWith(".sql") &&
+        !filename.startsWith("0009") &&
+        !filename.startsWith("0010")
+    )) {
+    fs.copyFileSync(
+      path.join(sourceMigrations, filename),
+      path.join(migrationsDir, filename)
+    );
+  }
+  const database = new PoolMateDatabase(
+    path.join(directory, "poolmate.sqlite"),
+    migrationsDir
+  );
+  database.migrate();
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups VALUES
+         ('group-9', '-10009', 'Canonical group', ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode, target_units,
+          created_at, updated_at)
+         VALUES ('order-9', 'group-9', 'owner-9', 'Canonical order',
+          'CONFIRMATION_PENDING', 'sponsored_demo', 1, ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_participants
+         VALUES ('participant-9', 'order-9', 'user-9', 'Ada', 1, ?, ?)`
+      )
+      .run("2026-07-25T12:01:00.000Z", "2026-07-25T12:01:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_checkout_snapshots
+         (id, order_id, version, hash, merchant_id, merchant_display_name,
+          payee_id, asset_id, total_amount_atomic, expires_at, quote_reference,
+          created_at, hash_algorithm, canonicalization_version, is_canonical,
+          items_json, goods_amount_atomic, shipping_amount_atomic,
+          discount_amount_atomic, fee_amount_atomic)
+         VALUES ('legacy-checkout-9', 'order-9', 1, 'legacy-hash-9',
+          'merchant-demo', 'Merchant', 'payee-demo', 'USDC', '95', ?,
+          'legacy-quote-9', ?, 'SHA-256', 'poolmate-checkout-json-v1', 1,
+          '[{"sku":"unit","name":"Unit","quantity":"1","unitAmountAtomic":"89"}]',
+          '89', '6', '0', '0')`
+      )
+      .run("2026-07-25T12:20:00.000Z", "2026-07-25T12:02:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_allocations
+         VALUES ('allocation-9', 'legacy-checkout-9', 'participant-9', 'USDC',
+          '95', ?)`
+      )
+      .run("2026-07-25T12:02:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_user_confirmations
+         (id, checkout_id, participant_id, token_hash, status, created_at, updated_at)
+         VALUES ('confirmation-9', 'legacy-checkout-9', 'participant-9',
+          'token-9', 'pending', ?, ?)`
+      )
+      .run("2026-07-25T12:02:00.000Z", "2026-07-25T12:02:00.000Z");
+  });
+  fs.copyFileSync(
+    path.join(sourceMigrations, "0009_canonical_checkout_allocations.sql"),
+    path.join(migrationsDir, "0009_canonical_checkout_allocations.sql")
+  );
+  database.migrate();
+  database.read((connection) => {
+    assert.deepEqual(
+      connection
+        .prepare(
+          `SELECT checkout_id, source_protocol, is_canonical
+           FROM pm_checkout_snapshots WHERE id = 'legacy-checkout-9'`
+        )
+        .get(),
+      {
+        checkout_id: "legacy-checkout-9",
+        source_protocol: "MOCK",
+        is_canonical: 0
+      }
+    );
+    assert.deepEqual(
+      connection
+        .prepare(
+          `SELECT strategy, status, goods_amount_atomic, shipping_amount_atomic,
+                  discount_amount_atomic, fee_amount_atomic
+           FROM pm_allocations WHERE id = 'allocation-9'`
+        )
+        .get(),
+      {
+        strategy: "BY_QUANTITY",
+        status: "INVALIDATED",
+        goods_amount_atomic: "0",
+        shipping_amount_atomic: "0",
+        discount_amount_atomic: "0",
+        fee_amount_atomic: "0"
+      }
+    );
+    assert.equal(
+      (
+        connection
+          .prepare("SELECT state FROM pm_orders WHERE id = 'order-9'")
+          .get() as { state: string }
+      ).state,
+      "QUOTE_PENDING"
+    );
+    assert.deepEqual(connection.pragma("foreign_key_check"), []);
+  });
+  database.close();
+});
+
+test("0010 adds optional purchase intent metadata without hiding legacy orders", () => {
+  const directory = fixtureDirectory();
+  const migrationsDir = path.join(directory, "migrations");
+  const sourceMigrations = path.resolve("../migrations");
+  fs.mkdirSync(migrationsDir);
+  for (const filename of fs
+    .readdirSync(sourceMigrations)
+    .filter(
+      (filename) => filename.endsWith(".sql") && !filename.startsWith("0010")
+    )) {
+    fs.copyFileSync(
+      path.join(sourceMigrations, filename),
+      path.join(migrationsDir, filename)
+    );
+  }
+  const database = new PoolMateDatabase(
+    path.join(directory, "poolmate.sqlite"),
+    migrationsDir
+  );
+  database.migrate();
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups VALUES
+         ('group-10', '-10010', 'Legacy group', ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode, target_units,
+          created_at, updated_at)
+         VALUES ('order-10', 'group-10', 'owner-10', 'Legacy cola', 'DRAFT',
+          'sponsored_demo', 3, ?, ?)`
+      )
+      .run("2026-07-25T12:00:00.000Z", "2026-07-25T12:00:00.000Z");
+  });
+
+  fs.copyFileSync(
+    path.join(sourceMigrations, "0010_order_purchase_intents.sql"),
+    path.join(migrationsDir, "0010_order_purchase_intents.sql")
+  );
+  database.migrate();
+
+  const columns = database.read((connection) =>
+    connection
+      .prepare("PRAGMA table_info(pm_orders)")
+      .all()
+      .map((column) => (column as { name: string }).name)
+  );
+  assert.equal(columns.includes("intent_schema_version"), true);
+  assert.equal(columns.includes("intent_json"), true);
+
+  const order = new OrderRepository(database).read((transaction) =>
+    transaction.getOrder("order-10")
+  );
+  assert.deepEqual(order?.intent, {
+    schemaVersion: "poolmate-order-intent-v1",
+    originalText: "Legacy cola",
+    source: "admin",
+    items: [{ name: "Legacy cola", quantity: 3 }]
+  });
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `UPDATE pm_orders
+         SET intent_schema_version = 'poolmate-order-intent-v1',
+             intent_json = '{"merchantId":"untrusted"}'
+         WHERE id = 'order-10'`
+      )
+      .run();
+  });
+  assert.deepEqual(
+    new OrderRepository(database).read((transaction) =>
+      transaction.getOrder("order-10")
+    )?.intent,
+    {
+      schemaVersion: "poolmate-order-intent-v1",
+      originalText: "Legacy cola",
+      source: "admin",
+      items: [{ name: "Legacy cola", quantity: 3 }]
+    }
+  );
+  assert.deepEqual(
+    database.read((connection) => connection.pragma("foreign_key_check")),
+    []
   );
   database.close();
 });

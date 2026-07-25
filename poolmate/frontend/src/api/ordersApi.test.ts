@@ -113,6 +113,81 @@ describe("orders API", () => {
     ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
+  it("accepts legacy orders without intent and rejects mismatched intent quantities", async () => {
+    const legacyOrder = structuredClone(orderDetail);
+    delete legacyOrder.intent;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(legacyOrder)))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...orderDetail,
+            intent: {
+              ...orderDetail.intent,
+              items: [{ name: "可乐", quantity: 2, unit: "瓶" }]
+            }
+          })
+        )
+      );
+
+    await expect(
+      createOrdersApi().getOrder("order-1", "admin-secret")
+    ).resolves.toEqual(legacyOrder);
+    await expect(
+      createOrdersApi().getOrder("order-1", "admin-secret")
+    ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes orders through the protected admin route", async () => {
+    const canceledOrder = {
+      ...orderDetail,
+      state: "CANCELED" as const,
+      cancellation: {
+        actorType: "admin" as const,
+        actorId: "admin-api",
+        reasonCode: "admin_requested" as const,
+        canceledAt: "2026-07-25T02:02:00.000Z"
+      },
+      paymentRequest: {
+        ...orderDetail.paymentRequest!,
+        status: "failed" as const
+      },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "FAILED" as const,
+        errorCode: "ORDER_CANCELED"
+      },
+      paymentOutbox: {
+        ...orderDetail.paymentOutbox!,
+        status: "completed" as const,
+        lastErrorCode: "ORDER_CANCELED"
+      }
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(canceledOrder)));
+
+    await expect(
+      createOrdersApi("https://poolmate.test").closeOrder(
+        "order-1",
+        "admin-secret"
+      )
+    ).resolves.toEqual(canceledOrder);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://poolmate.test/api/orders/order-1/close",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: expect.objectContaining({
+          Authorization: "Bearer admin-secret",
+          "Idempotency-Key": "admin-close:order-1"
+        })
+      })
+    );
+  });
+
   it("rejects wrapped list responses that violate the frozen contract", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ orders: [orderSummary] }))

@@ -16,11 +16,25 @@ services:
       POOLMATE_PUBLIC_BASE_URL: ${POOLMATE_PUBLIC_BASE_URL:-https://poolmate.example.invalid}
       POOLMATE_ADMIN_API_KEY: ${POOLMATE_ADMIN_API_KEY:-}
       POOLMATE_SPONSORED_PAYER_REF: ${POOLMATE_SPONSORED_PAYER_REF:-poolmate-sponsored-demo}
+      POOLMATE_STANDALONE_BOT: ${POOLMATE_STANDALONE_BOT:-true}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_USER_ALLOWLIST_ENABLED: ${TELEGRAM_USER_ALLOWLIST_ENABLED:-false}
       TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       TELEGRAM_API_ROOT: ${TELEGRAM_API_ROOT:-https://api.telegram.org}
       TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
+      AIPING_API_KEY: ${AIPING_API_KEY:-}
+      AIPING_BASE_URL: ${AIPING_BASE_URL:-https://aiping.cn/api/v1}
+      AIPING_MODEL: ${AIPING_MODEL:-DeepSeek-V3.2}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      POOLMATE_LLM_ENABLED: ${POOLMATE_LLM_ENABLED:-}
+      POOLMATE_LLM_PROVIDER: ${POOLMATE_LLM_PROVIDER:-deepseek}
+      POOLMATE_LLM_BASE_URL: ${POOLMATE_LLM_BASE_URL:-}
+      POOLMATE_LLM_API_KEY: ${POOLMATE_LLM_API_KEY:-}
+      POOLMATE_LLM_MODEL: ${POOLMATE_LLM_MODEL:-}
+      POOLMATE_LLM_TIMEOUT_MS: ${POOLMATE_LLM_TIMEOUT_MS:-30000}
+      POOLMATE_LLM_MAX_INPUT_CHARS: ${POOLMATE_LLM_MAX_INPUT_CHARS:-2000}
       PAYMENT_BASE_URL: ${PAYMENT_BASE_URL:-}
       PAYMENT_BASE_API_KEY: ${PAYMENT_BASE_API_KEY:-}
       PAYMENT_SETTLEMENT_MODE: ${PAYMENT_SETTLEMENT_MODE:-disabled}
@@ -60,6 +74,31 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+
+  quick-tunnel:
+    profiles: ["quick"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - --url
+      - http://frontend:8080
+
+  named-tunnel:
+    profiles: ["named"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - run
 
 volumes:
   poolmate-data:

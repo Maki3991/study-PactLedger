@@ -3,6 +3,7 @@ import { DomainError } from "../domain/domainError.js";
 
 export interface ConfirmationIdentity {
   telegramUserId: string;
+  username?: string;
 }
 
 export interface ConfirmationIdentityVerifier {
@@ -104,6 +105,15 @@ export class TelegramWebAppIdentityVerifier implements ConfirmationIdentityVerif
       throw invalidIdentity("Telegram WebApp user identity is invalid.");
     }
 
-    return { telegramUserId: String((user as { id: number }).id) };
+    const username =
+      "username" in user &&
+      typeof (user as { username?: unknown }).username === "string" &&
+      /^[A-Za-z0-9_]{1,32}$/.test((user as { username: string }).username)
+        ? (user as { username: string }).username
+        : undefined;
+    return {
+      telegramUserId: String((user as { id: number }).id),
+      ...(username ? { username } : {})
+    };
   }
 }

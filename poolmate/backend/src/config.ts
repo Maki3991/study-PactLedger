@@ -45,6 +45,15 @@ export interface PoolMateConfig {
     recoverPath?: string;
     timeoutMs: number;
   };
+  llm: {
+    enabled: boolean;
+    provider: "deepseek" | "responses";
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+    timeoutMs: number;
+    maxInputChars: number;
+  };
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -57,6 +66,16 @@ function parsePort(value: string | undefined, fallback: number): number {
 function parseTimeout(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 60_000
+    ? parsed
+    : fallback;
+}
+
+function parseMaxInputChars(
+  value: string | undefined,
+  fallback: number
+): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 200 && parsed <= 8_000
     ? parsed
     : fallback;
 }
@@ -98,6 +117,18 @@ function parseSettlementMode(value: string | undefined): SettlementMode {
     : "disabled";
 }
 
+function parseLlmProvider(
+  value: string | undefined,
+  fallback: "deepseek" | "responses"
+): "deepseek" | "responses" {
+  const normalized = optional(value)?.toLowerCase();
+  if (normalized === undefined) return fallback;
+  if (normalized === "deepseek" || normalized === "responses") {
+    return normalized;
+  }
+  throw new Error("POOLMATE_LLM_PROVIDER must be deepseek or responses.");
+}
+
 function normalizePublicBaseUrl(
   value: string | undefined,
   fallback: string
@@ -114,6 +145,22 @@ function normalizePublicBaseUrl(
   return url.toString().replace(/\/$/, "");
 }
 
+function normalizeLlmBaseUrl(value: string): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "POOLMATE_LLM_BASE_URL must use HTTPS without credentials, query, or fragment."
+    );
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd()
@@ -121,6 +168,42 @@ export function loadConfig(
   const host = optional(env.POOLMATE_HOST) ?? "127.0.0.1";
   const port = parsePort(env.POOLMATE_PORT, 8788);
   const telegramToken = optional(env.TELEGRAM_BOT_TOKEN);
+  const aiPingApiKey = optional(env.AIPING_API_KEY);
+  const deepSeekApiKey = optional(env.DEEPSEEK_API_KEY);
+  const poolMateLlmApiKey = optional(env.POOLMATE_LLM_API_KEY);
+  const llmApiKey = poolMateLlmApiKey ?? aiPingApiKey ?? deepSeekApiKey;
+  const llmProvider = parseLlmProvider(
+    env.POOLMATE_LLM_PROVIDER,
+    aiPingApiKey ||
+      deepSeekApiKey ||
+      (!env.POOLMATE_LLM_BASE_URL && !env.POOLMATE_LLM_MODEL)
+      ? "deepseek"
+      : "responses"
+  );
+  const llmEnabled = parseBoolean(
+    env.POOLMATE_LLM_ENABLED,
+    Boolean(llmApiKey),
+    "POOLMATE_LLM_ENABLED"
+  );
+  const llmBaseUrl =
+    optional(env.POOLMATE_LLM_BASE_URL) ??
+    (llmProvider === "deepseek" && llmEnabled
+      ? aiPingApiKey
+        ? (optional(env.AIPING_BASE_URL) ?? "https://aiping.cn/api/v1")
+        : (optional(env.DEEPSEEK_BASE_URL) ?? "https://api.deepseek.com")
+      : undefined);
+  const llmModel =
+    optional(env.POOLMATE_LLM_MODEL) ??
+    (llmProvider === "deepseek" && llmEnabled
+      ? aiPingApiKey
+        ? (optional(env.AIPING_MODEL) ?? "DeepSeek-V3.2")
+        : (optional(env.DEEPSEEK_MODEL) ?? "deepseek-v4-pro")
+      : undefined);
+  if (llmEnabled && (!llmBaseUrl || !llmApiKey || !llmModel)) {
+    throw new Error(
+      "The enabled LLM requires an API key, HTTPS base URL, and model. Set AIPING_API_KEY or DEEPSEEK_API_KEY for a default configuration, or provide the POOLMATE_LLM_* overrides."
+    );
+  }
   const publicBaseUrl = normalizePublicBaseUrl(
     env.POOLMATE_PUBLIC_BASE_URL,
     `http://${host}:${port}`
@@ -183,6 +266,15 @@ export function loadConfig(
       submitPath: optional(env.PAYMENT_BASE_SUBMIT_PATH),
       recoverPath: optional(env.PAYMENT_BASE_RECOVER_PATH),
       timeoutMs: parseTimeout(env.PAYMENT_BASE_TIMEOUT_MS, 10_000)
+    },
+    llm: {
+      enabled: llmEnabled,
+      provider: llmProvider,
+      baseUrl: llmBaseUrl ? normalizeLlmBaseUrl(llmBaseUrl) : undefined,
+      apiKey: llmApiKey,
+      model: llmModel,
+      timeoutMs: parseTimeout(env.POOLMATE_LLM_TIMEOUT_MS, 30_000),
+      maxInputChars: parseMaxInputChars(env.POOLMATE_LLM_MAX_INPUT_CHARS, 2_000)
     }
   };
 }

@@ -54,6 +54,7 @@ export class MockMerchantAdapter implements MerchantQuoteProvider {
 
     return frozenQuote({
       checkoutId: `mock-checkout-${randomUUID()}`,
+      sourceProtocol: "MOCK",
       merchant: {
         id: MOCK_MERCHANT_ID,
         displayName: "Demo Merchant #001",

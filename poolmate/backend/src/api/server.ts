@@ -8,7 +8,10 @@ import { z } from "zod";
 import type {
   ApiErrorBody,
   BotStatus,
-  LivenessResponse
+  ConfirmationResult,
+  LivenessResponse,
+  LlmStatus,
+  OrderDetailView
 } from "@poolmate/shared";
 import type { PoolMateConfig } from "../config.js";
 import type { PoolMateDatabase } from "../infrastructure/db/database.js";
@@ -16,15 +19,27 @@ import { SystemStatusService } from "../application/systemStatusService.js";
 import type { OrderService } from "../application/orderService.js";
 import type { PaymentOrchestrationService } from "../application/paymentOrchestrationService.js";
 import { DomainError } from "../domain/domainError.js";
-import type { ConfirmationIdentityVerifier } from "./telegramWebAppIdentityVerifier.js";
+import type {
+  ConfirmationIdentity,
+  ConfirmationIdentityVerifier
+} from "./telegramWebAppIdentityVerifier.js";
+
+export interface ConfirmationNotification {
+  telegramChatId: string;
+  actorReference: string;
+  action: "confirm" | "decline";
+  order: OrderDetailView;
+}
 
 export interface CreateServerOptions {
   config: PoolMateConfig;
   database: PoolMateDatabase;
   getBotStatus: () => BotStatus;
+  getLlmStatus?: () => LlmStatus;
   orderService?: OrderService;
   paymentOrchestrationService?: PaymentOrchestrationService;
   identityVerifier?: ConfirmationIdentityVerifier;
+  notifyConfirmation?(notification: ConfirmationNotification): Promise<void>;
   logger?: boolean;
 }
 
@@ -94,7 +109,7 @@ function requireConfirmationToken(request: FastifyRequest): string {
 async function requireConfirmationIdentity(
   request: FastifyRequest,
   verifier: ConfirmationIdentityVerifier | undefined
-): Promise<string> {
+): Promise<ConfirmationIdentity> {
   const authorization = request.headers.authorization?.trim() ?? "";
   const initData = /^tma\s+/i.test(authorization)
     ? authorization.replace(/^tma\s+/i, "").trim()
@@ -106,7 +121,18 @@ async function requireConfirmationIdentity(
       401
     );
   }
-  return (await verifier.verify(initData)).telegramUserId;
+  return verifier.verify(initData);
+}
+
+function confirmationActorReference(
+  identity: ConfirmationIdentity,
+  fallbackDisplayName: string
+): string {
+  if (identity.username) return `@${identity.username}`;
+  return (
+    fallbackDisplayName.replace(/\s+/g, " ").trim().slice(0, 80) ||
+    `user-${identity.telegramUserId}`
+  );
 }
 
 function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -124,6 +150,10 @@ function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
 function disableSensitiveCaching(reply: FastifyReply): void {
   reply.header("Cache-Control", "private, no-store");
   reply.header("Pragma", "no-cache");
+}
+
+function stableErrorCode(error: unknown): string {
+  return error instanceof DomainError ? error.code : "UNEXPECTED_ERROR";
 }
 
 export async function createServer(
@@ -241,26 +271,93 @@ export async function createServer(
     app.post("/api/public/confirmation/confirm", async (request, reply) => {
       disableSensitiveCaching(reply);
       parseInput(emptyBodySchema, request.body ?? {});
-      const actorUserId = await requireConfirmationIdentity(
+      const identity = await requireConfirmationIdentity(
         request,
         options.identityVerifier
       );
-      return orderService.confirm(
+      const confirmation = orderService.confirm(
         requireConfirmationToken(request),
-        actorUserId
+        identity.telegramUserId
       );
+      let order = orderService.getOrder(confirmation.confirmation.orderId);
+      if (
+        order.state === "READY_FOR_PAYMENT" &&
+        options.paymentOrchestrationService?.getSettlementMode() === "mock"
+      ) {
+        try {
+          order = await options.paymentOrchestrationService.submit(order.id);
+        } catch (error) {
+          request.log.error(
+            {
+              orderId: order.id,
+              code: stableErrorCode(error)
+            },
+            "Automatic Mock payment failed after confirmation."
+          );
+          order = orderService.getOrder(order.id);
+        }
+      }
+      const result: ConfirmationResult = {
+        ...confirmation,
+        orderState: order.state,
+        ...(order.paymentProjection
+          ? { paymentProjection: order.paymentProjection }
+          : {})
+      };
+      if (
+        options.notifyConfirmation &&
+        (confirmation.actionRecorded || order.state !== confirmation.orderState)
+      ) {
+        try {
+          await options.notifyConfirmation({
+            telegramChatId: orderService.getTelegramChatIdForOrder(order.id),
+            actorReference: confirmationActorReference(
+              identity,
+              confirmation.confirmation.participantDisplayName
+            ),
+            action: "confirm",
+            order
+          });
+        } catch (error) {
+          request.log.error(
+            { orderId: order.id, code: stableErrorCode(error) },
+            "Telegram confirmation notification failed."
+          );
+        }
+      }
+      return result;
     });
     app.post("/api/public/confirmation/decline", async (request, reply) => {
       disableSensitiveCaching(reply);
       parseInput(emptyBodySchema, request.body ?? {});
-      const actorUserId = await requireConfirmationIdentity(
+      const identity = await requireConfirmationIdentity(
         request,
         options.identityVerifier
       );
-      return orderService.decline(
+      const result = orderService.decline(
         requireConfirmationToken(request),
-        actorUserId
+        identity.telegramUserId
       );
+      if (options.notifyConfirmation && result.actionRecorded) {
+        const order = orderService.getOrder(result.confirmation.orderId);
+        try {
+          await options.notifyConfirmation({
+            telegramChatId: orderService.getTelegramChatIdForOrder(order.id),
+            actorReference: confirmationActorReference(
+              identity,
+              result.confirmation.participantDisplayName
+            ),
+            action: "decline",
+            order
+          });
+        } catch (error) {
+          request.log.error(
+            { orderId: order.id, code: stableErrorCode(error) },
+            "Telegram confirmation notification failed."
+          );
+        }
+      }
+      return result;
     });
 
     app.post(
@@ -291,6 +388,20 @@ export async function createServer(
       "/api/orders/:orderId/publish",
       { preHandler: requireAdmin },
       async (request) => orderService.publishOrder(request.params.orderId)
+    );
+    app.post<{ Params: { orderId: string } }>(
+      "/api/orders/:orderId/close",
+      { preHandler: requireAdmin },
+      async (request, reply) => {
+        disableSensitiveCaching(reply);
+        parseInput(emptyBodySchema, request.body ?? {});
+        return orderService.cancelOrder(request.params.orderId, {
+          actorType: "admin",
+          actorId: "admin-api",
+          reasonCode: "admin_requested",
+          sourceIdempotencyKey: firstHeader(request.headers["idempotency-key"])
+        });
+      }
     );
     app.post<{ Params: { orderId: string } }>(
       "/api/orders/:orderId/claims",
