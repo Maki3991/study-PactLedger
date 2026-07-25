@@ -18,6 +18,7 @@ Usage: scripts/poolmate.sh [action] [options]
 
 Actions:
   up          Build and start PoolMate in the background (default)
+  update      Rebuild current source, force-recreate containers, then health-check
   rebuild     Rebuild and force-recreate PoolMate containers
   restart     Restart existing PoolMate containers
   down        Stop containers without deleting the data volume
@@ -47,7 +48,7 @@ resolve_path() {
 
 while (($# > 0)); do
   case "$1" in
-    up|rebuild|restart|down|status|logs|health|init-env)
+    up|update|rebuild|restart|down|status|logs|health|init-env)
       action="$1"
       shift
       ;;
@@ -148,15 +149,65 @@ if [[ -f "$env_file" ]]; then
   echo "Environment file: $env_file"
 fi
 
+backend_port() {
+  if [[ -n "${POOLMATE_BACKEND_PORT:-}" ]]; then
+    printf '%s\n' "$POOLMATE_BACKEND_PORT"
+    return
+  fi
+  if [[ -f "$env_file" ]]; then
+    awk -F '=' '
+      /^[[:space:]]*POOLMATE_BACKEND_PORT[[:space:]]*=/ {
+        value=$2
+        gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value)
+        print value
+        exit
+      }
+    ' "$env_file"
+    return
+  fi
+  printf '8788\n'
+}
+
+wait_for_backend() {
+  local port
+  local url
+  port="$(backend_port)"
+  port="${port:-8788}"
+  url="http://127.0.0.1:${port}/health"
+  echo "Waiting for backend health: $url"
+  for _ in $(seq 1 60); do
+    if curl --fail --silent --show-error "$url" >/tmp/poolmate-health.json 2>/dev/null; then
+      cat /tmp/poolmate-health.json
+      printf '\n'
+      rm -f /tmp/poolmate-health.json
+      return 0
+    fi
+    sleep 1
+  done
+  rm -f /tmp/poolmate-health.json
+  echo "Backend did not become healthy: $url" >&2
+  docker compose "${compose_args[@]}" ps >&2 || true
+  docker compose "${compose_args[@]}" logs --tail 120 backend >&2 || true
+  exit 1
+}
+
 case "$action" in
   up)
     docker compose "${compose_args[@]}" up --detach --build
+    wait_for_backend
+    ;;
+  update)
+    docker compose "${compose_args[@]}" up --detach --build --force-recreate --remove-orphans
+    wait_for_backend
+    docker compose "${compose_args[@]}" ps
     ;;
   rebuild)
     docker compose "${compose_args[@]}" up --detach --build --force-recreate
+    wait_for_backend
     ;;
   restart)
     docker compose "${compose_args[@]}" restart
+    wait_for_backend
     ;;
   down)
     docker compose "${compose_args[@]}" down
@@ -168,7 +219,8 @@ case "$action" in
     docker compose "${compose_args[@]}" logs --follow --tail 200 backend frontend
     ;;
   health)
-    backend_port="${POOLMATE_BACKEND_PORT:-8788}"
+    backend_port="$(backend_port)"
+    backend_port="${backend_port:-8788}"
     curl --fail --silent --show-error \
       "http://127.0.0.1:${backend_port}/health"
     printf '\n'
