@@ -27,7 +27,7 @@ export const BOT_COMMANDS: readonly BotCommandDescriptor[] = [
   { command: 'pool_claim', description: '加入当前拼单，可带份数' },
   { command: 'pool_leave', description: '退出当前拼单' },
   { command: 'pool_status', description: '查看当前拼单进度' },
-  { command: 'pool_quote', description: '份额已满时重试结算' },
+  { command: 'pool_quote', description: '发起人按当前份额锁单并确认结算' },
   { command: 'pool_cancel', description: '取消当前拼单（仅发起人）' },
 ]
 

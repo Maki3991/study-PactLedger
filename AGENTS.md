@@ -41,7 +41,7 @@ Intent -> PolicyDecision -> Approval(optional) -> Settlement -> Receipt
 ## 四、当前交付基线（2026-07-24）
 
 - `web/server/` 已实现并通过本地验证：通用 Intent / Policy / Settlement / Receipt、PostgreSQL 持久化与幂等、PoolMate 合法/拒绝 Trace、Fastify A2A、Telegram Bot Mock 支付闭环、公开 Base Status、Injective 官方 SDK Testnet Adapter。
-- 本地质量门已通过：lint、生产构建、API tests `42/42`。
+- 本地质量门已通过：lint、生产构建、API tests `80/80`。
 - PandaData `get_stock_daily_pre` 与 DeepSeek V4 Pro 已分别完成真实调用验证；DeepSeek 是主模型，Ark 仅作后备。
 - 尚无真实 Injective Testnet 确认交易；钱包、收款地址、denom/精度和测试币属于当前外部配置阻塞。
 - 公网 `http://129.226.91.246:8787` 仍是旧部署。完成 redeploy/restart 和公网 Smoke Test 前，不得宣称 Agent Card 或新 Base Status 已上线。

@@ -123,8 +123,8 @@ function registerHandlers(
       '<b>PoolMate</b> 是 PactLedger 的群聊拼单参考应用。',
       '',
       '<b>发起拼单</b>',
-      '命令：<code>/pool_new 3 89 杨梅</code>（份数 单价 商品）',
-      '自然语言：<code>拼杨梅，一箱89元，需要3人</code>',
+      '命令：<code>/pool_new 3 89 杨梅</code>（期望份数 单价 商品）',
+      '自然语言：<code>@PoolMate 我们要拼单，期望3瓶可乐，每瓶89元</code>',
       '',
       '<b>参与</b>',
       '<code>/pool_claim</code> 加入一份，<code>/pool_claim 2</code> 加入两份',
@@ -132,12 +132,13 @@ function registerHandlers(
       '',
       '<b>查看与管理</b>',
       '<code>/pool_status</code> 当前进度',
-      '<code>/pool_quote</code> 份额已满但结算失败时重试',
+      '<code>/pool_quote</code> 发起人按当前实际份额锁单并确认结算',
       '<code>/pool_cancel</code> 取消（仅发起人）',
       '<code>/status</code> Bot 与结算模式',
       '',
       '一个群同时只有一个进行中的拼单，所以命令都作用于当前这一单。',
-      '所有付款都会经过 Payment Intent、Policy 和 Receipt；当前 Telegram 演示只生成 Mock Receipt，不会上链。',
+      '期望份数只用于显示进度，可在未达、达到或超过期望时按实际认领锁单。',
+      '付款使用 AP2 protocol tag，并经过 Payment Intent、Policy 和 Receipt；当前 Telegram 演示只生成 Mock Receipt，不会上链。',
     ].join('\n'), { parse_mode: 'HTML' })
   })
 
@@ -183,7 +184,6 @@ function registerHandlers(
     }
     await updateSessionCard(context.api, service, result.session)
     await context.reply(`已加入 ${parsed.slots} 份。`)
-    await settleIfFunded(context.api, service, result.session)
   })
 
   bot.command('pool_leave', async (context) => {
@@ -217,11 +217,10 @@ function registerHandlers(
       await context.reply('当前没有进行中的拼单。')
       return
     }
-    if (session.slotsFilled < session.slotsTotal) {
-      await context.reply(`份额还没满（${session.slotsFilled}/${session.slotsTotal}），无法结算。`)
-      return
-    }
-    const checkout = await service.checkoutSession(session.id)
+    const checkout = await service.lockAndCheckoutSession(
+      session.id,
+      context.from?.id ?? 0,
+    )
     const current = await service.getSession(session.id)
     if (current) await updateSessionCard(context.api, service, current)
     await context.reply(checkoutMessage(checkout), { parse_mode: 'HTML' })
@@ -249,28 +248,45 @@ function registerHandlers(
       return
     }
     if (!text.includes('拼')) return
+    const processing = await context.reply(
+      processingCard(displayName(context.from), context.message.date, text),
+      {
+        parse_mode: 'HTML',
+        reply_parameters: { message_id: context.message.message_id },
+      },
+    )
     const parsed = parsePoolRequest(text)
     if (!parsed) {
-      await context.reply('格式示例：拼杨梅，一箱89元，需要3人\n或用命令：/pool_new 3 89 杨梅', {
-        reply_parameters: { message_id: context.message.message_id },
-      })
+      await context.api.editMessageText(
+        context.chat.id,
+        processing.message_id,
+        [
+          '<b>⚠️ 还差一点信息</b> · <code>NEEDS_INFO</code>',
+          '',
+          '请同时提供商品、期望份数和单价。',
+          '示例：<code>我们要拼单，期望3瓶可乐，每瓶89元</code>',
+          '',
+          '<i>🔒 未创建拼单 · 无 Checkout · 无付款</i>',
+        ].join('\n'),
+        { parse_mode: 'HTML' },
+      )
       return
     }
-    await createAndAnnounceSession(context, service, parsed)
+    await createAndAnnounceSession(context, service, parsed, processing.message_id)
   })
 
   bot.on('callback_query:data', async (context) => {
     const [action, sessionId, slotsText] = context.callbackQuery.data.split(':')
     const userId = context.from.id
     if (action === 'join') {
-      const result = await service.joinSession(sessionId, userId, displayName(context.from), Number(slotsText ?? 1))
+      const slots = Number(slotsText ?? 1)
+      const result = await service.joinSession(sessionId, userId, displayName(context.from), slots)
       if (!result.ok || !result.session) {
         await context.answerCallbackQuery({ text: result.reason ?? '加入失败', show_alert: true })
         return
       }
-      await context.answerCallbackQuery({ text: '已加入一份' })
+      await context.answerCallbackQuery({ text: `已加入 ${slots} 份` })
       await updateSessionCard(context.api, service, result.session)
-      await settleIfFunded(context.api, service, result.session)
       return
     }
     if (action === 'leave') {
@@ -281,6 +297,27 @@ function registerHandlers(
       }
       await context.answerCallbackQuery({ text: '已退出拼单' })
       await updateSessionCard(context.api, service, result.session)
+      return
+    }
+    if (action === 'checkout') {
+      const checkout = await service.lockAndCheckoutSession(sessionId, userId)
+      await context.answerCallbackQuery({
+        text: checkout.ok
+          ? 'PactLedger Policy 校验完成'
+          : checkout.reason ?? '当前无法结算',
+        show_alert: !checkout.ok,
+      })
+      const current = await service.getSession(sessionId)
+      if (current) await updateSessionCard(context.api, service, current)
+      if (!checkout.ok && !checkout.trace) return
+      const targetChatId = current?.chatId ?? context.chat?.id
+      if (targetChatId !== undefined) {
+        await context.api.sendMessage(
+          targetChatId,
+          checkoutMessage(checkout),
+          { parse_mode: 'HTML' },
+        )
+      }
       return
     }
     await context.answerCallbackQuery()
@@ -296,6 +333,7 @@ async function createAndAnnounceSession(
   context: Context,
   service: PoolMateService,
   parsed: ParsedPoolRequest,
+  replaceMessageId?: number,
 ): Promise<void> {
   if (!context.chat) return
   try {
@@ -305,6 +343,19 @@ async function createAndAnnounceSession(
       displayName(context.from),
       parsed,
     )
+    if (replaceMessageId) {
+      await context.api.editMessageText(
+        context.chat.id,
+        replaceMessageId,
+        sessionCard(session, []),
+        {
+          parse_mode: 'HTML',
+          reply_markup: sessionKeyboard(session),
+        },
+      )
+      await service.setMessageId(session.id, replaceMessageId)
+      return
+    }
     const sent = await context.reply(sessionCard(session, []), {
       parse_mode: 'HTML',
       reply_markup: sessionKeyboard(session),
@@ -312,22 +363,17 @@ async function createAndAnnounceSession(
     await service.setMessageId(session.id, sent.message_id)
   } catch (error) {
     const message = error instanceof PoolMateServiceError ? error.message : '创建拼单失败。'
+    if (replaceMessageId) {
+      await context.api.editMessageText(
+        context.chat.id,
+        replaceMessageId,
+        `<b>❌ 暂时无法创建拼单</b>\n${escapeHtml(message)}`,
+        { parse_mode: 'HTML' },
+      )
+      return
+    }
     await context.reply(message)
   }
-}
-
-/** 份额刚满时触发结算。checkoutSession 自身幂等，重复调用安全。 */
-async function settleIfFunded(
-  api: Bot['api'],
-  service: PoolMateService,
-  session: PoolMateSession,
-): Promise<void> {
-  if (session.status !== 'funded') return
-  await api.sendMessage(session.chatId, '份额已凑满，PactLedger 正在校验付款 Intent。')
-  const checkout = await service.checkoutSession(session.id)
-  const current = await service.getSession(session.id)
-  if (current) await updateSessionCard(api, service, current)
-  await api.sendMessage(session.chatId, checkoutMessage(checkout), { parse_mode: 'HTML' })
 }
 
 /** 返回 undefined 表示不需要挂中间件（未开启名单）。 */
@@ -348,6 +394,29 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error'
 }
 
+function processingCard(actor: string, unixSeconds: number, requestText: string): string {
+  const startedAt = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(unixSeconds * 1_000))
+  return [
+    '<b>⏳ PoolMate 正在创建拼单</b> · <code>PARSING</code>',
+    `👤 发起人 · ${escapeHtml(actor)}`,
+    `🕒 发起时间 · ${escapeHtml(startedAt)}`,
+    '',
+    `<blockquote>${escapeHtml(requestText.slice(0, 600))}</blockquote>`,
+    '',
+    '▰▰▰▱▱▱▱▱ 正在识别商品、期望数量与参考单价…',
+    '',
+    '<i>🔒 无 Checkout · 无付款确认 · 无扣款</i>',
+  ].join('\n')
+}
+
 async function updateSessionCard(
   api: Bot['api'],
   service: PoolMateService,
@@ -365,25 +434,39 @@ async function updateSessionCard(
 
 function sessionCard(session: PoolMateSession, members: PoolMateMember[]): string {
   const statusLabels: Record<PoolMateSession['status'], string> = {
-    collecting: '收集中',
-    funded: '已凑满',
-    settling: 'Policy 校验中',
-    approval_required: '等待人工批准',
-    completed: '已完成',
-    failed: '已停止',
-    cancelled: '已取消',
+    collecting: '🟢 收集中',
+    funded: '🔒 已锁单',
+    settling: '🟠 Policy 校验中',
+    approval_required: '🟠 等待人工批准',
+    completed: '✅ 演示结算完成',
+    failed: '🔴 已停止',
+    cancelled: '⚫ 已取消',
   }
   const memberLines = members.length
-    ? members.map((member) => `- ${escapeHtml(member.username)} · ${member.slots} 份 · ¥${member.amount.toFixed(2)}`).join('\n')
-    : '暂无成员'
+    ? members.map((member) => `· ${escapeHtml(member.username)} · <b>${member.slots} 份</b> · ${member.amount.toFixed(2)} CNY-DEMO`).join('\n')
+    : '· 暂无成员'
+  const quantityState = session.slotsFilled < session.slotsTotal
+    ? `距离期望还差 ${session.slotsTotal - session.slotsFilled} 份`
+    : session.slotsFilled === session.slotsTotal
+      ? '已达到期望数量'
+      : `已超过期望 ${session.slotsFilled - session.slotsTotal} 份`
   return [
-    `<b>拼单 #${escapeHtml(session.id)}</b> · ${statusLabels[session.status]}`,
-    `商品：${escapeHtml(session.product)} · ¥${session.priceEach.toFixed(2)}/份`,
-    `进度：${session.slotsFilled}/${session.slotsTotal} 份`,
+    `<b>PoolMate 拼单</b> · <code>${escapeHtml(session.id)}</code>`,
+    `<b>${statusLabels[session.status]}</b>`,
     '',
+    `🛒 商品 · <b>${escapeHtml(session.product)}</b>`,
+    `💴 Demo 参考价 · ${session.priceEach.toFixed(2)} CNY-DEMO / 份`,
+    `🎯 期望数量 · ${session.slotsTotal} 份`,
+    `📦 实际认领 · <b>${session.slotsFilled} 份</b> · ${quantityState}`,
+    `👤 发起人 · ${escapeHtml(session.creatorName)}`,
+    '',
+    '<b>参与人</b>',
     memberLines,
+    '',
+    '<i>发起人可随时按当前实际份额锁单并确认结算</i>',
+    '<code>AP2</code> protocol tag · Sponsored Demo Treasury',
     session.status === 'completed'
-      ? `\nMock Receipt · No Chain\nIntent：<code>${escapeHtml(session.intentId ?? '')}</code>`
+      ? `\n<b>Mock Receipt · No Chain</b>\nIntent：<code>${escapeHtml(session.intentId ?? '')}</code>`
       : '',
     session.failureCode ? `\n状态码：<code>${escapeHtml(session.failureCode)}</code>` : '',
   ].filter(Boolean).join('\n')
@@ -393,7 +476,10 @@ function sessionKeyboard(session: PoolMateSession): InlineKeyboard {
   if (session.status !== 'collecting') return new InlineKeyboard()
   return new InlineKeyboard()
     .text('加入一份', `join:${session.id}:1`)
+    .text('加入两份', `join:${session.id}:2`)
     .text('退出', `leave:${session.id}`)
+    .row()
+    .text('🔒 锁单并确认结算（仅发起人）', `checkout:${session.id}`)
 }
 
 function checkoutMessage(result: PoolMateCheckoutResult): string {
@@ -409,6 +495,7 @@ function checkoutMessage(result: PoolMateCheckoutResult): string {
     return [
       '<b>演示商户订单已生成</b>',
       '回执：<b>Mock Receipt · No Chain</b>',
+      `协议标签：<code>${escapeHtml(trace.intent.protocol.toUpperCase())}</code>`,
       `Intent：<code>${escapeHtml(trace.intent.id)}</code>`,
       `Policy：<code>${escapeHtml(trace.decision.code)}</code>`,
       `订单：<code>${escapeHtml(result.session?.merchantOrderId ?? '')}</code>`,
@@ -417,6 +504,7 @@ function checkoutMessage(result: PoolMateCheckoutResult): string {
   if (trace.receipt.explorerUrl && trace.receipt.transactionHash) {
     return [
       '<b>Injective Testnet 已确认</b>',
+      `协议标签：<code>${escapeHtml(trace.intent.protocol.toUpperCase())}</code>`,
       `Intent：<code>${escapeHtml(trace.intent.id)}</code>`,
       `<a href="${escapeHtml(trace.receipt.explorerUrl)}">打开 Explorer</a>`,
     ].join('\n')

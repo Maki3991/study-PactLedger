@@ -228,7 +228,7 @@ npm run test:api
 | Injective Testnet 真实支付 | **待完成** | 尚缺正式钱包、白名单地址、支付资产配置与测试币；目前没有 Explorer 可确认交易 |
 | Fastify A2A / Agent Card / Base Status | **本地已实现** | 已通过本地测试；公网仍需重新部署与 Smoke Test |
 | Telegram Bot | **Mock 闭环** | 拼单、Policy 与 Receipt 流程已实现；尚未配置生产 Token，明确为 `Mock · No Chain` |
-| 本地质量门 | **通过** | lint、生产构建、API tests `42/42` |
+| 本地质量门 | **通过** | lint、生产构建、API tests `80/80` |
 
 > [!IMPORTANT]
 > 截至 **2026-07-24** 的实测，公网 `http://129.226.91.246:8787` 仍是旧部署：`/api/health` 返回旧服务名，`/api/public/base-status` 返回 `401`，Agent Card 返回 `404`。完成 redeploy、restart 与公网 Smoke Test 前，不得宣称新 Base Status、Agent Card 或真实 Testnet Receipt 已上线。
