@@ -3,6 +3,7 @@ import test from "node:test";
 import type { OrderDetailView } from "@poolmate/shared";
 import {
   claimCallbackData,
+  closeCallbackData,
   leaveCallbackData,
   parsePoolMateCallbackData,
   quoteCallbackData
@@ -10,6 +11,7 @@ import {
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
 import type {
   ClaimPoolFromBotInput,
+  ClosePoolFromBotInput,
   CreatePoolFromBotInput,
   LeavePoolFromBotInput,
   PoolMateBotUseCases,
@@ -27,6 +29,7 @@ interface UseCaseCalls {
   create: CreatePoolFromBotInput[];
   claim: ClaimPoolFromBotInput[];
   leave: LeavePoolFromBotInput[];
+  close: ClosePoolFromBotInput[];
   quote: QuotePoolFromBotInput[];
   remind: RemindPoolFromBotInput[];
   get: Array<{ telegramChatId: string; orderId: string }>;
@@ -125,6 +128,7 @@ function createUseCases(
     create: [],
     claim: [],
     leave: [],
+    close: [],
     quote: [],
     remind: [],
     get: []
@@ -143,6 +147,10 @@ function createUseCases(
       leavePool: async (input) => {
         calls.leave.push(input);
         return { ...baseOrder, claimedUnits: 0, participantCount: 0 };
+      },
+      closePool: async (input) => {
+        calls.close.push(input);
+        return { ...baseOrder, state: "CANCELED" };
       },
       quotePool: async (input) => {
         calls.quote.push(input);
@@ -331,9 +339,10 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
   await bot.handleUpdate(commandUpdate(100, "/pool_new 3 Fresh fruit"));
   await bot.handleUpdate(commandUpdate(101, "/pool_claim order-1 2"));
   await bot.handleUpdate(commandUpdate(102, "/pool_leave order-1"));
-  await bot.handleUpdate(commandUpdate(103, "/pool_quote order-1"));
-  await bot.handleUpdate(commandUpdate(104, "/pool_remind order-1"));
-  await bot.handleUpdate(commandUpdate(105, "/pool_status order-1"));
+  await bot.handleUpdate(commandUpdate(103, "/pool_close order-1"));
+  await bot.handleUpdate(commandUpdate(104, "/pool_quote order-1"));
+  await bot.handleUpdate(commandUpdate(105, "/pool_remind order-1"));
+  await bot.handleUpdate(commandUpdate(106, "/pool_status order-1"));
 
   assert.deepEqual(calls.create, [
     {
@@ -358,14 +367,20 @@ test("grammY maps PoolMate commands to framework-neutral use case DTOs", async (
     orderId: "order-1",
     actor: { userId: "101", displayName: "Alice Chen" }
   });
-  assert.deepEqual(calls.quote[0], {
+  assert.deepEqual(calls.close[0], {
     sourceIdempotencyKey: "telegram:update:v1:103",
+    telegramChatId: "-500",
+    orderId: "order-1",
+    actor: { userId: "101", displayName: "Alice Chen" }
+  });
+  assert.deepEqual(calls.quote[0], {
+    sourceIdempotencyKey: "telegram:update:v1:104",
     telegramChatId: "-500",
     orderId: "order-1",
     requestedByUserId: "101"
   });
   assert.deepEqual(calls.remind[0], {
-    sourceIdempotencyKey: "telegram:update:v1:104",
+    sourceIdempotencyKey: "telegram:update:v1:105",
     telegramChatId: "-500",
     orderId: "order-1",
     requestedByUserId: "101"
@@ -387,6 +402,10 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     action: "quote",
     orderId: "order-1"
   });
+  assert.deepEqual(parsePoolMateCallbackData(closeCallbackData("order-1")), {
+    action: "close",
+    orderId: "order-1"
+  });
 
   const { useCases, calls } = createUseCases();
   const { bot } = createHarness(useCases);
@@ -403,6 +422,30 @@ test("callback data is stable and repeated callbacks reuse one idempotency key",
     calls.claim[1].sourceIdempotencyKey,
     calls.claim[0].sourceIdempotencyKey
   );
+});
+
+test("close callback calls the owner-only use case and reports no receipt", async () => {
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(useCases);
+
+  await bot.handleUpdate(
+    callbackUpdate(210, "callback-close", closeCallbackData("order-1"))
+  );
+
+  assert.deepEqual(calls.close, [
+    {
+      sourceIdempotencyKey: "telegram:callback:v1:callback-close",
+      telegramChatId: "-500",
+      orderId: "order-1",
+      actor: { userId: "101", displayName: "Alice Chen" }
+    }
+  ]);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(
+    String(reply?.payload.text),
+    /No settlement receipt was created/
+  );
+  assert.match(String(reply?.payload.text), /State: CANCELED/);
 });
 
 test("quote reports private delivery failures without another business call", async () => {
@@ -472,7 +515,10 @@ test("invalid callback data never reaches a business use case", async () => {
   );
 
   assert.equal(
-    calls.create.length + calls.claim.length + calls.leave.length,
+    calls.create.length +
+      calls.claim.length +
+      calls.leave.length +
+      calls.close.length,
     0
   );
   assert.equal(calls.quote.length, 0);
@@ -499,11 +545,12 @@ test("pool commands and callbacks fail closed outside a Telegram group", async (
   await bot.handleUpdate(privateCommandUpdate(600, "/pool_new 3 Fruit"));
   await bot.handleUpdate(privateCommandUpdate(601, "/pool_claim order-1 1"));
   await bot.handleUpdate(privateCommandUpdate(602, "/pool_leave order-1"));
-  await bot.handleUpdate(privateCommandUpdate(603, "/pool_quote order-1"));
-  await bot.handleUpdate(privateCommandUpdate(604, "/pool_remind order-1"));
+  await bot.handleUpdate(privateCommandUpdate(603, "/pool_close order-1"));
+  await bot.handleUpdate(privateCommandUpdate(604, "/pool_quote order-1"));
+  await bot.handleUpdate(privateCommandUpdate(605, "/pool_remind order-1"));
   await bot.handleUpdate(
     privateCallbackUpdate(
-      605,
+      606,
       "private-callback",
       claimCallbackData("order-1", 1)
     )
@@ -512,6 +559,7 @@ test("pool commands and callbacks fail closed outside a Telegram group", async (
   assert.equal(calls.create.length, 0);
   assert.equal(calls.claim.length, 0);
   assert.equal(calls.leave.length, 0);
+  assert.equal(calls.close.length, 0);
   assert.equal(calls.quote.length, 0);
   assert.equal(calls.remind.length, 0);
 });

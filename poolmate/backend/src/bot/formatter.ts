@@ -54,6 +54,14 @@ export function formatPaymentStatus(order: OrderDetailView): string {
     : "the checkout total";
   const heading = `Payment status for order ${order.id}`;
 
+  if (order.state === "CANCELED") {
+    return [
+      heading,
+      "Pool closed before payment submission.",
+      "No settlement receipt was created and this is not a refund."
+    ].join("\n");
+  }
+
   if (!projection) {
     return [
       heading,

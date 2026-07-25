@@ -16,6 +16,7 @@ function ordersApi(overrides: Partial<OrdersApi> = {}): OrdersApi {
   return {
     listOrders: vi.fn(async () => [orderSummary]),
     getOrder: vi.fn(async () => orderDetail),
+    closeOrder: vi.fn(async () => orderDetail),
     submitPayment: vi.fn(async () => orderDetail),
     recoverPayment: vi.fn(async () => orderDetail),
     getConfirmation: vi.fn(async () => confirmation),
@@ -128,6 +129,57 @@ describe("orders console", () => {
       screen.getByRole("button", { name: "Recover original operation" })
     );
     expect(api.recoverPayment).toHaveBeenCalledWith("order-1", "admin-secret");
+  });
+
+  it("closes a pool only after explicit confirmation and hides payment actions", async () => {
+    window.history.replaceState({}, "", "/?view=orders");
+    authenticateAdmin();
+    const canceledOrder: typeof orderDetail = {
+      ...orderDetail,
+      state: "CANCELED",
+      cancellation: {
+        actorType: "admin",
+        actorId: "admin-api",
+        reasonCode: "admin_requested",
+        canceledAt: "2026-07-25T02:02:00.000Z"
+      },
+      paymentRequest: { ...orderDetail.paymentRequest!, status: "failed" },
+      paymentProjection: {
+        ...orderDetail.paymentProjection!,
+        status: "FAILED",
+        errorCode: "ORDER_CANCELED",
+        errorMessage: "Order canceled before payment submission."
+      },
+      paymentOutbox: {
+        ...orderDetail.paymentOutbox!,
+        status: "completed",
+        lastErrorCode: "ORDER_CANCELED"
+      }
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const api = ordersApi({
+      getOrder: vi
+        .fn()
+        .mockResolvedValueOnce(orderDetail)
+        .mockResolvedValue(canceledOrder),
+      closeOrder: vi.fn(async () => canceledOrder)
+    });
+    const user = userEvent.setup();
+
+    render(<App ordersApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "Close pool" }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(api.closeOrder).toHaveBeenCalledWith("order-1", "admin-secret");
+    expect(
+      await screen.findByText(/No settlement Receipt was created/)
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Submit payment" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Close pool" })
+    ).not.toBeInTheDocument();
   });
 
   it("keeps mock evidence visibly separate from verified settlement", async () => {

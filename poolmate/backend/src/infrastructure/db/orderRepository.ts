@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type {
   CheckoutItemView,
   FundingMode,
+  OrderCancellationView,
   OrderDetailView,
   OrderState,
   PaymentOutboxView,
@@ -28,6 +29,7 @@ export interface OrderRow {
   targetUnits: number;
   sourceIdempotencyKey: string | null;
   requestHash: string | null;
+  cancellation: OrderCancellationView | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -213,19 +215,40 @@ function mapGroup(row: Record<string, unknown>): GroupRow {
 }
 
 function mapOrder(row: Record<string, unknown>): OrderRow {
+  const terminalState =
+    row.terminal_state === null || row.terminal_state === undefined
+      ? null
+      : String(row.terminal_state);
+  const canceledAt = row.cancellation_created_at;
   return {
     id: String(row.id),
     groupId: String(row.group_id),
     ownerUserId: String(row.owner_user_id),
     title: String(row.title),
-    state: String(row.state) as OrderState,
+    state: (terminalState ?? String(row.state)) as OrderState,
     fundingMode: String(row.funding_mode) as FundingMode,
     targetUnits: Number(row.target_units),
     sourceIdempotencyKey:
       row.source_idempotency_key === null
         ? null
         : String(row.source_idempotency_key),
-    requestHash: row.request_hash === null ? null : String(row.request_hash),
+    requestHash:
+      row.request_hash === null || row.request_hash === undefined
+        ? null
+        : String(row.request_hash),
+    cancellation:
+      canceledAt === null || canceledAt === undefined
+        ? null
+        : {
+            actorType: String(
+              row.cancellation_actor_type
+            ) as OrderCancellationView["actorType"],
+            actorId: String(row.cancellation_actor_id),
+            reasonCode: String(
+              row.cancellation_reason_code
+            ) as OrderCancellationView["reasonCode"],
+            canceledAt: String(canceledAt)
+          },
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };
@@ -394,14 +417,30 @@ export class OrderTransaction {
 
   getOrder(id: string): OrderRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_orders WHERE id = ?")
+      .prepare(
+        `SELECT o.*, c.actor_type AS cancellation_actor_type,
+                c.actor_id AS cancellation_actor_id,
+                c.reason_code AS cancellation_reason_code,
+                c.created_at AS cancellation_created_at
+         FROM pm_orders o
+         LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
+         WHERE o.id = ?`
+      )
       .get(id) as Record<string, unknown> | undefined;
     return row ? mapOrder(row) : undefined;
   }
 
   getOrderBySourceKey(key: string): OrderRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_orders WHERE source_idempotency_key = ?")
+      .prepare(
+        `SELECT o.*, c.actor_type AS cancellation_actor_type,
+                c.actor_id AS cancellation_actor_id,
+                c.reason_code AS cancellation_reason_code,
+                c.created_at AS cancellation_created_at
+         FROM pm_orders o
+         LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
+         WHERE o.source_idempotency_key = ?`
+      )
       .get(key) as Record<string, unknown> | undefined;
     return row ? mapOrder(row) : undefined;
   }
@@ -420,15 +459,98 @@ export class OrderTransaction {
   listOrders(): OrderRow[] {
     return (
       this.connection
-        .prepare("SELECT * FROM pm_orders ORDER BY updated_at DESC, id")
+        .prepare(
+          `SELECT o.*, c.actor_type AS cancellation_actor_type,
+                  c.actor_id AS cancellation_actor_id,
+                  c.reason_code AS cancellation_reason_code,
+                  c.created_at AS cancellation_created_at
+           FROM pm_orders o
+           LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
+           ORDER BY o.updated_at DESC, o.id`
+        )
         .all() as Record<string, unknown>[]
     ).map(mapOrder);
   }
 
   updateOrderState(id: string, state: OrderState, now: string): void {
     this.connection
-      .prepare("UPDATE pm_orders SET state = ?, updated_at = ? WHERE id = ?")
+      .prepare(
+        `UPDATE pm_orders SET state = ?, updated_at = ?
+         WHERE id = ? AND terminal_state IS NULL`
+      )
       .run(state, now, id);
+  }
+
+  cancellationByIdempotencyKey(key: string): OrderRow | undefined {
+    const row = this.connection
+      .prepare(
+        "SELECT order_id FROM pm_order_cancellations WHERE idempotency_key = ?"
+      )
+      .get(key) as { order_id: string } | undefined;
+    return row ? this.getOrder(row.order_id) : undefined;
+  }
+
+  cancelOrder(input: {
+    orderId: string;
+    idempotencyKey: string | null;
+    requestHash: string;
+    actorType: OrderCancellationView["actorType"];
+    actorId: string;
+    reasonCode: OrderCancellationView["reasonCode"];
+    now: string;
+  }): void {
+    this.connection
+      .prepare(
+        `INSERT INTO pm_order_cancellations
+         (order_id, idempotency_key, request_hash, actor_type, actor_id,
+          reason_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        input.orderId,
+        input.idempotencyKey,
+        input.requestHash,
+        input.actorType,
+        input.actorId,
+        input.reasonCode,
+        input.now
+      );
+    this.connection
+      .prepare(
+        `UPDATE pm_orders
+         SET terminal_state = 'CANCELED', updated_at = ?
+         WHERE id = ? AND terminal_state IS NULL`
+      )
+      .run(input.now, input.orderId);
+  }
+
+  terminatePaymentForCanceledOrder(orderId: string, now: string): void {
+    const request = this.paymentRequest(orderId);
+    if (!request) return;
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_requests
+         SET status = 'failed', updated_at = ?
+         WHERE id = ? AND status = 'ready'`
+      )
+      .run(now, request.id);
+    this.connection
+      .prepare(
+        `UPDATE pm_payment_projections
+         SET status = 'FAILED', error_code = 'ORDER_CANCELED',
+             error_message = 'Order canceled before payment submission.',
+             updated_at = ?
+         WHERE payment_request_id = ? AND status IN ('READY', 'UNAVAILABLE')`
+      )
+      .run(now, request.id);
+    this.connection
+      .prepare(
+        `UPDATE pm_outbox
+         SET status = 'completed', last_error_code = 'ORDER_CANCELED',
+             available_at = ?, updated_at = ?
+         WHERE payment_request_id = ? AND status IN ('pending', 'blocked')`
+      )
+      .run(now, now, request.id);
   }
 
   participants(orderId: string): ParticipantRow[] {
@@ -691,7 +813,9 @@ export class OrderTransaction {
            FROM pm_payment_requests r
            JOIN pm_payment_projections p ON p.payment_request_id = r.id
            JOIN pm_outbox o ON o.payment_request_id = r.id
+           JOIN pm_orders orders ON orders.id = r.order_id
            WHERE p.settlement_mode = ?
+             AND orders.terminal_state IS NULL
              AND (
                p.status IN ('SUBMITTED', 'UNKNOWN')
                OR (
@@ -715,7 +839,8 @@ export class OrderTransaction {
                 c.status AS confirmation_status, c.confirmed_at, c.declined_at,
                 p.user_id AS participant_user_id,
                 p.display_name AS participant_display_name, p.units AS participant_units,
-                o.title AS order_title, o.state AS order_state,
+                o.title AS order_title,
+                coalesce(o.terminal_state, o.state) AS order_state,
                 a.amount_atomic AS allocation_amount_atomic,
                 s.*
          FROM pm_user_confirmations c
@@ -976,7 +1101,16 @@ export class OrderTransaction {
          SET status = 'processing', attempts = attempts + 1,
              last_error_code = NULL, available_at = ?, updated_at = ?
          WHERE payment_request_id = ? AND status IN ('pending', 'blocked')
-           AND available_at <= ?`
+           AND available_at <= ?
+           AND EXISTS (
+             SELECT 1
+             FROM pm_payment_requests r
+             JOIN pm_orders orders ON orders.id = r.order_id
+             JOIN pm_payment_projections p ON p.payment_request_id = r.id
+             WHERE r.id = pm_outbox.payment_request_id
+               AND orders.terminal_state IS NULL
+               AND p.status IN ('READY', 'UNAVAILABLE')
+           )`
       )
       .run(leaseUntil, now, paymentRequestId, now).changes;
     if (claimed === 0) return "busy";

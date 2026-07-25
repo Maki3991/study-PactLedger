@@ -7,7 +7,8 @@ import {
   Play,
   RefreshCw,
   SearchCheck,
-  Users
+  Users,
+  XCircle
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
@@ -221,11 +222,16 @@ function CheckoutSection({ checkout }: { checkout: CheckoutView }) {
 function OrderDetail({
   order,
   action,
+  onCloseOrder,
   onSubmitPayment,
   onRecoverPayment
 }: {
   order: OrderDetailView;
-  action?: { kind: "submit" | "recover"; error?: ApiRequestError };
+  action?: {
+    kind: "close" | "submit" | "recover";
+    error?: ApiRequestError;
+  };
+  onCloseOrder(): void;
   onSubmitPayment(): void;
   onRecoverPayment(): void;
 }) {
@@ -242,6 +248,12 @@ function OrderDetail({
     order.fundingMode === "sponsored_demo"
       ? "Sponsored demo / participants not funded"
       : "Participant-prefunded";
+  const canClose =
+    order.state === "DRAFT" ||
+    order.state === "COLLECTING" ||
+    order.state === "QUOTE_PENDING" ||
+    order.state === "CONFIRMATION_PENDING" ||
+    order.state === "READY_FOR_PAYMENT";
   return (
     <article className="order-detail">
       <header className="order-detail__header">
@@ -264,6 +276,17 @@ function OrderDetail({
           <span>
             Settlement evidence is unavailable in this response. A Receipt is
             required before this console can show a successful settlement.
+          </span>
+        </div>
+      ) : null}
+
+      {order.cancellation ? (
+        <div className="inline-warning" role="status">
+          <XCircle size={16} aria-hidden="true" />
+          <span>
+            Closed {formatDateTime(order.cancellation.canceledAt)} before
+            payment submission. No settlement Receipt was created; this is not
+            a refund.
           </span>
         </div>
       ) : null}
@@ -292,6 +315,17 @@ function OrderDetail({
           <dd>{formatDateTime(order.updatedAt)}</dd>
         </div>
       </dl>
+
+      {canClose ? (
+        <button type="button" onClick={onCloseOrder} disabled={Boolean(action)}>
+          {action?.kind === "close" ? (
+            <RefreshCw className="spin" size={16} aria-hidden="true" />
+          ) : (
+            <XCircle size={16} aria-hidden="true" />
+          )}
+          Close pool
+        </button>
+      ) : null}
 
       <section className="detail-section" aria-labelledby="participants-heading">
         <div className="detail-section__heading">
@@ -544,7 +578,7 @@ function AuthenticatedOrdersView({
   );
   const [selectedId, setSelectedId] = useState<string>();
   const [paymentAction, setPaymentAction] = useState<{
-    kind: "submit" | "recover";
+    kind: "close" | "submit" | "recover";
     error?: ApiRequestError;
   }>();
 
@@ -573,11 +607,21 @@ function AuthenticatedOrdersView({
     reloadList();
     if (selectedId) reloadDetail();
   };
-  const runPaymentAction = async (kind: "submit" | "recover") => {
+  const runOrderAction = async (kind: "close" | "submit" | "recover") => {
     if (!selectedId || paymentAction) return;
+    if (
+      kind === "close" &&
+      !window.confirm(
+        "Close this pool before payment submission? This cannot be undone."
+      )
+    ) {
+      return;
+    }
     setPaymentAction({ kind });
     try {
-      if (kind === "submit") {
+      if (kind === "close") {
+        await ordersApi.closeOrder(selectedId, adminApiKey);
+      } else if (kind === "submit") {
         await ordersApi.submitPayment(selectedId, adminApiKey);
       } else {
         await ordersApi.recoverPayment(selectedId, adminApiKey);
@@ -591,7 +635,7 @@ function AuthenticatedOrdersView({
         error:
           error instanceof ApiRequestError
             ? error
-            : new ApiRequestError("Payment operation failed.", "UNKNOWN_ERROR")
+            : new ApiRequestError("Order operation failed.", "UNKNOWN_ERROR")
       });
     }
   };
@@ -716,8 +760,9 @@ function AuthenticatedOrdersView({
                   <OrderDetail
                     order={detail.data}
                     action={paymentAction}
-                    onSubmitPayment={() => void runPaymentAction("submit")}
-                    onRecoverPayment={() => void runPaymentAction("recover")}
+                    onCloseOrder={() => void runOrderAction("close")}
+                    onSubmitPayment={() => void runOrderAction("submit")}
+                    onRecoverPayment={() => void runOrderAction("recover")}
                   />
                 </>
               ) : null}

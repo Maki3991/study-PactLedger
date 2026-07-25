@@ -564,3 +564,51 @@ test("0006 rejects Mock confirmation with fabricated chain evidence", () => {
   );
   database.close();
 });
+
+test("0008 adds append-only cancellation evidence without breaking foreign keys", () => {
+  const database = openMigratedDatabase();
+  const now = "2026-07-25T12:00:00.000Z";
+  database.immediate((connection) => {
+    connection
+      .prepare(
+        `INSERT INTO pm_groups
+         (id, telegram_chat_id, title, created_at, updated_at)
+         VALUES ('group-cancel', '-10008', 'Cancel group', ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_orders
+         (id, group_id, owner_user_id, title, state, funding_mode,
+          target_units, created_at, updated_at)
+         VALUES ('order-cancel', 'group-cancel', '100', 'Cancel order',
+                 'COLLECTING', 'sponsored_demo', 1, ?, ?)`
+      )
+      .run(now, now);
+    connection
+      .prepare(
+        `INSERT INTO pm_order_cancellations
+         (order_id, idempotency_key, request_hash, actor_type, actor_id,
+          reason_code, created_at)
+         VALUES ('order-cancel', 'cancel-once', 'request-hash',
+                 'telegram_owner', '100', 'owner_requested', ?)`
+      )
+      .run(now);
+    connection
+      .prepare(
+        `UPDATE pm_orders SET terminal_state = 'CANCELED', updated_at = ?
+         WHERE id = 'order-cancel'`
+      )
+      .run(now);
+    assert.deepEqual(connection.pragma("foreign_key_check"), []);
+    assert.throws(() =>
+      connection
+        .prepare(
+          `UPDATE pm_order_cancellations SET actor_id = 'other'
+           WHERE order_id = 'order-cancel'`
+        )
+        .run()
+    );
+  });
+  database.close();
+});

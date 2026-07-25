@@ -40,7 +40,8 @@ const orderStates: readonly OrderState[] = [
   "PAID",
   "DEMO_CONFIRMED",
   "PAYMENT_FAILED",
-  "PAYMENT_UNKNOWN"
+  "PAYMENT_UNKNOWN",
+  "CANCELED"
 ];
 const fundingModes: readonly FundingMode[] = [
   "sponsored_demo",
@@ -306,6 +307,19 @@ function isPaymentOutbox(value: unknown): value is PaymentOutboxView {
   );
 }
 
+function isOrderCancellation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isOneOf(value.actorType, ["telegram_owner", "admin"] as const) &&
+    isNonEmptyString(value.actorId) &&
+    isOneOf(
+      value.reasonCode,
+      ["owner_requested", "admin_requested"] as const
+    ) &&
+    isIsoDate(value.canceledAt)
+  );
+}
+
 export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
   return (
     isRecord(value) &&
@@ -321,6 +335,9 @@ export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
     (value.checkoutVersion === undefined ||
       isPositiveInteger(value.checkoutVersion)) &&
     (value.expiresAt === undefined || isIsoDate(value.expiresAt)) &&
+    (value.cancellation === undefined ||
+      isOrderCancellation(value.cancellation)) &&
+    (value.state !== "CANCELED" || value.cancellation !== undefined) &&
     isIsoDate(value.createdAt) &&
     isIsoDate(value.updatedAt)
   );
@@ -483,6 +500,11 @@ export interface OrdersApi {
     adminApiKey: string,
     signal?: AbortSignal
   ): Promise<OrderDetailView>;
+  closeOrder(
+    id: string,
+    adminApiKey: string,
+    signal?: AbortSignal
+  ): Promise<OrderDetailView>;
   getConfirmation(
     token: string,
     signal?: AbortSignal
@@ -516,6 +538,21 @@ export function createOrdersApi(
         {
           signal,
           headers: { Authorization: `Bearer ${adminApiKey}` }
+        }
+      ),
+    closeOrder: (id, adminApiKey, signal) =>
+      requestJson(
+        baseUrl,
+        `/api/orders/${encodeURIComponent(id)}/close`,
+        isOrderDetailView,
+        {
+          signal,
+          method: "POST",
+          body: {},
+          headers: {
+            Authorization: `Bearer ${adminApiKey}`,
+            "Idempotency-Key": `admin-close:${id}`
+          }
         }
       ),
     submitPayment: (id, adminApiKey, signal) =>

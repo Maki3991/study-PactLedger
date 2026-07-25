@@ -28,6 +28,7 @@ export type {
   FundingMode,
   GroupView,
   MerchantView,
+  OrderCancellationView,
   OrderDetailView,
   OrderState,
   OrderSummaryView,

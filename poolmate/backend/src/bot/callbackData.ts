@@ -5,7 +5,7 @@ const CALLBACK_LIMIT = 64;
 
 export type PoolMateCallbackData =
   | { action: "claim"; orderId: string; units: number }
-  | { action: "leave" | "quote"; orderId: string };
+  | { action: "leave" | "quote" | "close"; orderId: string };
 
 function assertCallbackLength(value: string): string {
   if (Buffer.byteLength(value, "utf8") > CALLBACK_LIMIT) {
@@ -40,6 +40,11 @@ export function quoteCallbackData(orderId: string): string {
   return assertCallbackLength(`${CALLBACK_PREFIX}:quote:${orderId}`);
 }
 
+export function closeCallbackData(orderId: string): string {
+  assertOrderId(orderId);
+  return assertCallbackLength(`${CALLBACK_PREFIX}:close:${orderId}`);
+}
+
 export function parsePoolMateCallbackData(
   value: string
 ): PoolMateCallbackData | null {
@@ -58,7 +63,10 @@ export function parsePoolMateCallbackData(
       : null;
   }
 
-  if ((action === "leave" || action === "quote") && parts.length === 4) {
+  if (
+    (action === "leave" || action === "quote" || action === "close") &&
+    parts.length === 4
+  ) {
     return { action, orderId };
   }
 

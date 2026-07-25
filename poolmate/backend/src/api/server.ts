@@ -293,6 +293,20 @@ export async function createServer(
       async (request) => orderService.publishOrder(request.params.orderId)
     );
     app.post<{ Params: { orderId: string } }>(
+      "/api/orders/:orderId/close",
+      { preHandler: requireAdmin },
+      async (request, reply) => {
+        disableSensitiveCaching(reply);
+        parseInput(emptyBodySchema, request.body ?? {});
+        return orderService.cancelOrder(request.params.orderId, {
+          actorType: "admin",
+          actorId: "admin-api",
+          reasonCode: "admin_requested",
+          sourceIdempotencyKey: firstHeader(request.headers["idempotency-key"])
+        });
+      }
+    );
+    app.post<{ Params: { orderId: string } }>(
       "/api/orders/:orderId/claims",
       { preHandler: requireAdmin },
       async (request) =>

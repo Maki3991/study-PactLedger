@@ -44,6 +44,16 @@ export class OrderServiceBotUseCases implements PoolMateBotUseCases {
     );
   }
 
+  async closePool(input: Parameters<PoolMateBotUseCases["closePool"]>[0]) {
+    this.requireOrderChat(input.orderId, input.telegramChatId);
+    return this.orders.cancelOrder(input.orderId, {
+      actorType: "telegram_owner",
+      actorId: input.actor.userId,
+      reasonCode: "owner_requested",
+      sourceIdempotencyKey: input.sourceIdempotencyKey
+    });
+  }
+
   async quotePool(
     input: Parameters<PoolMateBotUseCases["quotePool"]>[0]
   ): Promise<QuotePoolFromBotResult> {

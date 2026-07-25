@@ -481,3 +481,72 @@ test("payment submit API executes the persisted local Mock boundary", async () =
   await app.close();
   current.database.close();
 });
+
+test("admin close API is protected, idempotent, and returns cancellation evidence", async () => {
+  const current = fixture();
+  const group = current.orderService.createGroup({
+    telegramChatId: "-10005",
+    title: "Close API group"
+  });
+  const draft = current.orderService.createOrder({
+    groupId: group.id,
+    ownerUserId: "100",
+    title: "Close through API",
+    targetUnits: 1
+  });
+  const app = await createServer({
+    ...current,
+    getBotStatus: () => "disabled",
+    logger: false
+  });
+
+  const unauthorized = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/close`,
+    payload: {}
+  });
+  assert.equal(unauthorized.statusCode, 401);
+
+  const first = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/close`,
+    headers: {
+      authorization: "Bearer admin-secret",
+      "idempotency-key": "admin-close-once"
+    },
+    payload: {}
+  });
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(first.headers["cache-control"], "private, no-store");
+  assert.equal(first.json().state, "CANCELED");
+  assert.deepEqual(first.json().cancellation, {
+    actorType: "admin",
+    actorId: "admin-api",
+    reasonCode: "admin_requested",
+    canceledAt: "2026-07-25T12:00:00.000Z"
+  });
+
+  const duplicate = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/close`,
+    headers: {
+      authorization: "Bearer admin-secret",
+      "idempotency-key": "admin-close-once"
+    },
+    payload: {}
+  });
+  assert.equal(duplicate.statusCode, 200);
+  assert.deepEqual(duplicate.json(), first.json());
+
+  const invalid = await app.inject({
+    method: "POST",
+    url: `/api/orders/${draft.id}/close`,
+    headers: { authorization: "Bearer admin-secret" },
+    payload: { force: true }
+  });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(invalid.json().error.code, "INVALID_REQUEST");
+
+  await app.close();
+  current.database.close();
+});

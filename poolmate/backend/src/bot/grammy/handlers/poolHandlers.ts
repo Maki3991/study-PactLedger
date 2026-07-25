@@ -220,6 +220,23 @@ async function handleCallbackAction(
     return;
   }
 
+  if (data.action === "close") {
+    const order = await useCases.closePool({
+      sourceIdempotencyKey,
+      telegramChatId,
+      orderId: data.orderId,
+      actor: currentActor
+    });
+    await context.answerCallbackQuery({ text: "Pool closed" });
+    await context.reply(
+      orderMessage(
+        "Pool closed before payment submission. No settlement receipt was created.",
+        order
+      )
+    );
+    return;
+  }
+
   await context.answerCallbackQuery({ text: "Preparing final quote" });
   const result = await useCases.quotePool({
     sourceIdempotencyKey,
@@ -313,6 +330,37 @@ export function registerPoolHandlers(
     await context.reply(orderMessage("You left the pool.", order), {
       reply_markup: collectingOrderKeyboard(order.id)
     });
+  });
+
+  bot.command("pool_close", async (context) => {
+    const telegramChatId = groupChatId(context);
+    if (!telegramChatId) {
+      await context.reply("Use /pool_close in the order's Telegram group.");
+      return;
+    }
+    const orderId = parseOrderCommand(
+      context.message?.text ?? "",
+      "pool_close"
+    );
+    if (!orderId) {
+      await context.reply("Usage: /pool_close <orderId>");
+      return;
+    }
+
+    const order = await useCases.closePool({
+      sourceIdempotencyKey: telegramUpdateIdempotencyKey(
+        context.update.update_id
+      ),
+      telegramChatId,
+      orderId,
+      actor: actor(context)
+    });
+    await context.reply(
+      orderMessage(
+        "Pool closed before payment submission. No settlement receipt was created.",
+        order
+      )
+    );
   });
 
   bot.command("pool_quote", async (context) => {

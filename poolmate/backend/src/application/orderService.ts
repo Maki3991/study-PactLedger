@@ -394,6 +394,7 @@ export class OrderService {
         targetUnits: request.targetUnits,
         sourceIdempotencyKey,
         requestHash,
+        cancellation: null,
         createdAt: now,
         updatedAt: now
       });
@@ -817,6 +818,107 @@ export class OrderService {
     );
   }
 
+  cancelOrder(
+    orderId: string,
+    input: {
+      actorType: "telegram_owner" | "admin";
+      actorId: string;
+      reasonCode: "owner_requested" | "admin_requested";
+      sourceIdempotencyKey?: string;
+    }
+  ): OrderDetailView {
+    const actorId = requireText(input.actorId, "actorId", 128);
+    const sourceIdempotencyKey = input.sourceIdempotencyKey
+      ? requireText(input.sourceIdempotencyKey, "sourceIdempotencyKey", 160)
+      : null;
+    const requestHash = stableDigest(
+      JSON.stringify({
+        operation: "cancel-order-v1",
+        orderId,
+        actorType: input.actorType,
+        actorId,
+        reasonCode: input.reasonCode
+      })
+    );
+    const now = this.now().toISOString();
+    return this.repository.immediate((transaction) => {
+      const order = this.requireOrder(transaction, orderId);
+      if (
+        input.actorType === "telegram_owner" &&
+        order.ownerUserId !== actorId
+      ) {
+        throw new DomainError(
+          "FORBIDDEN",
+          "Only the order owner can cancel this pool.",
+          403
+        );
+      }
+      if (
+        (input.actorType === "telegram_owner" &&
+          input.reasonCode !== "owner_requested") ||
+        (input.actorType === "admin" && input.reasonCode !== "admin_requested")
+      ) {
+        throw new DomainError(
+          "INVALID_REQUEST",
+          "Cancellation actor and reason do not match.",
+          400
+        );
+      }
+      if (sourceIdempotencyKey) {
+        const replay =
+          transaction.cancellationByIdempotencyKey(sourceIdempotencyKey);
+        if (replay && replay.id !== order.id) {
+          throw new DomainError(
+            "IDEMPOTENCY_CONFLICT",
+            "The idempotency key was already used for another order."
+          );
+        }
+      }
+      if (order.state === "CANCELED") {
+        return this.detail(transaction, order);
+      }
+      if (!this.cancelableState(order.state)) {
+        throw new DomainError(
+          "ORDER_CANCELLATION_NOT_ALLOWED",
+          "This order can no longer be canceled before settlement.",
+          409
+        );
+      }
+
+      const paymentRequest = transaction.paymentRequest(order.id);
+      const paymentProjection = paymentRequest
+        ? transaction.paymentProjection(paymentRequest.id)
+        : undefined;
+      if (
+        (order.state === "READY_FOR_PAYMENT" && !paymentRequest) ||
+        (paymentRequest &&
+          (!paymentProjection ||
+            (paymentProjection.status !== "READY" &&
+              paymentProjection.status !== "UNAVAILABLE") ||
+            paymentProjection.receiptId !== null))
+      ) {
+        throw new DomainError(
+          "ORDER_CANCELLATION_NOT_ALLOWED",
+          "Payment processing has already started or its state is uncertain.",
+          409
+        );
+      }
+
+      transaction.supersedeConfirmations(order.id, now);
+      transaction.terminatePaymentForCanceledOrder(order.id, now);
+      transaction.cancelOrder({
+        orderId: order.id,
+        idempotencyKey: sourceIdempotencyKey,
+        requestHash,
+        actorType: input.actorType,
+        actorId,
+        reasonCode: input.reasonCode,
+        now
+      });
+      return this.detail(transaction, this.requireOrder(transaction, order.id));
+    });
+  }
+
   getPrivateParticipants(orderId: string): ParticipantRow[] {
     return this.repository.read((transaction) => {
       this.requireOrder(transaction, orderId);
@@ -1173,6 +1275,16 @@ export class OrderService {
     return state === "COLLECTING";
   }
 
+  private cancelableState(state: OrderState): boolean {
+    return (
+      state === "DRAFT" ||
+      state === "COLLECTING" ||
+      state === "QUOTE_PENDING" ||
+      state === "CONFIRMATION_PENDING" ||
+      state === "READY_FOR_PAYMENT"
+    );
+  }
+
   private requireCheckoutState(state: OrderState): void {
     if (state !== "QUOTE_PENDING" && state !== "CONFIRMATION_PENDING") {
       throw new DomainError(
@@ -1218,6 +1330,7 @@ export class OrderService {
       ...(checkout
         ? { checkoutVersion: checkout.version, expiresAt: checkout.expiresAt }
         : {}),
+      ...(order.cancellation ? { cancellation: order.cancellation } : {}),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt
     };

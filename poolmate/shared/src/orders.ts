@@ -10,7 +10,15 @@ export type OrderState =
   | "PAID"
   | "DEMO_CONFIRMED"
   | "PAYMENT_FAILED"
-  | "PAYMENT_UNKNOWN";
+  | "PAYMENT_UNKNOWN"
+  | "CANCELED";
+
+export interface OrderCancellationView {
+  actorType: "telegram_owner" | "admin";
+  actorId: string;
+  reasonCode: "owner_requested" | "admin_requested";
+  canceledAt: string;
+}
 
 export interface AtomicMoney {
   assetId: string;
@@ -163,6 +171,7 @@ export interface OrderSummaryView {
   participantCount: number;
   checkoutVersion?: number;
   expiresAt?: string;
+  cancellation?: OrderCancellationView;
   createdAt: string;
   updatedAt: string;
 }
