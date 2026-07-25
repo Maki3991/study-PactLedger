@@ -1,6 +1,8 @@
-import { Bot, InlineKeyboard } from 'grammy'
+import { Bot, InlineKeyboard, type BotConfig, type Context, type MiddlewareFn } from 'grammy'
+import { BOT_COMMANDS, COMMAND_USAGE, parseClaimCommand, parseNewPoolCommand } from './commands.js'
 import { PoolMateService, PoolMateServiceError, parsePoolRequest } from './service.js'
 import type {
+  ParsedPoolRequest,
   PoolMateBotStatus,
   PoolMateCheckoutResult,
   PoolMateMember,
@@ -14,6 +16,16 @@ interface TelegramIdentity {
 
 export type TelegramIdentityProbe = (token: string) => Promise<TelegramIdentity>
 
+export interface PoolMateTelegramOptions {
+  /** 关闭时（默认）任何用户都可交互；开启但名单为空则拒绝所有人。 */
+  userAllowlistEnabled?: boolean
+  allowedUserIds?: readonly (string | number)[]
+  /** 自建 Bot API 服务器地址，缺省官方。 */
+  apiRoot?: string
+  /** 注入 fetch（走代理或测试替身）。grammy 不读 globalThis.fetch，必须从这里传。 */
+  fetch?: NonNullable<NonNullable<BotConfig<Context>['client']>['fetch']>
+}
+
 export class PoolMateTelegramRuntime {
   private bot?: Bot
   private polling?: Promise<void>
@@ -25,6 +37,7 @@ export class PoolMateTelegramRuntime {
     private readonly token: string | undefined,
     private readonly service: PoolMateService,
     private readonly probeIdentity: TelegramIdentityProbe = defaultTelegramProbe,
+    private readonly options: PoolMateTelegramOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -35,11 +48,25 @@ export class PoolMateTelegramRuntime {
       this.reasonCode = 'BOT_UNREACHABLE'
       return
     }
-    const bot = new Bot(this.token)
-    registerHandlers(bot, this.service)
+    const bot = new Bot(this.token, {
+      client: {
+        ...(this.options.apiRoot ? { apiRoot: this.options.apiRoot } : {}),
+        ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+      },
+    })
+    const allowlist = createAccessMiddleware(
+      this.options.userAllowlistEnabled ?? false,
+      this.options.allowedUserIds ?? [],
+    )
+    if (allowlist) bot.use(allowlist)
+    registerHandlers(bot, this.service, () => this.getStatus())
     this.bot = bot
     this.running = true
     this.reasonCode = undefined
+    // 命令菜单注册失败不应阻断轮询：菜单只是 UI 提示，命令本身仍可手输。
+    await bot.api.setMyCommands([...BOT_COMMANDS]).catch((error: unknown) => {
+      console.error(`[poolmate-bot] setMyCommands failed: ${errorMessage(error)}`)
+    })
     this.polling = bot.start({ drop_pending_updates: true })
     void this.polling.then(() => {
       this.running = false
@@ -86,19 +113,121 @@ export class PoolMateTelegramRuntime {
   }
 }
 
-function registerHandlers(bot: Bot, service: PoolMateService): void {
+function registerHandlers(
+  bot: Bot,
+  service: PoolMateService,
+  getStatus: () => PoolMateBotStatus,
+): void {
   bot.command(['start', 'help'], async (context) => {
     await context.reply([
       '<b>PoolMate</b> 是 PactLedger 的群聊拼单参考应用。',
       '',
-      '发起：<code>拼杨梅，一箱89元，需要3人</code>',
-      '取消：<code>/cancel</code>',
+      '<b>发起拼单</b>',
+      '命令：<code>/pool_new 3 89 杨梅</code>（份数 单价 商品）',
+      '自然语言：<code>拼杨梅，一箱89元，需要3人</code>',
       '',
+      '<b>参与</b>',
+      '<code>/pool_claim</code> 加入一份，<code>/pool_claim 2</code> 加入两份',
+      '<code>/pool_leave</code> 退出',
+      '',
+      '<b>查看与管理</b>',
+      '<code>/pool_status</code> 当前进度',
+      '<code>/pool_quote</code> 份额已满但结算失败时重试',
+      '<code>/pool_cancel</code> 取消（仅发起人）',
+      '<code>/status</code> Bot 与结算模式',
+      '',
+      '一个群同时只有一个进行中的拼单，所以命令都作用于当前这一单。',
       '所有付款都会经过 Payment Intent、Policy 和 Receipt；当前 Telegram 演示只生成 Mock Receipt，不会上链。',
     ].join('\n'), { parse_mode: 'HTML' })
   })
 
-  bot.command('cancel', async (context) => {
+  bot.command('status', async (context) => {
+    const status = getStatus()
+    await context.reply([
+      `<b>PoolMate Bot</b> · ${status.running ? '运行中' : '未运行'}`,
+      `结算模式：<code>${escapeHtml(status.settlementMode)}</code>`,
+      status.username ? `账号：@${escapeHtml(status.username)}` : '账号：未知',
+      status.reasonCode ? `状态码：<code>${escapeHtml(status.reasonCode)}</code>` : '',
+    ].filter(Boolean).join('\n'), { parse_mode: 'HTML' })
+  })
+
+  bot.command('pool_new', async (context) => {
+    const parsed = parseNewPoolCommand(context.message?.text ?? '')
+    if (!parsed) {
+      await context.reply(COMMAND_USAGE.poolNew)
+      return
+    }
+    await createAndAnnounceSession(context, service, parsed)
+  })
+
+  bot.command('pool_claim', async (context) => {
+    const parsed = parseClaimCommand(context.message?.text ?? '')
+    if (!parsed) {
+      await context.reply(COMMAND_USAGE.poolClaim)
+      return
+    }
+    const session = await service.getActiveSession(context.chat.id)
+    if (!session) {
+      await context.reply('当前没有进行中的拼单。用 /pool_new 发起一个。')
+      return
+    }
+    const result = await service.joinSession(
+      session.id,
+      context.from?.id ?? 0,
+      displayName(context.from),
+      parsed.slots,
+    )
+    if (!result.ok || !result.session) {
+      await context.reply(result.reason ?? '加入失败。')
+      return
+    }
+    await updateSessionCard(context.api, service, result.session)
+    await context.reply(`已加入 ${parsed.slots} 份。`)
+    await settleIfFunded(context.api, service, result.session)
+  })
+
+  bot.command('pool_leave', async (context) => {
+    const session = await service.getActiveSession(context.chat.id)
+    if (!session) {
+      await context.reply('当前没有进行中的拼单。')
+      return
+    }
+    const result = await service.leaveSession(session.id, context.from?.id ?? 0)
+    if (!result.ok || !result.session) {
+      await context.reply(result.reason ?? '退出失败。')
+      return
+    }
+    await updateSessionCard(context.api, service, result.session)
+    await context.reply('已退出拼单。')
+  })
+
+  bot.command('pool_status', async (context) => {
+    const session = await service.getActiveSession(context.chat.id)
+    if (!session) {
+      await context.reply('当前没有进行中的拼单。')
+      return
+    }
+    const members = await service.getMembers(session.id)
+    await context.reply(sessionCard(session, members), { parse_mode: 'HTML' })
+  })
+
+  bot.command('pool_quote', async (context) => {
+    const session = await service.getActiveSession(context.chat.id)
+    if (!session) {
+      await context.reply('当前没有进行中的拼单。')
+      return
+    }
+    if (session.slotsFilled < session.slotsTotal) {
+      await context.reply(`份额还没满（${session.slotsFilled}/${session.slotsTotal}），无法结算。`)
+      return
+    }
+    const checkout = await service.checkoutSession(session.id)
+    const current = await service.getSession(session.id)
+    if (current) await updateSessionCard(context.api, service, current)
+    await context.reply(checkoutMessage(checkout), { parse_mode: 'HTML' })
+  })
+
+  bot.command(['cancel', 'pool_cancel'], async (context) => {
     const session = await service.getActiveSession(context.chat.id)
     if (!session) {
       await context.reply('当前没有进行中的拼单。')
@@ -122,27 +251,12 @@ function registerHandlers(bot: Bot, service: PoolMateService): void {
     if (!text.includes('拼')) return
     const parsed = parsePoolRequest(text)
     if (!parsed) {
-      await context.reply('格式示例：拼杨梅，一箱89元，需要3人', {
+      await context.reply('格式示例：拼杨梅，一箱89元，需要3人\n或用命令：/pool_new 3 89 杨梅', {
         reply_parameters: { message_id: context.message.message_id },
       })
       return
     }
-    try {
-      const session = await service.createSession(
-        context.chat.id,
-        context.from?.id ?? 0,
-        displayName(context.from),
-        parsed,
-      )
-      const sent = await context.reply(sessionCard(session, []), {
-        parse_mode: 'HTML',
-        reply_markup: sessionKeyboard(session),
-      })
-      await service.setMessageId(session.id, sent.message_id)
-    } catch (error) {
-      const message = error instanceof PoolMateServiceError ? error.message : '创建拼单失败。'
-      await context.reply(message)
-    }
+    await createAndAnnounceSession(context, service, parsed)
   })
 
   bot.on('callback_query:data', async (context) => {
@@ -156,13 +270,7 @@ function registerHandlers(bot: Bot, service: PoolMateService): void {
       }
       await context.answerCallbackQuery({ text: '已加入一份' })
       await updateSessionCard(context.api, service, result.session)
-      if (result.session.status === 'funded') {
-        await context.api.sendMessage(result.session.chatId, '份额已凑满，PactLedger 正在校验付款 Intent。')
-        const checkout = await service.checkoutSession(sessionId)
-        const current = await service.getSession(sessionId)
-        if (current) await updateSessionCard(context.api, service, current)
-        await context.api.sendMessage(result.session.chatId, checkoutMessage(checkout), { parse_mode: 'HTML' })
-      }
+      await settleIfFunded(context.api, service, result.session)
       return
     }
     if (action === 'leave') {
@@ -181,6 +289,63 @@ function registerHandlers(bot: Bot, service: PoolMateService): void {
   bot.catch(() => {
     console.error('[poolmate-bot] update handling failed')
   })
+}
+
+/** 建单 + 发卡片 + 记住 message_id，命令与自然语言两条入口共用。 */
+async function createAndAnnounceSession(
+  context: Context,
+  service: PoolMateService,
+  parsed: ParsedPoolRequest,
+): Promise<void> {
+  if (!context.chat) return
+  try {
+    const session = await service.createSession(
+      context.chat.id,
+      context.from?.id ?? 0,
+      displayName(context.from),
+      parsed,
+    )
+    const sent = await context.reply(sessionCard(session, []), {
+      parse_mode: 'HTML',
+      reply_markup: sessionKeyboard(session),
+    })
+    await service.setMessageId(session.id, sent.message_id)
+  } catch (error) {
+    const message = error instanceof PoolMateServiceError ? error.message : '创建拼单失败。'
+    await context.reply(message)
+  }
+}
+
+/** 份额刚满时触发结算。checkoutSession 自身幂等，重复调用安全。 */
+async function settleIfFunded(
+  api: Bot['api'],
+  service: PoolMateService,
+  session: PoolMateSession,
+): Promise<void> {
+  if (session.status !== 'funded') return
+  await api.sendMessage(session.chatId, '份额已凑满，PactLedger 正在校验付款 Intent。')
+  const checkout = await service.checkoutSession(session.id)
+  const current = await service.getSession(session.id)
+  if (current) await updateSessionCard(api, service, current)
+  await api.sendMessage(session.chatId, checkoutMessage(checkout), { parse_mode: 'HTML' })
+}
+
+/** 返回 undefined 表示不需要挂中间件（未开启名单）。 */
+function createAccessMiddleware(
+  enabled: boolean,
+  allowedUserIds: readonly (string | number)[],
+): MiddlewareFn | undefined {
+  if (!enabled) return undefined
+  const allowed = new Set(allowedUserIds.map(String))
+  return async (context, next) => {
+    const userId = context.from?.id
+    if (userId === undefined || !allowed.has(String(userId))) return
+    await next()
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error'
 }
 
 async function updateSessionCard(

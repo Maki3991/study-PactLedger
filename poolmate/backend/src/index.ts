@@ -59,7 +59,11 @@ const paymentOrchestrationService = new PaymentOrchestrationService({
 const botUseCases = new OrderServiceBotUseCases(orderService);
 
 const botRuntime = createBotRuntime({
-  token: config.telegram.token,
+  // Withholding the token leaves the runtime in "disabled" state instead of
+  // competing with the web/ bot for the same long-polling slot.
+  token: config.telegram.standaloneBotEnabled
+    ? config.telegram.token
+    : undefined,
   userAllowlistEnabled: config.telegram.userAllowlistEnabled,
   allowedUserIds: config.telegram.allowedUserIds,
   apiRoot: config.telegram.apiRoot,

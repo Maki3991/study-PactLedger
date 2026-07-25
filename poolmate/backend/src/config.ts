@@ -22,6 +22,13 @@ export interface PoolMateConfig {
     allowedUserIds: string[];
     apiRoot: string;
     proxyUrl?: string;
+    /**
+     * Telegram allows only one long-polling consumer per bot token. The web/
+     * runtime (web/server/poolmate/telegram.ts) owns the shared
+     * TELEGRAM_BOT_TOKEN, so this standalone bot stays off unless explicitly
+     * opted in with its own token. Starting both yields HTTP 409 Conflict.
+     */
+    standaloneBotEnabled: boolean;
   };
   admin: {
     apiKey?: string;
@@ -154,7 +161,12 @@ export function loadConfig(
       ),
       allowedUserIds: parseCsv(env.TELEGRAM_ALLOWED_USER_IDS),
       apiRoot: optional(env.TELEGRAM_API_ROOT) ?? "https://api.telegram.org",
-      proxyUrl: optional(env.TELEGRAM_PROXY_URL)
+      proxyUrl: optional(env.TELEGRAM_PROXY_URL),
+      standaloneBotEnabled: parseBoolean(
+        env.POOLMATE_STANDALONE_BOT,
+        false,
+        "POOLMATE_STANDALONE_BOT"
+      )
     },
     admin: {
       apiKey: optional(env.POOLMATE_ADMIN_API_KEY)

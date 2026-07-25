@@ -18,6 +18,7 @@ import { PactLedgerRepository } from './pactledger/repository.js'
 import { PactLedgerService } from './pactledger/service.js'
 import { PoolMateRepository } from './poolmate/repository.js'
 import { PoolMateService } from './poolmate/service.js'
+import { KaleidoxTelegramRuntime } from './kaleidox-bot/telegram.js'
 import { PoolMateTelegramRuntime, type TelegramIdentityProbe } from './poolmate/telegram.js'
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
@@ -50,6 +51,13 @@ interface BuildAppOptions {
   startTelegramBot?: boolean
   telegramBotToken?: string
   telegramProbe?: TelegramIdentityProbe
+  telegramUserAllowlistEnabled?: boolean
+  telegramAllowedUserIds?: readonly (string | number)[]
+  telegramApiRoot?: string
+  /** KaleidoX 指挥台 bot。与 PoolMate bot 必须用不同 token。 */
+  kaleidoxTelegramBotToken?: string
+  /** `<telegramUserId>:<kaleidoxUserId>` 逗号分隔，空则该 bot 不启动。 */
+  kaleidoxTelegramOperators?: string
 }
 
 interface AuthBody {
@@ -100,6 +108,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     options.telegramBotToken?.trim() || undefined,
     poolMateService,
     options.telegramProbe,
+    {
+      userAllowlistEnabled: options.telegramUserAllowlistEnabled,
+      allowedUserIds: options.telegramAllowedUserIds,
+      apiRoot: options.telegramApiRoot,
+    },
   )
   const orchestrator = new TaskOrchestrator(
     repository,
@@ -187,6 +200,30 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return snapshot
   }
 
+  const kaleidoxBot = new KaleidoxTelegramRuntime(
+    options.kaleidoxTelegramBotToken?.trim() || undefined,
+    {
+      createTask: (input, ownerId) => createAndStartTask(input, ownerId),
+      findTask: (id) => repository.findById(id),
+      findTasksByUser: (userId) => repository.findByUser(userId),
+      approveTask: (id) => orchestrator.approve(id),
+      executeTask: (id) => orchestrator.execute(id),
+      getAuditLog: (tenantId) => treasury.getAuditLog(tenantId),
+      subscribeTask: (taskId, listener) => events.subscribe(taskId, listener),
+      getInjectiveStatus: () => injectiveStatus,
+    },
+    {
+      operators: options.kaleidoxTelegramOperators,
+      apiRoot: options.telegramApiRoot,
+    },
+  )
+
+  if (options.startTelegramBot) {
+    app.addHook('onReady', async () => {
+      await kaleidoxBot.start()
+    })
+  }
+
   app.get('/api/health', async () => ({
     status: 'ok',
     service: 'pactledger-api',
@@ -196,6 +233,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       injective: injectiveStatus.executionState,
       database: options.databaseStatus?.provider ?? (options.databasePool ? 'postgresql' : 'memory-test'),
       poolmateBot: poolMateBot.getStatus().running ? 'running' : poolMateBot.getStatus().configured ? 'configured' : 'disabled',
+      kaleidoxBot: kaleidoxBot.getStatus().running
+        ? 'running'
+        : kaleidoxBot.getStatus().reasonCode ?? 'disabled',
     },
   }))
 
@@ -470,6 +510,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   })
 
   app.addHook('onClose', async () => {
+    await kaleidoxBot.stop()
     await poolMateBot.stop()
     orchestrator.close()
     await options.databasePool?.end()

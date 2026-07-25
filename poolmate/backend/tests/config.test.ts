@@ -9,11 +9,33 @@ test("loadConfig uses safe independent defaults", () => {
   assert.equal(config.telegram.token, undefined);
   assert.equal(config.telegram.userAllowlistEnabled, false);
   assert.deepEqual(config.telegram.allowedUserIds, []);
+  assert.equal(config.telegram.standaloneBotEnabled, false);
   assert.equal(config.paymentBase.apiKey, undefined);
   assert.equal(config.paymentBase.settlementMode, "disabled");
   assert.equal(config.paymentBase.submitPath, undefined);
   assert.equal(config.paymentBase.timeoutMs, 10_000);
   assert.match(config.database.path, /poolmate\.sqlite$/);
+});
+
+test("loadConfig keeps the standalone bot opt-in even with a token present", () => {
+  const withToken = loadConfig(
+    {
+      TELEGRAM_BOT_TOKEN: "telegram-secret",
+      POOLMATE_PUBLIC_BASE_URL: "https://poolmate.example"
+    },
+    "/tmp/poolmate-config-test"
+  );
+  assert.equal(withToken.telegram.standaloneBotEnabled, false);
+
+  const optedIn = loadConfig(
+    {
+      TELEGRAM_BOT_TOKEN: "telegram-secret",
+      POOLMATE_PUBLIC_BASE_URL: "https://poolmate.example",
+      POOLMATE_STANDALONE_BOT: "true"
+    },
+    "/tmp/poolmate-config-test"
+  );
+  assert.equal(optedIn.telegram.standaloneBotEnabled, true);
 });
 
 test("loadConfig rejects credentials in the public URL", () => {
