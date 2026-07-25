@@ -113,39 +113,33 @@
 **用户动作**
 
 ```text
-@PoolMate 拼三箱杨梅，一箱大约 89 USDT，明晚 8 点截止
+@PoolMate 拼三箱杨梅
 ```
 
 **Telegram 可见结果**
 
-Bot 先发送解析确认卡，不立即公开付款：
+在自然语言能力已启用且输出无缺失/歧义时，Bot 先发送草稿确认卡，不立即公开拼单，更不会创建付款：
 
 ```text
-我理解的是：
+Draft created for review.
+Title: 杨梅拼单
+Target quantity: 3
+State: DRAFT
 
-商品：杨梅
-目标数量：3 箱
-参考单价：约 89 USDT / 箱
-参考运费：18 USDT
-认领截止：2026-07-25 20:00
-商户：Demo Merchant #001
-分摊规则：按认领数量分摊
+No checkout, confirmation, or payment exists yet.
 
-注意：以上价格仅供参考。
-数量凑齐后，商户会给出最终报价；
-每个人确认自己的最终金额后才会付款。
-
-[确认创建] [修改] [取消]
+[Confirm & publish] [Discard draft]
 ```
 
 **系统内部动作**
 
-1. Telegram Adapter 验证消息明确提及 Bot。
-2. Intent Parser 提取商品、数量、参考价格和截止时间。
-3. PoolMate Service 将相对时间转换为绝对时间。
-4. 创建内部订单 UUID 和对外订单码 `PM-7F3K`。
-5. 将参考价格标记为 `ESTIMATE_ONLY`。
-6. 写入订单草稿。
+1. grammY Adapter 验证消息位于群聊，并且 Telegram `mention` entity 明确指向当前 Bot。
+2. 默认关闭的直接 HTTPS LLM Adapter 只提取 `title` 和 `targetUnits`。
+3. Structured Output 经过 strict JSON Schema 和 Zod 校验；任何额外付款字段、缺失、歧义、拒绝或超时都会 fail closed。
+4. 使用 Telegram update ID 形成来源幂等键。
+5. 写入订单草稿；不写入商户、金额、payee、Checkout、确认或付款状态。
+
+如果 `POOLMATE_LLM_ENABLED=false`，Bot 提示使用 `/pool_new <targetUnits> <title>`，命令流程不受影响。
 
 **状态变化**
 
@@ -169,7 +163,6 @@ User Confirmation Evidence：无
 
 ```text
 ORDER_DRAFT_CREATED
-ORDER_ESTIMATE_RECORDED
 ```
 
 ---
@@ -178,7 +171,7 @@ ORDER_ESTIMATE_RECORDED
 
 **用户动作**
 
-Alice 点击 `[确认创建]`。
+Alice 点击 `[Confirm & publish]`。
 
 **Bot 响应**
 
@@ -1204,6 +1197,18 @@ Fulfillment Event：Push Notification / Get Task
 6. 群卡片重新开放一个认领名额。
 7. 因为尚未生成最终 Checkout 和付款确认，不需要撤销资金授权。
 
+### 7.1A 发起人在付款提交前关闭拼单
+
+适用状态：`DRAFT`、`COLLECTING`、`QUOTE_PENDING`、`CONFIRMATION_PENDING`、`READY_FOR_PAYMENT`，且 payment projection 尚未进入提交中、未知或已确认状态。
+
+1. 发起人点击 `Discard draft`、群卡片的 `Close pool`，或执行 `/pool_close <orderId>`。
+2. 服务端再次校验 Telegram 群和订单发起人身份；受保护的管理 API 也可以执行管理员关闭。
+3. 系统在同一事务内使待处理确认失效，并终止尚未提交的本地 payment request/projection/outbox。
+4. 系统追加写入 cancellation evidence，记录 actor、reason、source idempotency key 和时间。
+5. 订单进入 `CANCELED`；重复关闭返回同一结果，不生成第二份付款或 Receipt。
+6. 如果付款 claim 已经赢得竞态，或状态处于 `PAYMENT_SUBMITTED`、`PAYMENT_UNKNOWN`、`PAID`、`DEMO_CONFIRMED`，关闭请求必须拒绝并保留原支付恢复路径。
+7. Bot 明确说明没有创建 Settlement Receipt；Mock 或真实链上状态都不得因关闭动作被伪造。
+
 ### 7.2 认领截止时 Carol 尚未加入
 
 1. 截止任务检查订单仍为 `COLLECTING`。
@@ -1428,6 +1433,29 @@ And Checkout Result
 And Payment Result 或交易凭证
 ```
 
+### AC-13：自然语言只能创建待确认草稿
+
+```gherkin
+Given 群消息使用真实 Telegram mention entity 指向 PoolMate
+And LLM 返回完整且符合 strict schema 的 title 与 targetUnits
+When Bot 处理该消息
+Then 系统只能创建 DRAFT
+And 不得创建 Checkout、Confirmation、Payment Request 或 Receipt
+And 只有发起人点击 Confirm & publish 后才能进入 COLLECTING
+```
+
+### AC-14：关闭拼单不得与付款提交竞态产生假终态
+
+```gherkin
+Given 订单尚未提交付款
+When 发起人关闭拼单
+Then 订单必须进入 CANCELED
+And 待处理确认和未提交本地付款工作必须终止
+And cancellation evidence 必须持久化并可在重启后恢复
+But 如果 payment claim 已经开始或终态未知
+Then 关闭必须拒绝且不得生成第二笔付款或伪造 Receipt
+```
+
 ---
 
 ## 9. 核心审计事件
@@ -1436,6 +1464,9 @@ And Payment Result 或交易凭证
 ORDER_DRAFT_CREATED
 ORDER_ESTIMATE_RECORDED
 ORDER_PUBLISHED
+ORDER_DRAFT_DISCARDED
+ORDER_CANCELED
+ORDER_CONFIRMATIONS_SUPERSEDED
 PARTICIPANT_ALLOCATED
 PARTICIPANT_EXITED
 ORDER_REQUIREMENTS_MET

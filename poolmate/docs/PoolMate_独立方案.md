@@ -1,6 +1,6 @@
 # PoolMate 独立方案
 
-> 状态：G0 / P0 / P1 / P2 / P4 和本地 Mock Payment Base 已实现并完成本地验收；P3 远程联调等待支付基座发布稳定契约
+> 状态：G0 / P0 / P1 / P2 / P4、本地 Mock Payment Base、安全关闭拼单和自然语言草稿已实现并完成本地验收；P3 远程联调等待支付基座发布稳定契约
 > 边界：新 PoolMate 是独立后端、独立 Telegram Bot、独立管理面板和独立数据库，全部放在顶层 `poolmate/`。
 > 约束：不修改 `web/` 中现有支付基座的代码和接口，不导入其内部 Service，不共享数据库。
 > 验收时间：2026-07-25
@@ -49,7 +49,7 @@ poolmate/
 
 ### 2.1 CodexClaw 导入基线
 
-PoolMate Backend 以下列上游作为运行时基础：
+PoolMate Backend 以下列上游作为初始源码基线：
 
 ```text
 repository = https://github.com/MackDing/CodexClaw.git
@@ -58,13 +58,15 @@ commit     = 263be7c8281e90bf6604a65a4f327f385df60279
 target     = poolmate/backend
 ```
 
+CodexClaw 只用于减少骨架、配置、Telegram 适配和工程化代码的重复建设。PoolMate 不依赖 Codex CLI、Codex SDK、PTY session、Codex 工作目录或 Codex Agent Runtime；导入后允许在保留可复用结构的前提下删除不属于产品的运行时模块。
+
 导入是全项目的串行 Gate 0，只由工程师 A 操作：
 
 1. 将固定 commit clone 到 `poolmate/backend/`，不覆盖已有 `poolmate/docs/`。
 2. clone 完成后立即删除 `poolmate/backend/.git`，再进行任何删改或分支分工。
 3. 保存上游 URL、commit 和导入时间到非 Markdown 的 provenance 文件。
 4. 在原始代码上先运行 typecheck、lint 和 test，记录删改前基线。
-5. 删除上游的嵌套 Agent 指令、GitHub 自动化、编码助手文档和 PoolMate 不需要的模块，但保留来源记录。
+5. 删除上游的 Codex CLI/SDK/PTY Runtime、嵌套 Agent 指令、GitHub 自动化、编码助手文档和 PoolMate 不需要的模块，但保留来源记录。
 6. 建立一个可追踪的 vendor baseline，三名工程师只能从该基线开始并行。
 
 Gate 0 验收：
@@ -102,7 +104,7 @@ poolmate/backend/src/bot/
 3. Telegraf `Markup` 替换为 grammY `InlineKeyboard`，callback data 继续使用后端定义的稳定格式。
 4. Telegraf `Context` / `MiddlewareFn` 替换为 grammY 类型，但 grammY 类型只能出现在 `src/bot/grammy/` 内。
 5. 保留 allowed user/chat 访问控制、代理配置、超时、限流、脱敏日志和统一错误处理。
-6. `AgentRuntime`、Domain 和 Application Service 只依赖 `BotAdapter`，不接收 grammY `Context` 或 Telegram Update 作为业务输入。
+6. Domain 和 Application Service 只依赖框架无关端口，不接收 grammY `Context` 或 Telegram Update 作为业务输入。
 7. 旧 Telegraf 测试迁移为 grammY update fixture 测试，覆盖 command、message、callback query、重复 update 和 Bot API 失败。
 
 grammY 迁移验收：
@@ -112,6 +114,30 @@ grammY 迁移验收：
 - grammY 类型不进入 Domain、Application、shared DTO 或数据库 schema；
 - Bot 在 Token 缺失、Token 存在和 Telegram API 不可用三种状态下都可被健康检查如实表达；
 - grammY 的 command、message、callback query 和访问控制测试通过。
+
+### 2.3 自然语言草稿边界
+
+自然语言能力是可选的订单草稿提取器，不是独立 Agent Runtime：
+
+```text
+Telegram 群消息明确 @mention Bot
+  -> grammY Handler
+  -> Responses-compatible HTTPS Adapter
+  -> strict Structured Output
+  -> Zod 校验
+  -> 持久化 DRAFT
+  -> 发起人点击 Confirm & publish
+  -> 确定性 publishOrder()
+```
+
+约束：
+
+- 默认 `POOLMATE_LLM_ENABLED=false`，命令流程始终可用；
+- 启用时必须配置 HTTPS origin、服务端 API Key 和模型名；
+- 模型只返回 `title`、`targetUnits`、`missingFields`、`ambiguousFields`；
+- 缺失、歧义、拒绝、超时或 schema 不合法时不得创建订单；
+- 模型不得产生商户、收款方、资产、金额、Checkout、确认、付款或订单状态；
+- 草稿必须由订单发起人显式发布，丢弃草稿只进入持久化 `CANCELED`，不创建 Checkout、确认或付款。
 
 ## 3. PoolMate 自有领域
 
@@ -216,6 +242,8 @@ amount       = 只在可无损转换时填入旧 number 字段
 | P2 本地 Mock Base | 已完成 | Policy 白名单/资产/金额/有效期/幂等校验、追加写 operation/decision/receipt、重试与重启恢复、`DEMO_CONFIRMED` 证据隔离 | 当前阶段提交 |
 | P3 基座联调 | 外部阻塞 | 仍无可从独立进程调用的稳定支付接口；未调用 Demo 端点、未修改 `web/`、未宣称真实付款 | 待基座发布契约 |
 | P4 管理面板 | 已完成 | 展示订单、确认、payment projection、outbox、恢复入口和 Receipt 证据；Mock 证据边界由 `1b8f132` 加固 | `82f9385`、`1b8f132` |
+| P5 安全关闭拼单 | 已完成 | Owner-only Telegram/API/UI 关闭、append-only cancellation evidence、确认失效、付款 claim 竞态和重启恢复 | `e7a43c5` |
+| P6 自然语言草稿 | 已完成 | 移除 Codex CLI/SDK/PTY Runtime，grammY mention gate、直接 HTTPS Structured Output、`DRAFT -> Confirm & publish`、默认关闭配置 | `13ddaf5` |
 
 P3 的进入条件是支付基座已经存在可从独立进程调用的稳定接口。本方案不通过修改 `web/`、共享数据库、导入基座源码或调用 Demo 端点创造该条件。
 
@@ -230,15 +258,19 @@ P3 的进入条件是支付基座已经存在可从独立进程调用的稳定�
 - [x] 没有可接受的 Testnet/Live confirmed Receipt 时，Bot、API 和管理面板都不显示“已付款”。
 - [x] Mock、Testnet 和真实成员出资在数据和 UI 中不混淆。
 - [x] 首期不声明已使用 A2A 或 AP2。
+- [x] 发起人可以在付款提交前安全关闭拼单，并留下持久化取消证据。
+- [x] 自然语言只创建待确认草稿；LLM 关闭或不可用时命令流程不受影响。
+- [x] PoolMate 生产依赖不包含 Codex CLI 或 Codex SDK。
 
 ### 6.1 2026-07-25 验收证据
 
-- Backend CI：typecheck、lint、format、`100/100` tests、build 和空库 healthcheck 通过；上一阶段 production dependency audit 为 0 个 high/critical。
-- Frontend：lint、typecheck、`29/29` tests 和 build 全部通过；shared typecheck/build 通过。
-- Docker 从独立 volume 升级到 7 个 migration；Mock 模式在没有远程 URL/Key/path 时报告 `configured`，disabled 模式仍如实报告未配置。
+- Backend CI：typecheck、lint、format、`114/114` tests、build 和空库 healthcheck 通过；production dependency audit 为 0 个 high/critical。
+- Frontend：lint、typecheck、`31/31` tests 和 build 全部通过；shared typecheck/build 通过。
+- Docker 从独立 volume 升级到 8 个 migration；Mock 模式在没有远程 URL/Key/path 时报告 `configured`，disabled 模式仍如实报告未配置。
 - 真实浏览器检查覆盖桌面 `1440 x 900` 与移动 `390 x 844`：运行时页和管理员 gate 无横向溢出或控件重叠，浏览器控制台无 warning/error；未生成持久化截图文件。
 - 静态边界检查无嵌套 `.git`、无 submodule、无 Telegraf production import、无 `web/` import；grammY 类型未进入 Domain、Application、shared DTO 或数据库 schema。
 - Telegram user allowlist 由 `TELEGRAM_USER_ALLOWLIST_ENABLED` 显式控制，默认关闭；只有开启时空名单才会让 Bot fail closed。
+- 自然语言草稿由 `POOLMATE_LLM_ENABLED` 显式控制，默认关闭；启用后使用直接 HTTPS Adapter，不启动 Codex CLI/SDK/PTY session。
 - 本地 Mock API 集成测试证明只能返回 `DEMO_CONFIRMED`；Mock Receipt DTO 使用 `kind=mock`，不包含交易哈希或 Explorer 字段，管理页单独显示其 receipt ID 与记录时间。
 - 未执行真实 Telegram 群聊、外部 HTTPS Mini App 或 Injective Testnet/Live 付款，这些不属于已完成证据。
 
@@ -269,7 +301,7 @@ P0 不接 A2A、AP2、Testnet，也不调用现有 Demo 支付端点。P0 不是
 | 工程师 | 负责范围 | 主要输出 | 禁止越界 |
 |---|---|---|---|
 | A：Backend / Contract | `backend/src/api/`、`backend/src/domain/`、`backend/src/application/`、`backend/src/infrastructure/db/`、`shared/`、`migrations/` | Fastify 组装、health/config status、独立 DB、首个 migration、API 测试 | 不修改 Bot 文案和 Frontend |
-| B：Runtime / Bot | `backend/src/agent/`、`backend/src/bot/`、`backend/src/runtime/` 及对应测试 | CodexClaw 删改、AgentRuntime、Telegraf 到 grammY 迁移、`BotAdapter`、Bot disabled/configured 状态 | 不修改 shared 契约、DB schema 和 API 路由 |
+| B：Bot / LLM Adapter | `backend/src/bot/`、`backend/src/infrastructure/llm/` 及对应测试 | CodexClaw 删改、Telegraf 到 grammY 迁移、`BotAdapter`、轻量 HTTP 草稿提取、Bot/LLM 状态 | 不修改 shared 契约、DB schema 和 API 路由 |
 | C：Frontend / Delivery | `frontend/`、`deploy/`、前端与 E2E 测试 | 真实状态面板、错误/加载/空状态、Docker/service/env 模板 | 不制作演示付款数据，不直连基座或 DB |
 
 Window 1 期间可以同时开工，因为三路只通过 Gate 1 冻结的 DTO 交互，不共同修改同一业务文件。
@@ -302,7 +334,7 @@ Gate 2 必须同时通过：
 P0 之后继续使用相同所有权：
 
 - A 是 Domain、Application Service、API contract、DB schema、migration 编号和 `shared/` 的唯一所有者。
-- B 是 Agent Runtime、grammY Telegram Adapter、Merchant/Payment 外部 Adapter 和 Bot 文案的唯一所有者。
+- B 是 grammY Telegram Adapter、自然语言草稿 Adapter、Merchant/Payment 外部 Adapter 和 Bot 文案的唯一所有者。
 - C 是 Frontend、浏览器 E2E、容器与部署模板的唯一所有者。
 - `backend/package.json` 和后端锁文件只由 A 修改；B 如需依赖，提交明确的依赖需求由 A 统一落地。
 - `frontend/package.json` 和前端锁文件只由 C 修改。
