@@ -20,6 +20,8 @@ const draftExtractionSchema = z
     targetUnits: z.number().int().min(1).max(1_000).nullable(),
     unit: z.string().trim().min(1).max(24).nullable(),
     purchaseChannelHint: z.string().trim().min(1).max(80).nullable(),
+    storeNameHint: z.string().trim().min(1).max(120).nullable(),
+    merchantLinkHint: z.string().trim().min(1).max(512).nullable(),
     userPriceHint: z.string().trim().min(1).max(80).nullable(),
     missingFields: z
       .array(z.enum(ORDER_DRAFT_REQUIRED_FIELDS))
@@ -79,6 +81,16 @@ const structuredOutputSchema = {
       minLength: 1,
       maxLength: 80
     },
+    storeNameHint: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: 120
+    },
+    merchantLinkHint: {
+      type: ["string", "null"],
+      minLength: 1,
+      maxLength: 512
+    },
     userPriceHint: {
       type: ["string", "null"],
       minLength: 1,
@@ -101,6 +113,8 @@ const structuredOutputSchema = {
     "targetUnits",
     "unit",
     "purchaseChannelHint",
+    "storeNameHint",
+    "merchantLinkHint",
     "userPriceHint",
     "missingFields",
     "ambiguousFields"
@@ -113,14 +127,15 @@ const EXTRACTION_INSTRUCTIONS = [
   "targetUnits is the explicitly requested total positive integer quantity.",
   "unit is the explicitly stated quantity unit such as 瓶, 箱, 杯, 份, or null when omitted.",
   "purchaseChannelHint preserves an explicitly stated shopping channel such as 美团外卖, 饿了么, 京东到家, 盒马, or null when omitted.",
-  "A purchase channel hint is untrusted user intent, never a verified merchant identity or payee.",
+  "storeNameHint preserves an explicitly stated store or restaurant name such as xx店铺名, and merchantLinkHint preserves only a user-supplied shopping URL when present.",
+  "Purchase channel, store, and link hints are untrusted user intent, never a verified merchant identity or payee.",
   "userPriceHint preserves only an explicitly stated reference-price phrase such as 一箱89 or 45元一份; otherwise it is null.",
   "If multiple different products are requested, mark itemName ambiguous instead of inventing a cart.",
   "If a field is absent, set it to null and list it in missingFields.",
   "If a field has multiple plausible values, set it to null and list it in ambiguousFields.",
-  "Optional unit, purchaseChannelHint, and userPriceHint may be null without being listed as missing.",
+  "Optional unit, purchaseChannelHint, storeNameHint, merchantLinkHint, and userPriceHint may be null without being listed as missing.",
   "Do not infer a verified merchant, merchantId, asset, final amount, allocation, payee, confirmation, payment, or order state.",
-  "Example: @PoolMate 拼单 3瓶可乐，美团外卖 => title 可乐拼单, itemName 可乐, targetUnits 3, unit 瓶, purchaseChannelHint 美团外卖, userPriceHint null."
+  "Example: @PoolMate 拼单 3瓶可乐，美团外卖 xx店铺名 https://example.test/item => title 可乐拼单, itemName 可乐, targetUnits 3, unit 瓶, purchaseChannelHint 美团外卖, storeNameHint xx店铺名, merchantLinkHint https://example.test/item, userPriceHint null."
 ].join(" ");
 
 export type OrderDraftLlmProvider = "deepseek" | "responses";

@@ -17,6 +17,8 @@ export interface OrderIntentView {
   source: OrderIntentSource;
   items: OrderIntentItemView[];
   purchaseChannelHint?: string;
+  storeNameHint?: string;
+  merchantLinkHint?: string;
   userPriceHint?: string;
 }
 

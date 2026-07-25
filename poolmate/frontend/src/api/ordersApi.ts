@@ -123,6 +123,10 @@ function isOrderIntent(value: unknown): value is OrderIntentView {
     ) &&
     (value.purchaseChannelHint === undefined ||
       isNonEmptyString(value.purchaseChannelHint)) &&
+    (value.storeNameHint === undefined ||
+      isNonEmptyString(value.storeNameHint)) &&
+    (value.merchantLinkHint === undefined ||
+      isNonEmptyString(value.merchantLinkHint)) &&
     (value.userPriceHint === undefined || isNonEmptyString(value.userPriceHint))
   );
 }
@@ -413,7 +417,6 @@ export function isOrderSummaryView(value: unknown): value is OrderSummaryView {
       (isOrderIntent(value.intent) &&
         value.intent.items[0]?.quantity === value.targetUnits)) &&
     isNonNegativeInteger(value.claimedUnits) &&
-    value.claimedUnits <= value.targetUnits &&
     isNonNegativeInteger(value.participantCount) &&
     (value.checkoutVersion === undefined ||
       isPositiveInteger(value.checkoutVersion)) &&

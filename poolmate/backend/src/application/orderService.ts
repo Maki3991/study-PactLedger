@@ -57,6 +57,8 @@ interface PrivateConfirmationDelivery {
   url: string;
 }
 
+const MAX_TOTAL_CLAIM_UNITS = 1_000;
+
 function stableDigest(material: string): string {
   return createHash("sha256").update(material).digest("hex");
 }
@@ -516,10 +518,10 @@ export class OrderService {
         .filter((participant) => participant.userId !== userId)
         .reduce((sum, participant) => sum + participant.units, 0);
       const projected = currentWithoutUser + request.units;
-      if (projected > order.targetUnits) {
+      if (projected > MAX_TOTAL_CLAIM_UNITS) {
         throw new DomainError(
           "CAPACITY_EXCEEDED",
-          "The claim exceeds the remaining order capacity."
+          "The claim exceeds the per-order claim limit."
         );
       }
       transaction.upsertParticipant({
@@ -531,11 +533,7 @@ export class OrderService {
         joinedAt: existing?.joinedAt ?? now,
         updatedAt: now
       });
-      transaction.updateOrderState(
-        order.id,
-        projected === order.targetUnits ? "QUOTE_PENDING" : "COLLECTING",
-        now
-      );
+      transaction.updateOrderState(order.id, "COLLECTING", now);
       const result = this.detail(
         transaction,
         this.requireOrder(transaction, order.id)
@@ -670,9 +668,29 @@ export class OrderService {
         }
       }
       this.requireCheckoutState(order.state);
+      const participants = transaction.participants(order.id);
+      const claimedUnits = participants.reduce(
+        (sum, participant) => sum + participant.units,
+        0
+      );
+      if (claimedUnits <= 0) {
+        throw new DomainError(
+          "INVALID_ORDER_STATE",
+          "Checkout requires at least one claimed unit."
+        );
+      }
+      let lockedOrder = order;
+      if (order.state === "COLLECTING") {
+        transaction.updateOrderState(
+          order.id,
+          "QUOTE_PENDING",
+          this.now().toISOString()
+        );
+        lockedOrder = this.requireOrder(transaction, order.id);
+      }
       return {
-        order,
-        participants: transaction.participants(order.id),
+        order: lockedOrder,
+        participants,
         duplicate: false
       };
     });
@@ -683,10 +701,10 @@ export class OrderService {
       (sum, participant) => sum + participant.units,
       0
     );
-    if (claimedUnits !== snapshot.order.targetUnits) {
+    if (claimedUnits <= 0) {
       throw new DomainError(
         "INVALID_ORDER_STATE",
-        "Checkout requires the exact target units to be claimed."
+        "Checkout requires at least one claimed unit."
       );
     }
     let receivedQuote: MerchantQuote;
@@ -752,7 +770,7 @@ export class OrderService {
         (sum, participant) => sum + participant.units,
         0
       );
-      if (units !== order.targetUnits) {
+      if (units <= 0 || units !== claimedUnits) {
         throw new DomainError(
           "INVALID_ORDER_STATE",
           "Participant claims changed before checkout was saved."
@@ -1358,10 +1376,14 @@ export class OrderService {
   }
 
   private requireCheckoutState(state: OrderState): void {
-    if (state !== "QUOTE_PENDING" && state !== "CONFIRMATION_PENDING") {
+    if (
+      state !== "COLLECTING" &&
+      state !== "QUOTE_PENDING" &&
+      state !== "CONFIRMATION_PENDING"
+    ) {
       throw new DomainError(
         "INVALID_ORDER_STATE",
-        "Checkout requires a fully claimed order."
+        "Checkout requires an open or locked order with at least one claim."
       );
     }
   }

@@ -9,6 +9,8 @@ export const ORDER_DRAFT_REQUIRED_FIELDS = [
 export const ORDER_DRAFT_OPTIONAL_FIELDS = [
   "unit",
   "purchaseChannelHint",
+  "storeNameHint",
+  "merchantLinkHint",
   "userPriceHint"
 ] as const;
 
@@ -25,6 +27,8 @@ export interface OrderDraftExtraction {
   targetUnits: number | null;
   unit: string | null;
   purchaseChannelHint: string | null;
+  storeNameHint: string | null;
+  merchantLinkHint: string | null;
   userPriceHint: string | null;
   missingFields: Array<(typeof ORDER_DRAFT_REQUIRED_FIELDS)[number]>;
   ambiguousFields: OrderDraftField[];

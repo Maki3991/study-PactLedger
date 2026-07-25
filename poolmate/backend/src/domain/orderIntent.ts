@@ -39,6 +39,8 @@ const orderIntentSchema = z
       )
       .length(1),
     purchaseChannelHint: safeText(80).optional(),
+    storeNameHint: safeText(120).optional(),
+    merchantLinkHint: safeText(512).optional(),
     userPriceHint: safeText(80).optional()
   })
   .strict();

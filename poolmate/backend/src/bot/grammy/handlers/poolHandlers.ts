@@ -24,7 +24,7 @@ import type {
   RemindPoolFromBotResult
 } from "../../poolMateBotUseCases.js";
 import { formatPaymentStatus } from "../../formatter.js";
-import { collectingOrderKeyboard, draftOrderKeyboard } from "../keyboards.js";
+import { collectingOrderKeyboard } from "../keyboards.js";
 import type { PoolMateContext } from "../context.js";
 import { ORDER_INTENT_SCHEMA_VERSION } from "../../../domain/orderIntent.js";
 
@@ -64,6 +64,8 @@ function orderIntent(
     targetUnits: number;
     unit?: string | null;
     purchaseChannelHint?: string | null;
+    storeNameHint?: string | null;
+    merchantLinkHint?: string | null;
     userPriceHint?: string | null;
   }
 ): OrderIntentView {
@@ -81,26 +83,73 @@ function orderIntent(
     ...(input.purchaseChannelHint
       ? { purchaseChannelHint: input.purchaseChannelHint }
       : {}),
+    ...(input.storeNameHint ? { storeNameHint: input.storeNameHint } : {}),
+    ...(input.merchantLinkHint
+      ? { merchantLinkHint: input.merchantLinkHint }
+      : {}),
     ...(input.userPriceHint ? { userPriceHint: input.userPriceHint } : {})
   };
 }
 
-function draftReviewMessage(order: OrderDetailView): string {
+function intentQuantity(order: OrderDetailView): string {
   const intent = order.intent;
   const item = intent?.items[0];
-  const quantity = item
+  return item
     ? `${item.quantity}${item.unit ? ` ${item.unit}` : " units"}`
     : `${order.targetUnits} units`;
+}
+
+function purchaseIntentLines(order: OrderDetailView): string[] {
+  const intent = order.intent;
+  const item = intent?.items[0];
   return [
-    orderMessage("Draft created for review.", order),
     `Requested item: ${item?.name ?? order.title}`,
-    `Requested quantity: ${quantity}`,
+    `Requested quantity: ${intentQuantity(order)}`,
     `Purchase channel preference: ${intent?.purchaseChannelHint ?? "Not specified"}`,
-    `User price reference: ${intent?.userPriceHint ?? "Not specified"}`,
+    `Store hint: ${intent?.storeNameHint ?? "Not specified"}`,
+    `Merchant link hint: ${intent?.merchantLinkHint ?? "Not specified"}`,
+    `User price reference: ${intent?.userPriceHint ?? "Not specified"}`
+  ];
+}
+
+function processingCardMessage(input: {
+  actorRef: string;
+  startedAt: string;
+  requestText: string;
+}): string {
+  return [
+    "拼单请求处理中 / PoolMate request processing.",
+    `Started by: ${input.actorRef}`,
+    `Started at: ${input.startedAt}`,
+    `Request: ${input.requestText}`,
+    "LLM is extracting item, expected quantity, channel, store, and link.",
+    "No checkout, confirmation, or payment exists yet."
+  ].join("\n");
+}
+
+function collectingCardMessage(input: {
+  order: OrderDetailView;
+  actorRef: string;
+  startedAt: string;
+}): string {
+  const { order } = input;
+  const delta = order.claimedUnits - order.targetUnits;
+  const quantityStatus =
+    delta === 0
+      ? "at expected quantity"
+      : delta < 0
+        ? `${Math.abs(delta)} under expected`
+        : `${delta} over expected`;
+  return [
+    orderMessage("Pool is open for claims.", order),
+    `Started by: ${input.actorRef}`,
+    `Started at: ${input.startedAt}`,
+    ...purchaseIntentLines(order),
+    `Claimed now: ${order.claimedUnits}/${order.targetUnits} units (${quantityStatus}).`,
     "Current execution mode: Demo Merchant (Mock).",
     "The requested channel is preserved as user intent, but no live channel integration is implied.",
-    "Final merchant, payee, and amount will come only from a verified Checkout.",
-    "No checkout, confirmation, or payment exists yet."
+    "Other group members can claim now. The owner can request the final quote with fewer, exact, or more claimed units.",
+    "Final merchant, payee, and amount will come only from a verified Checkout."
   ].join("\n");
 }
 
@@ -172,10 +221,42 @@ function fieldNames(fields: string[]): string {
       if (field === "targetUnits") return "target quantity";
       if (field === "itemName") return "product";
       if (field === "purchaseChannelHint") return "purchase channel";
+      if (field === "storeNameHint") return "store name";
+      if (field === "merchantLinkHint") return "merchant link";
       if (field === "userPriceHint") return "reference price";
       return field;
     })
     .join(", ");
+}
+
+function messageStartedAt(context: PoolMateContext): string {
+  const seconds = context.message?.date;
+  if (typeof seconds === "number" && Number.isFinite(seconds)) {
+    return new Date(seconds * 1_000).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+async function editStatusCard(
+  context: PoolMateContext,
+  message: { chat: { id: number | string }; message_id: number },
+  text: string,
+  replyMarkup?: InlineKeyboard
+): Promise<void> {
+  const options = {
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    link_preview_options: { is_disabled: true }
+  };
+  try {
+    await context.api.editMessageText(
+      message.chat.id,
+      message.message_id,
+      text,
+      options
+    );
+  } catch {
+    await context.reply(text, options);
+  }
 }
 
 function trustedConfirmationUrl(value: string): URL | null {
@@ -628,8 +709,12 @@ export function registerPoolHandlers(
         return;
       }
 
-      await context.reply(
-        "Request received. PoolMate is parsing the order draft now."
+      const currentActor = actor(context);
+      const actorRef = actorReference(context, currentActor);
+      const startedAt = messageStartedAt(context);
+      const processingCard = await context.reply(
+        processingCardMessage({ actorRef, startedAt, requestText }),
+        { link_preview_options: { is_disabled: true } }
       );
 
       try {
@@ -647,18 +732,26 @@ export function registerPoolHandlers(
           extraction.itemName === null ||
           extraction.targetUnits === null
         ) {
-          await context.reply(
-            `I need an unambiguous ${fieldNames(unresolved)} before creating a draft. No order was created.`
+          await editStatusCard(
+            context,
+            processingCard,
+            [
+              "PoolMate needs more information before opening this pool.",
+              `Started by: ${actorRef}`,
+              `Started at: ${startedAt}`,
+              `Missing or ambiguous: ${fieldNames(unresolved)}.`,
+              "No order, checkout, confirmation, or payment was created."
+            ].join("\n")
           );
           return;
         }
-        const order = await useCases.createDraft({
+        const order = await useCases.createPool({
           sourceIdempotencyKey: telegramUpdateIdempotencyKey(
             context.update.update_id
           ),
           telegramChatId,
           telegramChatTitle: context.chat.title ?? "Telegram group",
-          actor: actor(context),
+          actor: currentActor,
           title: extraction.title,
           targetUnits: extraction.targetUnits,
           intent: orderIntent(requestText, "telegram_natural_language", {
@@ -666,12 +759,17 @@ export function registerPoolHandlers(
             targetUnits: extraction.targetUnits,
             unit: extraction.unit,
             purchaseChannelHint: extraction.purchaseChannelHint,
+            storeNameHint: extraction.storeNameHint,
+            merchantLinkHint: extraction.merchantLinkHint,
             userPriceHint: extraction.userPriceHint
           })
         });
-        await context.reply(draftReviewMessage(order), {
-          reply_markup: draftOrderKeyboard(order.id)
-        });
+        await editStatusCard(
+          context,
+          processingCard,
+          collectingCardMessage({ order, actorRef, startedAt }),
+          collectingOrderKeyboard(order.id)
+        );
       } catch (error) {
         if (error instanceof OrderDraftExtractorError) {
           console.error(`[telegram] draft parsing failed code=${error.code}`);
@@ -683,7 +781,17 @@ export function registerPoolHandlers(
                 : error.code === "LLM_INVALID_RESPONSE"
                   ? "The model returned an invalid order draft. Please retry the same request. No order was created."
                   : "Natural-language draft parsing is unavailable. Use /pool_new <targetUnits> <title>.";
-          await context.reply(message);
+          await editStatusCard(
+            context,
+            processingCard,
+            [
+              "PoolMate could not open this pool.",
+              `Started by: ${actorRef}`,
+              `Started at: ${startedAt}`,
+              message,
+              "No order, checkout, confirmation, or payment was created."
+            ].join("\n")
+          );
           return;
         }
         throw error;

@@ -375,6 +375,14 @@ function OrderDetail({
               <dd>{order.intent.purchaseChannelHint ?? "Not specified"}</dd>
             </div>
             <div>
+              <dt>Store hint</dt>
+              <dd>{order.intent.storeNameHint ?? "Not specified"}</dd>
+            </div>
+            <div>
+              <dt>Merchant link hint</dt>
+              <dd>{order.intent.merchantLinkHint ?? "Not specified"}</dd>
+            </div>
+            <div>
               <dt>User price reference</dt>
               <dd>{order.intent.userPriceHint ?? "Not specified"}</dd>
             </div>

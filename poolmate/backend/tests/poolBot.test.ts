@@ -190,7 +190,15 @@ function createUseCases(
       },
       createPool: async (input) => {
         calls.create.push(input);
-        return baseOrder;
+        return {
+          ...baseOrder,
+          title: input.title,
+          targetUnits: input.targetUnits,
+          claimedUnits: 0,
+          participantCount: 0,
+          participants: [],
+          intent: input.intent
+        };
       },
       claimPool: async (input) => {
         calls.claim.push(input);
@@ -271,6 +279,21 @@ function createHarness(
         ok: true,
         result: {
           message_id: apiCalls.length,
+          date: 1_753_405_200,
+          chat: {
+            id: Number(chatId),
+            type: Number(chatId) < 0 ? "group" : "private",
+            title: "Friday Pool"
+          },
+          text: String((payload as { text: string }).text)
+        }
+      } as never;
+    }
+    if (method === "editMessageText") {
+      return {
+        ok: true,
+        result: {
+          message_id: (payload as { message_id: number }).message_id,
           date: 1_753_405_200,
           chat: {
             id: Number(chatId),
@@ -531,11 +554,13 @@ test("claim and leave replies identify the Telegram actor by @username", async (
 
 test("natural language accepts exact username text and Telegram bot mention entities", async () => {
   let extracted = 0;
+  const naturalRequest =
+    "拼单 3瓶可乐，美团外卖 xx店铺名 https://example.test/item";
   const extractor: OrderDraftExtractor = {
     getStatus: () => "configured",
     async extract(request) {
       extracted += 1;
-      assert.equal(request.text, "拼单 3瓶可乐，美团外卖");
+      assert.equal(request.text, naturalRequest);
       assert.equal(request.locale, "zh");
       return {
         title: "可乐拼单",
@@ -543,6 +568,8 @@ test("natural language accepts exact username text and Telegram bot mention enti
         targetUnits: 3,
         unit: "瓶",
         purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item",
         userPriceHint: null,
         missingFields: [],
         ambiguousFields: []
@@ -559,20 +586,20 @@ test("natural language accepts exact username text and Telegram bot mention enti
 
   await bot.handleUpdate(textUpdate(110, "今晚吃什么"));
   await bot.handleUpdate(
-    textUpdate(108, "@poolmate_test_bot_extra 拼单 3瓶可乐，美团外卖")
+    textUpdate(108, `@poolmate_test_bot_extra ${naturalRequest}`)
   );
   await bot.handleUpdate(
-    textUpdate(109, "@poolmate_test_bot 拼单 3瓶可乐，美团外卖")
+    textUpdate(109, `@poolmate_test_bot ${naturalRequest}`)
   );
   await bot.handleUpdate(
-    textUpdate(111, "@poolmate_test_bot 拼单 3瓶可乐，美团外卖", true)
+    textUpdate(111, `@poolmate_test_bot ${naturalRequest}`, true)
   );
   await bot.handleUpdate(
-    textUpdate(112, "PoolMate 拼单 3瓶可乐，美团外卖", "text_mention")
+    textUpdate(112, `PoolMate ${naturalRequest}`, "text_mention")
   );
 
   assert.equal(extracted, 3);
-  assert.deepEqual(calls.draft, [
+  assert.deepEqual(calls.create, [
     {
       sourceIdempotencyKey: "telegram:update:v1:109",
       telegramChatId: "-500",
@@ -582,10 +609,12 @@ test("natural language accepts exact username text and Telegram bot mention enti
       targetUnits: 3,
       intent: {
         schemaVersion: "poolmate-order-intent-v1",
-        originalText: "拼单 3瓶可乐，美团外卖",
+        originalText: naturalRequest,
         source: "telegram_natural_language",
         items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
-        purchaseChannelHint: "美团外卖"
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
       }
     },
     {
@@ -597,10 +626,12 @@ test("natural language accepts exact username text and Telegram bot mention enti
       targetUnits: 3,
       intent: {
         schemaVersion: "poolmate-order-intent-v1",
-        originalText: "拼单 3瓶可乐，美团外卖",
+        originalText: naturalRequest,
         source: "telegram_natural_language",
         items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
-        purchaseChannelHint: "美团外卖"
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
       }
     },
     {
@@ -612,50 +643,62 @@ test("natural language accepts exact username text and Telegram bot mention enti
       targetUnits: 3,
       intent: {
         schemaVersion: "poolmate-order-intent-v1",
-        originalText: "拼单 3瓶可乐，美团外卖",
+        originalText: naturalRequest,
         source: "telegram_natural_language",
         items: [{ name: "可乐", quantity: 3, unit: "瓶" }],
-        purchaseChannelHint: "美团外卖"
+        purchaseChannelHint: "美团外卖",
+        storeNameHint: "xx店铺名",
+        merchantLinkHint: "https://example.test/item"
       }
     }
   ]);
-  assert.equal(calls.create.length, 0);
+  assert.equal(calls.draft.length, 0);
   assert.equal(calls.publish.length, 0);
   const processingReplies = apiCalls.filter(
     (call) =>
       call.method === "sendMessage" &&
-      /Request received/.test(String(call.payload.text))
+      /拼单请求处理中/.test(String(call.payload.text))
   );
   assert.equal(processingReplies.length, 3);
+  assert.match(
+    String(processingReplies[0]?.payload.text),
+    /Started by: @alice/
+  );
+  assert.match(String(processingReplies[0]?.payload.text), /Started at:/);
   const reply = apiCalls.find(
     (call) =>
-      call.method === "sendMessage" &&
-      /Draft created for review/.test(String(call.payload.text))
+      call.method === "editMessageText" &&
+      /Pool is open for claims/.test(String(call.payload.text))
   );
-  assert.match(String(reply?.payload.text), /State: DRAFT/);
+  assert.match(String(reply?.payload.text), /State: COLLECTING/);
   assert.match(String(reply?.payload.text), /Requested item: 可乐/);
   assert.match(String(reply?.payload.text), /Requested quantity: 3 瓶/);
   assert.match(
     String(reply?.payload.text),
     /Purchase channel preference: 美团外卖/
   );
+  assert.match(String(reply?.payload.text), /Store hint: xx店铺名/);
+  assert.match(
+    String(reply?.payload.text),
+    /Merchant link hint: https:\/\/example\.test\/item/
+  );
   assert.match(String(reply?.payload.text), /Demo Merchant \(Mock\)/);
   assert.match(String(reply?.payload.text), /no live channel integration/);
   assert.match(String(reply?.payload.text), /verified Checkout/);
   assert.match(
     String(reply?.payload.text),
-    /No checkout, confirmation, or payment/
+    /fewer, exact, or more claimed units/
   );
   const keyboard = reply?.payload.reply_markup as {
     inline_keyboard: Array<Array<{ callback_data: string }>>;
   };
   assert.equal(
     keyboard.inline_keyboard[0][0]?.callback_data,
-    publishDraftCallbackData("order-1")
+    claimCallbackData("order-1", 1)
   );
   assert.equal(
-    keyboard.inline_keyboard[0][1]?.callback_data,
-    discardDraftCallbackData("order-1")
+    keyboard.inline_keyboard[1][0]?.callback_data,
+    quoteCallbackData("order-1")
   );
 });
 
@@ -669,6 +712,8 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
         targetUnits: null,
         unit: null,
         purchaseChannelHint: null,
+        storeNameHint: null,
+        merchantLinkHint: null,
         userPriceHint: null,
         missingFields: ["targetUnits"],
         ambiguousFields: []
@@ -692,13 +737,15 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
     textUpdate(120, "@poolmate_test_bot 拼水果", true)
   );
   assert.equal(first.calls.draft.length, 0);
+  assert.equal(first.calls.create.length, 0);
   assert.match(
     String(firstHarness.apiCalls[0]?.payload.text),
-    /Request received/
+    /拼单请求处理中/
   );
   const missingReply = firstHarness.apiCalls.find((call) =>
     /target quantity/.test(String(call.payload.text))
   );
+  assert.equal(missingReply?.method, "editMessageText");
   assert.match(String(missingReply?.payload.text), /target quantity/);
 
   const second = createUseCases();
@@ -712,6 +759,7 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
     textUpdate(121, "@poolmate_test_bot 拼三箱水果", true)
   );
   assert.equal(second.calls.draft.length, 0);
+  assert.equal(second.calls.create.length, 0);
   assert.match(String(secondHarness.apiCalls[0]?.payload.text), /\/pool_new/);
 });
 
