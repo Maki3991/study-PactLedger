@@ -82,7 +82,9 @@ npm run dev
 ### PandaAI
 
 - 无账号时：`PANDA_DATA_MODE=auto` 自动选择确定性 Replay。
-- 有账号时：服务端 Python bridge 调用 `panda_data==0.0.12` 的 `get_stock_daily_pre`。
+- 有账号时：服务端 Python bridge 调用 `panda_data==0.0.12` 的 `get_stock_daily_pre`、`get_stock_detail`、`get_stock_industry` 与 `get_index_daily`；后三个增强接口独立容错，不会让已成功的真实个股日线降级为 Replay。
+- `POST /api/stocks/recommendations` 使用 `get_index_weights` 构建沪深 300 有界候选池，再批量调用 `get_stock_detail`、`get_stock_daily_pre` 与 `get_index_daily` 计算相对收益、区间 Beta 和流动性；PandaData 不可用时返回稳定错误，不允许用 Replay 伪装推荐。
+- 官方目录中的 `get_stock_pv_indicator` 与 `get_stock_recommendation_consensus` 在 `panda-data==0.0.12` 实测只接受港股代码格式，因此 A 股候选雷达不依赖这两个接口。
 - 纯大陆手机号用户名会自动规范化为 `86 + 手机号`；已带国家码的用户名保持不变。
 - `DEEPSEEK_API_KEY` 存在时，DeepSeek V4 Pro 是主模型；未配置时才使用 `ARK_API_KEY` 对应的 Ark endpoint，最后回退模板。
 - 模型只生成基于回测证据的解释文本，不负责决定交易。

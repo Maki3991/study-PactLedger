@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DecisionRecord, QuantEvidence, StrategyProposal } from '../../src/domain/trading.js'
+import type { DecisionRecord } from '../../src/domain/trading.js'
 import { AgentMemory } from './agentMemory.js'
 
 function makeRecord(overrides: Partial<DecisionRecord> = {}): DecisionRecord {
@@ -68,6 +68,20 @@ test('AgentMemory findBySymbol returns empty for unknown symbol', async () => {
   assert.equal(found.length, 0)
 })
 
+test('AgentMemory findRecent returns complete records newest first and respects limit', async () => {
+  const memory = new AgentMemory()
+  await memory.initialize()
+  await memory.save(makeRecord({ id: 'DEC-OLD', createdAt: '2026-07-23T00:00:00.000Z' }))
+  await memory.save(makeRecord({ id: 'DEC-NEW', symbol: '600000.SH', createdAt: '2026-07-25T00:00:00.000Z' }))
+
+  const found = await memory.findRecent(1)
+  assert.equal(found.length, 1)
+  assert.equal(found[0].id, 'DEC-NEW')
+  assert.equal(found[0].symbol, '600000.SH')
+  assert.equal(found[0].proposals.length, 1)
+  assert.equal(found[0].evidence.provider, 'replay')
+})
+
 test('AgentMemory getRecentContext returns formatted text', async () => {
   const memory = new AgentMemory()
   await memory.initialize()
@@ -79,6 +93,12 @@ test('AgentMemory getRecentContext returns formatted text', async () => {
   assert.ok(context.includes('决策记录'))
   assert.ok(context.includes('牛市'))
   assert.ok(context.includes('V1'))
+
+  const references = await memory.getRecentReferences(30)
+  assert.equal(references.length, 2)
+  assert.deepEqual(Object.keys(references[0]).sort(), [
+    'createdAt', 'date', 'id', 'marketRegime', 'selectedStrategy', 'symbol',
+  ])
 })
 
 test('AgentMemory count starts at zero', async () => {

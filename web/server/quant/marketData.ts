@@ -3,8 +3,14 @@ import { fileURLToPath } from 'node:url'
 import type { PandaDataConfig } from '../config/panda.js'
 import type { MarketDataProvider, MarketDataQuery, MarketDataResult, PriceBar } from './types.js'
 
+type MarketDataEnrichment = NonNullable<MarketDataResult['enrichment']>
+
 interface BridgeResponse {
   bars?: PriceBar[]
+  stockProfile?: MarketDataEnrichment['stockProfile']
+  industry?: MarketDataEnrichment['industry']
+  benchmark?: { symbol: string; bars: PriceBar[] }
+  sources?: MarketDataEnrichment['sources']
   error?: string
 }
 
@@ -21,6 +27,21 @@ export class PandaDataProvider implements MarketDataProvider {
     if (bars.length < 60) throw new Error(`PandaData returned only ${bars.length} valid daily bars; at least 60 are required`)
     return {
       bars,
+      enrichment: {
+        ...(response.stockProfile ? { stockProfile: response.stockProfile } : {}),
+        ...(response.industry ? { industry: response.industry } : {}),
+        ...(response.benchmark ? {
+          benchmark: {
+            symbol: response.benchmark.symbol,
+            bars: response.benchmark.bars.filter((bar) => Number.isFinite(bar.close) && bar.close > 0),
+          },
+        } : {}),
+        sources: response.sources ?? [{
+          method: 'get_stock_daily_pre',
+          status: 'used',
+          recordCount: bars.length,
+        }],
+      },
       provider: 'panda-data',
       configured: true,
       sourceMethod: 'get_stock_daily_pre',
@@ -36,6 +57,22 @@ export class ReplayMarketDataProvider implements MarketDataProvider {
   async fetchDaily(query: MarketDataQuery): Promise<MarketDataResult> {
     return {
       bars: createReplayBars(query),
+      enrichment: {
+        sources: [
+          {
+            method: 'get_stock_daily_pre',
+            status: 'skipped',
+            recordCount: 0,
+            note: 'Replay 模式未调用 PandaData。',
+          },
+          ...(['get_stock_detail', 'get_stock_industry', 'get_index_daily'] as const).map((method) => ({
+            method,
+            status: 'skipped' as const,
+            recordCount: 0,
+            note: 'Replay 模式未调用该增强接口。',
+          })),
+        ],
+      },
       provider: 'replay',
       configured: false,
       sourceMethod: 'deterministic_replay',

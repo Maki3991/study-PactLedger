@@ -24,11 +24,23 @@ test('DeepSeek narrator calls chat completions with the required V4 Pro model', 
       endpointId: 'deepseek-v4-pro',
       timeoutMs: 1_000,
     })
-    const summary = await narrator.summarize(taskInput, evidence, candidates)
+    const summary = await narrator.summarize(taskInput, evidence, candidates, {
+      stockProfile: { symbol: '000001.SZ', name: '平安银行', status: 1, boardType: '主板' },
+      industry: { code: '801780', name: '银行', level: 'L1' },
+      benchmark: {
+        symbol: '000300.SH', bars: [], alignedBarCount: 120,
+        assetReturnPct: 8, benchmarkReturnPct: 5, excessReturnPct: 3,
+        correlation: 0.72, beta: 1.08,
+      },
+      sources: [],
+    })
     assert.equal(summary, '证据充分。本结果不构成投资建议。')
     assert.equal(requestBody?.model, 'deepseek-v4-pro')
     assert.equal(requestBody?.stream, false)
     assert.ok(Array.isArray(requestBody?.messages))
+    const messages = requestBody?.messages as Array<{ content: string }>
+    assert.match(messages[0].content, /一级行业: 银行/)
+    assert.match(messages[0].content, /超额收益=3%/)
   } finally {
     globalThis.fetch = originalFetch
   }

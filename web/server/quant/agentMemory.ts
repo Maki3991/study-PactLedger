@@ -1,5 +1,5 @@
 import type { Pool } from 'pg'
-import type { DecisionRecord, QuantEvidence } from '../../src/domain/trading.js'
+import type { DecisionRecord, KnowledgeReference, QuantEvidence } from '../../src/domain/trading.js'
 import type { StrategyProposal } from '../../src/domain/trading.js'
 
 export class AgentMemory {
@@ -89,51 +89,94 @@ export class AgentMemory {
     }))
   }
 
-  async getRecentContext(days: number): Promise<string> {
-    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
-    let records: DecisionRecord[]
+  async findRecent(limit = 20): Promise<DecisionRecord[]> {
     if (!this.pool) {
-      records = [...this.memory.values()]
-        .filter((r) => r.createdAt >= cutoff)
+      return [...this.memory.values()]
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .slice(0, 10)
-    } else {
-      const result = await this.pool.query<{
-        id: string; task_id: string; symbol: string; date: string;
-        market_regime: string | null; proposals_json: StrategyProposal[];
-        selected_strategy: string | null;
-        created_at: string;
-      }>(`
-        SELECT id, task_id, symbol, date, market_regime, proposals_json, selected_strategy, created_at
-        FROM agent_decisions
-        WHERE created_at >= $1
-        ORDER BY created_at DESC
-        LIMIT 10
-      `, [cutoff])
-      records = result.rows.map((row) => ({
-        id: row.id,
-        taskId: row.task_id,
-        symbol: row.symbol,
-        date: row.date,
-        marketRegime: row.market_regime ?? 'unknown',
-        proposals: typeof row.proposals_json === 'string'
-          ? JSON.parse(row.proposals_json) as StrategyProposal[]
-          : row.proposals_json,
-        selectedStrategy: row.selected_strategy ?? '',
-        evidence: {} as QuantEvidence,
-        createdAt: row.created_at,
-      }))
+        .slice(0, limit)
+        .map((record) => structuredClone(record))
     }
+    const result = await this.pool.query<{
+      id: string; task_id: string; symbol: string; date: string;
+      market_regime: string | null; proposals_json: StrategyProposal[];
+      selected_strategy: string | null; evidence_json: QuantEvidence;
+      created_at: string;
+    }>(`
+      SELECT id, task_id, symbol, date, market_regime, proposals_json, selected_strategy, evidence_json, created_at
+      FROM agent_decisions
+      ORDER BY created_at DESC
+      LIMIT $1
+    `, [limit])
+    return result.rows.map((row) => ({
+      id: row.id,
+      taskId: row.task_id,
+      symbol: row.symbol,
+      date: row.date,
+      marketRegime: row.market_regime ?? 'unknown',
+      proposals: typeof row.proposals_json === 'string'
+        ? JSON.parse(row.proposals_json) as StrategyProposal[]
+        : row.proposals_json,
+      selectedStrategy: row.selected_strategy ?? '',
+      evidence: typeof row.evidence_json === 'string'
+        ? JSON.parse(row.evidence_json) as QuantEvidence
+        : row.evidence_json,
+      createdAt: row.created_at,
+    }))
+  }
+
+  async getRecentContext(days: number): Promise<string> {
+    const records = await this.getRecentReferences(days)
     if (records.length === 0) return ''
-    const lines = records.map((r) =>
-      `${r.date} ${r.symbol} 市场=${r.marketRegime} 选择=${r.selectedStrategy}`
+    const lines = records.map((record) =>
+      `${record.date} ${record.symbol} 市场=${record.marketRegime} 选择=${record.selectedStrategy}`
     )
     return `最近 ${days} 天决策记录:\n${lines.join('\n')}`
+  }
+
+  async getRecentReferences(days: number, limit = 10): Promise<KnowledgeReference[]> {
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
+    if (!this.pool) {
+      return [...this.memory.values()]
+        .filter((r) => r.createdAt >= cutoff)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map(toKnowledgeReference)
+    }
+
+    const result = await this.pool.query<{
+      id: string; symbol: string; date: string; market_regime: string | null;
+      selected_strategy: string | null; created_at: string;
+    }>(`
+      SELECT id, symbol, date, market_regime, selected_strategy, created_at
+      FROM agent_decisions
+      WHERE created_at >= $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `, [cutoff, limit])
+    return result.rows.map((row) => ({
+      id: row.id,
+      symbol: row.symbol,
+      date: row.date,
+      marketRegime: row.market_regime ?? 'unknown',
+      selectedStrategy: row.selected_strategy ?? '',
+      createdAt: row.created_at,
+    }))
   }
 
   async count(): Promise<number> {
     if (!this.pool) return this.memory.size
     const result = await this.pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM agent_decisions')
     return Number(result.rows[0]?.count ?? 0)
+  }
+}
+
+function toKnowledgeReference(record: DecisionRecord): KnowledgeReference {
+  return {
+    id: record.id,
+    symbol: record.symbol,
+    date: record.date,
+    marketRegime: record.marketRegime,
+    selectedStrategy: record.selectedStrategy,
+    createdAt: record.createdAt,
   }
 }

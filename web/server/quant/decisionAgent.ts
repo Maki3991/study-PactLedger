@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type {
   DecisionContext,
   DecisionRecord,
+  KnowledgeReference,
   QuantEvidence,
+  ResearchMarketContext,
   StrategyCandidate,
   StrategyProposal,
 } from '../../src/domain/trading.js'
@@ -14,6 +16,11 @@ import type { ResearchNarrator } from './researchNarrator.js'
 export interface StrategyGenerationResult {
   proposals: StrategyProposal[]
   marketRegime: string
+}
+
+export interface KnowledgeContextResult {
+  status: 'used' | 'empty' | 'unavailable'
+  records: KnowledgeReference[]
 }
 
 export interface EvaluationResult {
@@ -32,6 +39,8 @@ export class DecisionAgent {
     constraints: { maxLossPct: number; maxAssetPct: number; budget: number },
     symbol: string,
     dateRange: { start: string; end: string },
+    knowledge?: KnowledgeContextResult,
+    marketContext?: ResearchMarketContext,
   ): Promise<StrategyGenerationResult> {
     const prices = bars.map((b) => b.close)
     const volatility = computeAnnualizedVolatility(bars)
@@ -51,13 +60,12 @@ export class DecisionAgent {
         maxAssetPct: constraints.maxAssetPct,
         budget: constraints.budget,
       },
+      ...(marketContext ? { marketContext } : {}),
     }
 
-    // 获取历史上下文（如果可用）
-    try {
-      context.historicalContext = await this.memory.getRecentContext(30)
-    } catch {
-      // 记忆不可用时静默降级
+    const resolvedKnowledge = knowledge ?? await this.loadKnowledgeContext(30)
+    if (resolvedKnowledge.records.length > 0) {
+      context.historicalContext = formatKnowledgeContext(resolvedKnowledge.records, 30)
     }
 
     const proposals = await this.narrator.proposeStrategies(context)
@@ -69,6 +77,15 @@ export class DecisionAgent {
       : classifyRegimeFromBars(bars)
 
     return { proposals, marketRegime }
+  }
+
+  async loadKnowledgeContext(days: number): Promise<KnowledgeContextResult> {
+    try {
+      const records = await this.memory.getRecentReferences(days)
+      return { status: records.length > 0 ? 'used' : 'empty', records }
+    } catch {
+      return { status: 'unavailable', records: [] }
+    }
   }
 
   async backtestProposals(
@@ -83,11 +100,12 @@ export class DecisionAgent {
 
   async evaluateAndRank(
     candidates: StrategyCandidate[],
-    context: { bars: PriceBar[]; marketRegime: string; symbol: string },
+    context: { bars: PriceBar[]; marketRegime: string; symbol: string; marketContext?: ResearchMarketContext },
   ): Promise<EvaluationResult> {
     return this.narrator.evaluateCandidates(candidates, {
       marketRegime: context.marketRegime,
       symbol: context.symbol,
+      marketContext: context.marketContext,
     })
   }
 
@@ -152,4 +170,11 @@ function classifyRegimeFromBars(bars: PriceBar[]): string {
   if (change < -0.15) return '熊市'
   if (vol < 0.12) return '低波动震荡'
   return '震荡'
+}
+
+function formatKnowledgeContext(records: KnowledgeReference[], days: number): string {
+  const lines = records.map((record) =>
+    `${record.date} ${record.symbol} 市场=${record.marketRegime} 选择=${record.selectedStrategy}`
+  )
+  return `最近 ${days} 天决策记录:\n${lines.join('\n')}`
 }

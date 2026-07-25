@@ -1,4 +1,12 @@
-import type { QuantEvidence, StrategyCandidate } from '../../src/domain/trading.js'
+import type {
+  CompletedResearchArtifacts,
+  QuantEvidence,
+  ResearchDataSourceEvidence,
+  ResearchIndustryContext,
+  ResearchPriceBar,
+  ResearchStockProfile,
+  StrategyCandidate,
+} from '../../src/domain/trading.js'
 
 export interface PriceBar {
   date: string
@@ -14,6 +22,12 @@ export interface MarketDataQuery {
 
 export interface MarketDataResult {
   bars: PriceBar[]
+  enrichment?: {
+    stockProfile?: ResearchStockProfile
+    industry?: ResearchIndustryContext
+    benchmark?: { symbol: string; bars: ResearchPriceBar[] }
+    sources: ResearchDataSourceEvidence[]
+  }
   provider: QuantEvidence['provider']
   configured: boolean
   sourceMethod: QuantEvidence['sourceMethod']
@@ -31,5 +45,6 @@ export interface QuantAnalysis {
   candidates: StrategyCandidate[]
   winner: StrategyCandidate
   evidence: QuantEvidence
+  artifacts: CompletedResearchArtifacts
   researchSummary: string
 }

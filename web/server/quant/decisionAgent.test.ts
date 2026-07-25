@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { DecisionContext, QuantEvidence, StrategyCandidate, StrategyProposal } from '../../src/domain/trading.js'
+import type { QuantEvidence, StrategyCandidate } from '../../src/domain/trading.js'
 import { AgentMemory } from './agentMemory.js'
 import { DecisionAgent } from './decisionAgent.js'
 import type { ResearchNarrator } from './researchNarrator.js'
@@ -57,6 +57,48 @@ test('DecisionAgent generates strategies from price bars', async () => {
   assert.equal(result.proposals[0].id, 'v1')
   assert.equal(result.proposals[0].name, 'AI双均线')
   assert.ok(result.marketRegime.length > 0)
+})
+
+test('DecisionAgent exposes the exact recent decision references passed as knowledge context', async () => {
+  const memory = new AgentMemory()
+  await memory.initialize()
+  const now = new Date().toISOString()
+  await memory.save({
+    id: 'DEC-CONTEXT',
+    taskId: 'task-before',
+    symbol: '600519.SH',
+    date: now.slice(0, 10),
+    marketRegime: '震荡',
+    proposals: [],
+    selectedStrategy: 'V2-A',
+    evidence: {
+      provider: 'panda-data', configured: true, sourceMethod: 'get_stock_daily_pre',
+      sdkVersion: '0.0.12', adjustment: 'pre-adjusted', skill: 'QuantSkills/pandadata-api',
+      symbol: '600519.SH', startDate: '20260101', endDate: '20260724',
+      barCount: 120, fetchedAt: now, note: 'test',
+    },
+    createdAt: now,
+  })
+  let receivedContext = ''
+  const narrator = createMockNarrator({
+    proposeStrategies: async (context) => {
+      receivedContext = context.historicalContext ?? ''
+      return []
+    },
+  })
+  const agent = new DecisionAgent(narrator, memory)
+  const knowledge = await agent.loadKnowledgeContext(30)
+  await agent.generateStrategies(
+    createMockBars(),
+    { maxLossPct: 10, maxAssetPct: 30, budget: 1000 },
+    '000001.SZ',
+    { start: '20260101', end: '20260724' },
+    knowledge,
+  )
+
+  assert.equal(knowledge.status, 'used')
+  assert.equal(knowledge.records[0].id, 'DEC-CONTEXT')
+  assert.match(receivedContext, /600519\.SH 市场=震荡 选择=V2-A/)
 })
 
 test('DecisionAgent backtests proposals using deterministic engine', async () => {

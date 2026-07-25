@@ -2,28 +2,31 @@ import type {
   CreateTaskInput,
   DecisionContext,
   QuantEvidence,
+  ResearchMarketContext,
+  StockRecommendation,
   StrategyCandidate,
   StrategyProposal,
 } from '../../src/domain/trading.js'
 import type { PandaModelConfig } from '../config/pandaModel.js'
 
 export interface ResearchNarrator {
-  summarize(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[]): Promise<string>
+  summarize(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[], marketContext?: ResearchMarketContext): Promise<string>
   proposeStrategies(context: DecisionContext): Promise<StrategyProposal[]>
   evaluateCandidates(
     candidates: StrategyCandidate[],
-    context: { marketRegime: string; symbol: string },
+    context: { marketRegime: string; symbol: string; marketContext?: ResearchMarketContext },
   ): Promise<{ ranking: string[]; recommendation: string }>
+  explainStockRecommendations?(recommendations: StockRecommendation[], benchmarkSymbol: string): Promise<string>
 }
 
 export class PandaModelResearchNarrator implements ResearchNarrator {
   constructor(private readonly config: PandaModelConfig) {}
 
-  async summarize(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[]): Promise<string> {
+  async summarize(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[], marketContext?: ResearchMarketContext): Promise<string> {
     if (!this.config.apiKey || this.config.provider === 'template') {
       throw new Error('PandaAI model API key is not configured')
     }
-    const prompt = createPrompt(input, evidence, candidates)
+    const prompt = createPrompt(input, evidence, candidates, marketContext)
     const text = await this.callDeepSeek(prompt, 0.2, 1_024)
     return ensureRiskDisclaimer(text)
   }
@@ -34,12 +37,12 @@ export class PandaModelResearchNarrator implements ResearchNarrator {
     }
     const prompt = createProposePrompt(context)
     const text = await this.callDeepSeek(prompt, 0.5, 2_048)
-    return parseProposals(text, context.symbol, context.dateRange.start)
+    return parseProposals(text, context.symbol)
   }
 
   async evaluateCandidates(
     candidates: StrategyCandidate[],
-    context: { marketRegime: string; symbol: string },
+    context: { marketRegime: string; symbol: string; marketContext?: ResearchMarketContext },
   ): Promise<{ ranking: string[]; recommendation: string }> {
     if (!this.config.apiKey || this.config.provider === 'template') {
       throw new Error('PandaAI model API key is not configured')
@@ -47,6 +50,19 @@ export class PandaModelResearchNarrator implements ResearchNarrator {
     const prompt = createEvaluatePrompt(candidates, context)
     const text = await this.callDeepSeek(prompt, 0.3, 1_024)
     return parseEvaluation(text, candidates)
+  }
+
+  async explainStockRecommendations(recommendations: StockRecommendation[], benchmarkSymbol: string): Promise<string> {
+    if (!this.config.apiKey || this.config.provider === 'template') {
+      throw new Error('PandaAI model API key is not configured')
+    }
+    const prompt = [
+      '你是 A 股候选池研究解释 Agent。只能依据给出的 PandaData 指标，用不超过 120 字中文解释候选排序。',
+      '不得承诺收益，不得补造新闻或基本面；必须提醒用户继续核验回撤和仓位，并以“不构成投资建议”结尾。',
+      `候选池基准：${benchmarkSymbol}`,
+      `候选证据：${JSON.stringify(recommendations)}`,
+    ].join('\n')
+    return ensureRecommendationDisclaimer(await this.callDeepSeek(prompt, 0.2, 512))
   }
 
   private async callDeepSeek(prompt: string, temperature: number, maxTokens: number): Promise<string> {
@@ -92,9 +108,12 @@ export class PandaModelResearchNarrator implements ResearchNarrator {
 }
 
 export class TemplateResearchNarrator implements ResearchNarrator {
-  async summarize(_input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[]): Promise<string> {
+  async summarize(_input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[], marketContext?: ResearchMarketContext): Promise<string> {
     const winner = candidates.find((candidate) => candidate.status === 'approved') ?? candidates[0]
-    return `${evidence.symbol} 使用 ${evidence.provider} 的 ${evidence.barCount} 根日线完成验证。${winner.name} 在当前区间风险调整后表现最佳，但结果仅用于系统演示，不构成投资建议。`
+    const relative = marketContext?.benchmark
+      ? `相对 ${marketContext.benchmark.symbol} 超额收益为 ${marketContext.benchmark.excessReturnPct}%。`
+      : ''
+    return `${evidence.symbol} 使用 ${evidence.provider} 的 ${evidence.barCount} 根日线完成验证。${relative}${winner.name} 在当前区间风险调整后表现最佳，但结果仅用于系统演示，不构成投资建议。`
   }
 
   async proposeStrategies(context: DecisionContext): Promise<StrategyProposal[]> {
@@ -103,7 +122,6 @@ export class TemplateResearchNarrator implements ResearchNarrator {
 
   async evaluateCandidates(
     candidates: StrategyCandidate[],
-    _context: { marketRegime: string; symbol: string },
   ): Promise<{ ranking: string[]; recommendation: string }> {
     const sorted = [...candidates].sort((a, b) => b.sharpe - a.sharpe)
     return {
@@ -111,20 +129,30 @@ export class TemplateResearchNarrator implements ResearchNarrator {
       recommendation: `回测引擎按 Sharpe 比率排序，${sorted[0].name} 风险调整后表现最佳。`,
     }
   }
+
+  async explainStockRecommendations(recommendations: StockRecommendation[]): Promise<string> {
+    return `证据评分优先关注 ${recommendations.map((item) => `${item.name}（${item.symbol}）`).join('、')}，仍需逐只核验回撤与仓位。本结果不构成投资建议。`
+  }
 }
 
 export function createResearchNarrator(config: PandaModelConfig): ResearchNarrator {
   return config.apiKey ? new PandaModelResearchNarrator(config) : new TemplateResearchNarrator()
 }
 
-function createPrompt(input: CreateTaskInput, evidence: QuantEvidence, candidates: StrategyCandidate[]): string {
+function createPrompt(
+  input: CreateTaskInput,
+  evidence: QuantEvidence,
+  candidates: StrategyCandidate[],
+  marketContext?: ResearchMarketContext,
+): string {
   return [
     '你是股票量化研究解释 Agent。请只根据提供的回测证据写一段不超过 180 字的中文摘要。',
     '必须说明数据来源、区间、胜出策略、主要风险，并明确“不构成投资建议”。不要补造新闻、价格或基本面事实。',
     `任务：${input.objective}`,
     `数据：${JSON.stringify(evidence)}`,
+    formatMarketContext(marketContext),
     `候选策略：${JSON.stringify(candidates)}`,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 interface ModelResponsePayload {
@@ -152,6 +180,19 @@ function ensureRiskDisclaimer(value: string): string {
   return `${withoutDuplicate.slice(0, maxBodyLength)}${separator}${disclaimer}`
 }
 
+function ensureRecommendationDisclaimer(value: string): string {
+  const suffix = '仍需继续核验回撤与仓位。本结果不构成投资建议。'
+  const normalized = value.trim()
+  if (normalized.includes('不构成投资建议') && normalized.includes('回撤') && normalized.includes('仓位') && normalized.length <= 120) return normalized
+  const body = normalized
+    .replace(/(?:仍需|请)?(?:继续)?核验回撤与仓位[。.]?/g, '')
+    .replace(/(?:本结果)?不构成投资建议[。.]?/g, '')
+    .trim()
+    .replace(/[。.]$/, '')
+  const separator = body ? '。' : ''
+  return `${body.slice(0, Math.max(0, 120 - separator.length - suffix.length))}${separator}${suffix}`
+}
+
 // ── Strategy Proposal Prompts ──
 
 function createProposePrompt(context: DecisionContext): string {
@@ -165,13 +206,14 @@ function createProposePrompt(context: DecisionContext): string {
     `价格: 起始 ${context.priceSummary.start}, 结束 ${context.priceSummary.end}, 最低 ${context.priceSummary.min}, 最高 ${context.priceSummary.max}`,
     `波动率: ${context.priceSummary.volatility}`,
     `约束: 最大回撤 ≤${context.constraints.maxLossPct}%, 单股仓位 ≤${context.constraints.maxAssetPct}%, 预算 ${context.constraints.budget} USDT`,
+    formatMarketContext(context.marketContext),
     context.historicalContext ? `历史参考: ${context.historicalContext}` : '',
   ].filter(Boolean).join('\n')
 }
 
 function createEvaluatePrompt(
   candidates: StrategyCandidate[],
-  context: { marketRegime: string; symbol: string },
+  context: { marketRegime: string; symbol: string; marketContext?: ResearchMarketContext },
 ): string {
   const summary = candidates.map((c) =>
     `${c.name}: 收益 ${c.returnPct}%, 回撤 ${c.drawdownPct}%, Sharpe ${c.sharpe}, 胜率 ${c.winRate}%, OOS收益 ${c.oosReturn}%`
@@ -182,13 +224,30 @@ function createEvaluatePrompt(
     '不要任何额外文本。',
     `股票: ${context.symbol}`,
     `市场状态: ${context.marketRegime}`,
+    formatMarketContext(context.marketContext),
     `候选策略回测:\n${summary}`,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
+}
+
+function formatMarketContext(context?: ResearchMarketContext): string {
+  if (!context) return ''
+  const profile = context.stockProfile
+  const industry = context.industry
+  const benchmark = context.benchmark
+  return [
+    profile
+      ? `股票信息: 名称=${profile.name || profile.symbol}, 上市状态=${profile.status ?? '未知'}, 板块=${profile.boardType || '未知'}, 特殊类型=${profile.specialType || '无'}`
+      : '',
+    industry ? `一级行业: ${industry.name} (${industry.code})` : '',
+    benchmark
+      ? `基准证据: ${benchmark.symbol}, 对齐交易日=${benchmark.alignedBarCount}, 个股收益=${benchmark.assetReturnPct}%, 基准收益=${benchmark.benchmarkReturnPct}%, 超额收益=${benchmark.excessReturnPct}%, 相关性=${benchmark.correlation ?? '不可计算'}, Beta=${benchmark.beta ?? '不可计算'}`
+      : '',
+  ].filter(Boolean).join('\n')
 }
 
 // ── Parsing Helpers ──
 
-function parseProposals(text: string, symbol: string, date: string): StrategyProposal[] {
+function parseProposals(text: string, symbol: string): StrategyProposal[] {
   const cleaned = text.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '').trim()
   const jsonStart = cleaned.indexOf('[')
   const jsonEnd = cleaned.lastIndexOf(']') + 1

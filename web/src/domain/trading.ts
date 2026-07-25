@@ -74,6 +74,119 @@ export interface QuantEvidence {
   note: string
 }
 
+export interface ResearchPriceBar {
+  date: string
+  close: number
+  volume: number
+}
+
+export interface ResearchDataSourceEvidence {
+  method: 'get_stock_daily_pre' | 'get_stock_detail' | 'get_stock_industry' | 'get_index_daily'
+  status: 'used' | 'empty' | 'unavailable' | 'skipped'
+  recordCount: number
+  note?: string
+}
+
+export interface ResearchStockProfile {
+  symbol: string
+  name: string
+  status?: number
+  boardType?: string
+  specialType?: string
+  listedDate?: string
+  deListedDate?: string
+  minOrderAmount?: number
+}
+
+export interface ResearchIndustryContext {
+  code: string
+  name: string
+  level: 'L1'
+}
+
+export interface ResearchBenchmarkContext {
+  symbol: string
+  bars: ResearchPriceBar[]
+  alignedBarCount: number
+  assetReturnPct: number
+  benchmarkReturnPct: number
+  excessReturnPct: number
+  correlation?: number
+  beta?: number
+}
+
+export interface ResearchMarketContext {
+  stockProfile?: ResearchStockProfile
+  industry?: ResearchIndustryContext
+  benchmark?: ResearchBenchmarkContext
+  sources: ResearchDataSourceEvidence[]
+}
+
+export interface KnowledgeReference {
+  id: string
+  symbol: string
+  date: string
+  marketRegime: string
+  selectedStrategy: string
+  createdAt: string
+}
+
+export interface AgentEvolutionSnapshot {
+  agentId: 'evolution'
+  agentName: 'Evolution Agent'
+  iterationId: string
+  outcome: 'baseline_created' | 'champion_promoted' | 'champion_retained'
+  previousChampion?: {
+    decisionId: string
+    strategy: string
+    date: string
+  }
+  champion: {
+    strategyId: string
+    name: string
+    signal: string
+    returnPct: number
+    drawdownPct: number
+    sharpe: number
+    winRate: number
+  }
+  inputs: {
+    marketBars: number
+    knowledgeRecords: number
+    candidateCount: number
+  }
+  referencedDecisionIds: string[]
+  archive: {
+    status: 'knowledge_base' | 'task_snapshot_only'
+    decisionId?: string
+    note: string
+  }
+  reason: string
+  completedAt: string
+}
+
+export interface ResearchArtifacts {
+  marketData: ResearchPriceBar[]
+  marketContext?: ResearchMarketContext
+  knowledgeBase: {
+    status: 'used' | 'empty' | 'skipped' | 'unavailable'
+    lookbackDays: number
+    records: KnowledgeReference[]
+    note: string
+  }
+  analysis: {
+    mode: 'decision-agent' | 'deterministic'
+    marketRegime: string
+    proposals: StrategyProposal[]
+    evaluation: string
+  }
+  evolution?: AgentEvolutionSnapshot
+}
+
+export interface CompletedResearchArtifacts extends ResearchArtifacts {
+  evolution: AgentEvolutionSnapshot
+}
+
 export type IntentStatus =
   | 'submitted'
   | 'policy_rejected'
@@ -110,6 +223,7 @@ export interface TaskSnapshot {
   firewallRules: FirewallRule[]
   timeline: TimelineEvent[]
   quantEvidence?: QuantEvidence
+  researchArtifacts?: ResearchArtifacts
   researchSummary?: string
   actionIntent?: ActionIntent
   paymentTraces: PactLedgerTrace[]
@@ -227,5 +341,41 @@ export interface DecisionContext {
     maxAssetPct: number
     budget: number
   }
+  marketContext?: ResearchMarketContext
   historicalContext?: string
+}
+
+export interface StockRecommendation {
+  symbol: string
+  name: string
+  score: number
+  indexWeight?: number
+  rationale: string
+  metrics: {
+    close?: number
+    closeDate?: string
+    relativeReturn13w?: number
+    relativeReturn26w?: number
+    beta?: number
+    averageDailyValue3m?: number
+    analystPositiveRatio?: number
+    analystCount?: number
+  }
+}
+
+export interface StockRecommendationResult {
+  provider: 'panda-data'
+  benchmarkSymbol: string
+  universeSize: number
+  generatedAt: string
+  analysisMode: 'evidence-ranking' | 'evidence-ranking+deepseek'
+  modelSummary: string
+  recommendations: StockRecommendation[]
+  sources: Array<{
+    method: 'get_index_weights' | 'get_stock_detail' | 'get_stock_daily_pre' | 'get_index_daily'
+    status: 'used' | 'empty' | 'unavailable'
+    recordCount: number
+    note?: string
+  }>
+  disclaimer: string
 }

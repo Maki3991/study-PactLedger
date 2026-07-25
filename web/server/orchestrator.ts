@@ -104,13 +104,21 @@ export class TaskOrchestrator {
 
   private async runResearchFlow(taskId: string, input: CreateTaskInput): Promise<void> {
     try {
-      const analysis = await this.quantResearch.analyze(input)
+      const analysis = await this.quantResearch.analyze(input, taskId)
       if (this.closed) return
 
       await this.wait(1)
       await this.treasury.recordResearchPayment(taskId)
       await this.update(taskId, 'strategizing', (snapshot) => {
         snapshot.quantEvidence = analysis.evidence
+        snapshot.researchArtifacts = {
+          marketData: analysis.artifacts.marketData,
+          ...(analysis.artifacts.marketContext ? {
+            marketContext: structuredClone(analysis.artifacts.marketContext),
+          } : {}),
+          knowledgeBase: analysis.artifacts.knowledgeBase,
+          analysis: analysis.artifacts.analysis,
+        }
         snapshot.researchSummary = analysis.researchSummary
         setAgent(snapshot, 'research', 'complete', `${analysis.evidence.barCount} 根日线已归档`, '00:06')
         setAgent(snapshot, 'strategy', 'working', 'AI DecisionAgent 分析市场状态并生成策略提案', '00:01')
@@ -128,10 +136,12 @@ export class TaskOrchestrator {
       await this.treasury.recordBacktestPayment(taskId)
       await this.update(taskId, 'risk_review', (snapshot) => {
         snapshot.candidates = structuredClone(analysis.candidates)
+        if (snapshot.researchArtifacts) snapshot.researchArtifacts.evolution = analysis.artifacts.evolution
         setAgent(snapshot, 'backtest', 'complete', `${analysis.evidence.startDate}–${analysis.evidence.endDate} 回测完成`, '00:05')
-        setAgent(snapshot, 'evolution', 'complete', `${analysis.winner.name} 风险调整后表现最佳`, '00:02')
+        setAgent(snapshot, 'evolution', 'complete', evolutionAgentDetail(analysis.artifacts.evolution), '00:02')
         setAgent(snapshot, 'risk', 'working', '检查预算、回撤与单股仓位', '00:01')
         appendTimeline(snapshot, `${analysis.winner.name} 成为候选冠军`, `Sharpe ${analysis.winner.sharpe.toFixed(2)} · 最大回撤 ${analysis.winner.drawdownPct.toFixed(2)}%`, 'success')
+        appendTimeline(snapshot, 'Evolution Agent 完成本轮进化', analysis.artifacts.evolution.reason, 'success')
       })
 
       await this.wait(1)
@@ -253,4 +263,10 @@ function appendPaymentTrace(snapshot: TaskSnapshot, trace: PactLedgerTrace): voi
   if (!snapshot.paymentTraces.some((item) => item.intent.id === trace.intent.id)) {
     snapshot.paymentTraces.push(trace)
   }
+}
+
+function evolutionAgentDetail(evolution: NonNullable<NonNullable<TaskSnapshot['researchArtifacts']>['evolution']>): string {
+  if (evolution.outcome === 'baseline_created') return `${evolution.champion.name} 建立首轮能力基线`
+  if (evolution.outcome === 'champion_retained') return `${evolution.champion.name} 击败 Challenger 并卫冕`
+  return `${evolution.previousChampion?.strategy ?? '历史版本'} → ${evolution.champion.name} 完成晋级`
 }

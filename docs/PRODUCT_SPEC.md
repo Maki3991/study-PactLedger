@@ -10,7 +10,7 @@
 >
 > 产品类别：Agent Treasury / Agent Spend Control
 >
-> 运行时基线：lint / build / API tests `42/42` 已通过
+> 运行时基线：API tests `94/94` 已通过；全仓 build 当前被既有 `web/server/treasury-integration/` 类型问题阻塞，lint 另有既有脚本与 Hook 规则问题
 >
 > 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
 >
@@ -293,7 +293,7 @@ PactLedger 只理解：
 
 ### 4.3 Adapter 负责外部系统差异
 
-- PandaData Adapter：真实日线或明确 Replay。
+- PandaData Adapter：真实个股日线与可独立降级的股票信息、行业归属、基准指数上下文；候选雷达从沪深 300 权重构建有界股票池，用真实前复权日线计算相对收益、区间 Beta 与流动性，再由 DeepSeek 解释；主行情失败时才整体降级为明确 Replay，推荐接口失败时不生成 Replay 候选。
 - Model Adapter：基于证据生成解释，失败时使用模板，不影响确定性回测。
 - Settlement Adapter：Mock、Injective Testnet，未来可扩展其他网络。
 - A2A Adapter / Routes：将平台任务映射到内部任务流程。
@@ -327,6 +327,7 @@ KaleidoX 不是项目主产品，而是 PactLedger 的高风险参考应用：
 
 - PandaAI 只负责数据和证据解释，策略计算由确定性引擎生成，减少模型编造。
 - Champion–Challenger 同时比较多个版本，而不是让模型直接拍脑袋下单。
+- 每轮回测结束会生成持久化的 Evolution Agent 快照，区分首次基线、Champion 晋级与 Champion 卫冕，并关联历史知识、指标和本轮归档 ID。
 - 风控否决不是失败页面，而是 Demo 的核心转折。
 - Agent 之间用服务采购关系协作，能够形成可展示的内部经济。
 
@@ -340,7 +341,7 @@ KaleidoX 不是项目主产品，而是 PactLedger 的高风险参考应用：
 ### 5.5 KaleidoX 完成标准
 
 - 真实 PandaData 或明确 Replay。
-- 数据区间、来源、条数和策略版本可见。
+- 数据区间、来源、条数、完整个股/基准日线、股票身份、行业归属、相对收益/Beta、各接口状态、Agent 实际引用的知识库记录、策略版本与每轮 Evolution Agent 结果可见。
 - Policy 返回结构化检查结果。
 - 用户批准不可绕过。
 - 至少一笔 Risk 或 Execution 服务费在 Injective Testnet 确认。
@@ -403,11 +404,11 @@ P2：真实收款、批量退款、运费摊销和争议流程。
 | 能力 | 状态 | 当前证据 / 说明 |
 |---|---|---|
 | PactLedger 落地页与两个参考应用入口 | 已实现 | `web/src/landing/` 保持基座介绍与 KaleidoX / PoolMate 入口职责，`kaleidox.html`、`poolmate.html` 承载各自案例 |
-| KaleidoX 案例展板与任务工作区 | 已实现 | `kaleidox.html` 默认展示评委版案例展板，首屏可进入 `?view=workspace`；工作区支持配置任务、SSE 进度、Policy 纠偏、人工批准、Mock/Testnet 回执区分与同任务证据回显 |
+| KaleidoX 案例展板与任务工作区 | 已实现 | `kaleidox.html` 默认展示评委版案例展板，首屏可进入 `?view=workspace`；工作区支持配置任务、SSE 进度、Policy 纠偏、人工批准、Mock/Testnet 回执区分与同任务证据回显；研究步骤可展开核验知识库与完整日线，回测轮结束后展示持久化 Evolution Agent、Champion 变化、指标、归档和不可进化的资金权限边界 |
 | 用户注册、登录、会话隔离 | 已实现 | Fastify 鉴权与 PostgreSQL 用户/会话表 |
 | 任务状态机与 SSE 更新 | 已实现 | `web/server/orchestrator.ts`、`/api/tasks/:id/events` |
 | PostgreSQL 任务持久化 | 已实现 | 任务快照、owner 隔离与恢复 |
-| PandaData 股票日线 | 已接入 | 已真实调用 `get_stock_daily_pre` 获取 `000001.SZ` 共 134 根日线（2025-01-02 至 2025-07-23）；无凭证时明确 Replay，生产新版本待部署 |
+| PandaData 股票、市场上下文与候选雷达 | 已接入 | 单股任务真实调用 `get_stock_daily_pre`、`get_stock_detail`、`get_stock_industry`、`get_index_daily`；候选雷达真实调用 `get_index_weights`、`get_stock_detail`、批量 `get_stock_daily_pre` 与 `get_index_daily`，对沪深 300 有界候选池做可复算评分，DeepSeek 只解释证据。真实验证 40 只候选、5,800 行个股日线与 145 行指数日线；推荐接口不使用 Replay，生产新版本待部署 |
 | 确定性策略与回测 | 已实现 | 三个候选策略、手续费、回撤、Sharpe、样本外结果 |
 | 模型研究解释 | 已接入 | DeepSeek V4 Pro 为主模型并已真实返回 HTTP `200`；Ark 为后备，无 Key 时模板降级，生产新版本待部署 |
 | Agent 内部账户与流水 | 已实现 | 任务级账户分配、采购与审计流水 |
@@ -821,7 +822,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - DeepSeek V4 Pro 完成 3 个 A2A 示例任务，均小于 20 分钟并带风险提示。
 - 保存 PandaData 数据源、股票代码、日期区间和数据量证据。
 - 保存 Injective Explorer、Receipt JSON、数据库查询和 Mock 降级画面。
-- 保存 lint、build、API tests `42/42` 与生产 Smoke 结果。
+- 保存 API tests `94/94` 结果；修复既有 `web/server/treasury-integration/` 质量门问题后，再保存全仓 lint、build 与生产 Smoke 结果。
 
 ### P1：提升完整度
 
@@ -938,7 +939,8 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - [x] Mock / Replay / Testnet / Live 在 UI 和 API 中无歧义。
 - [ ] A2A Agent Card 与任务端点在生产 Fastify 服务可访问。
 - [ ] PandaAI 使用的底座模型、Skills 清单和鉴权方式符合赛题要求，3 个示例任务在 20 分钟内完成并包含风险提示。
-- [x] 本地 lint、build 与 API tests `42/42` 全部通过。
+- [x] 本地 API tests `94/94` 全部通过。
+- [ ] 全仓 lint、build 通过（build 当前被既有 `web/server/treasury-integration/` 类型问题阻塞，lint 另有既有脚本与 Hook 规则问题）。
 - [ ] 最新 Fastify 已部署，生产 smoke 全部通过。
 - [ ] 网络失败时能安全降级，且不伪造链上证据。
 

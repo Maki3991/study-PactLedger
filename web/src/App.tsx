@@ -1,9 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   ArrowRight,
   Bot,
+  BrainCircuit,
+  ChartNoAxesCombined,
   Check,
   ChevronDown,
   Circle,
@@ -20,18 +23,23 @@ import {
   Play,
   Presentation,
   RotateCcw,
+  ScanSearch,
   ShieldCheck,
   SlidersHorizontal,
   WalletCards,
   Workflow,
+  Trophy,
   Zap,
 } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import type {
   AgentRun,
+  AgentEvolutionSnapshot,
   CreateTaskInput,
   InjectiveConfigStatus,
   PandaConfigStatus,
+  ResearchArtifacts,
+  StockRecommendationResult,
   TaskPhase,
   TaskSnapshot,
 } from './domain/trading'
@@ -42,6 +50,7 @@ import { useBotStatus } from './services/useBotStatus'
 import { useInjectiveConfig } from './services/useInjectiveConfig'
 import { usePandaConfig } from './services/usePandaConfig'
 import { useTaskWorkflow } from './services/useTaskWorkflow'
+import { getStockRecommendations } from './services/taskClient'
 
 const presets = [
   { symbol: '000001.SZ', name: '平安银行' },
@@ -385,6 +394,9 @@ interface TaskBuilderProps {
 }
 
 function TaskBuilder({ canStart, draft, inputError, onChange, onSubmit, submitting, task }: TaskBuilderProps) {
+  const [recommendations, setRecommendations] = useState<StockRecommendationResult>()
+  const [recommendationError, setRecommendationError] = useState<string>()
+  const [recommendationPending, setRecommendationPending] = useState(false)
   const taskRunning = Boolean(task && !['executed', 'failed'].includes(task.phase))
   const submitLabel = submitting
     ? '正在创建任务…'
@@ -425,6 +437,53 @@ function TaskBuilder({ canStart, draft, inputError, onChange, onSubmit, submitti
               <strong>{preset.name}</strong><span>{preset.symbol}</span>
             </button>
           ))}
+        </div>
+
+        <div className="kx-stock-radar">
+          <button
+            type="button"
+            className="kx-stock-radar-trigger"
+            disabled={!canStart || recommendationPending}
+            onClick={() => {
+              setRecommendationPending(true)
+              setRecommendationError(undefined)
+              void getStockRecommendations(3)
+                .then(setRecommendations)
+                .catch((error: unknown) => setRecommendationError(error instanceof Error ? error.message : '候选生成失败'))
+                .finally(() => setRecommendationPending(false))
+            }}
+          >
+            {recommendationPending ? <LoaderCircle size={14} className="spin" /> : <ScanSearch size={14} />}
+            <span>{recommendationPending ? '正在读取真实候选…' : 'AI 候选雷达'}</span>
+            <small>沪深 300 · PandaData</small>
+          </button>
+          {recommendationError && <p className="kx-stock-radar-error" role="alert">{recommendationError}</p>}
+          {recommendations && (
+            <div className="kx-stock-radar-result" aria-live="polite">
+              <div className="kx-stock-radar-meta">
+                <span>{recommendations.analysisMode === 'evidence-ranking+deepseek' ? 'DeepSeek 已解释' : '确定性证据排序'}</span>
+                <small>{recommendations.universeSize} 只候选 · {new Date(recommendations.generatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small>
+              </div>
+              <p>{recommendations.modelSummary}</p>
+              <div className="kx-stock-radar-list">
+                {recommendations.recommendations.map((item) => (
+                  <button
+                    key={item.symbol}
+                    type="button"
+                    className={draft.symbol.trim().toUpperCase() === item.symbol ? 'active' : ''}
+                    disabled={!canStart}
+                    onClick={() => onChange('symbol', item.symbol)}
+                    title={`选择 ${item.name} 进入单股研究`}
+                  >
+                    <span><strong>{item.name}</strong><small>{item.symbol}</small></span>
+                    <b>{item.score.toFixed(1)}</b>
+                    <em>{item.rationale}</em>
+                  </button>
+                ))}
+              </div>
+              <small className="kx-stock-radar-disclaimer">{recommendations.disclaimer}</small>
+            </div>
+          )}
         </div>
 
         <div className="kx-builder-grid">
@@ -681,6 +740,11 @@ function WorkspaceEvidence({ task }: { task?: TaskSnapshot }) {
                 ['调用方法', task.quantEvidence.sourceMethod],
                 ['抓取时间', formatTime(task.quantEvidence.fetchedAt)],
               ]} />
+              {task.researchArtifacts ? (
+                <ResearchArtifactDetails artifacts={task.researchArtifacts} />
+              ) : (
+                <p className="kx-artifact-legacy-note">当前任务快照创建于证据明细升级前，请重新运行任务以查看知识库引用和完整日线。</p>
+              )}
               {task.researchSummary && <p className="kx-research-summary">{task.researchSummary}</p>}
               {task.candidates.length > 0 && <StrategyTable task={task} />}
             </>
@@ -705,9 +769,235 @@ function WorkspaceEvidence({ task }: { task?: TaskSnapshot }) {
           ) : <EvidenceWaiting text="等待合规策略生成 Action Intent。" />}
           {executionTrace ? <PaymentTrace trace={executionTrace} /> : <EvidenceWaiting text="人工批准后才会创建 Execution Agent 服务费回执。" />}
         </EvidenceLedgerRow>
+
+        <EvidenceLedgerRow number="04" title="自主进化 Agent" state={evolutionState(task)} owner="Evolution Agent · Policy Bounded">
+          {task.researchArtifacts?.evolution ? (
+            <EvolutionAgentEvidence evolution={task.researchArtifacts.evolution} task={task} />
+          ) : task.researchArtifacts ? (
+            <p className="kx-artifact-legacy-note">当前任务快照创建于 Evolution Agent 证据升级前，请重新运行任务以生成本轮进化结果。</p>
+          ) : (
+            <EvidenceWaiting text="研究与 Champion–Challenger 回测结束后，将生成本轮 Evolution Agent。" />
+          )}
+        </EvidenceLedgerRow>
       </div>
     </section>
   )
+}
+
+function EvolutionAgentEvidence({ evolution, task }: { evolution: AgentEvolutionSnapshot; task: TaskSnapshot }) {
+  const outcome = {
+    baseline_created: { label: '基线已建立', title: '首轮能力基线' },
+    champion_promoted: { label: 'Champion 晋级', title: '策略能力已进化' },
+    champion_retained: { label: 'Champion 卫冕', title: '本轮验证通过' },
+  }[evolution.outcome]
+  const receipt = executionPaymentTrace(task)?.receipt
+  const executionEvidence = receipt?.status === 'confirmed'
+    ? receipt.mode === 'testnet' ? 'Testnet 回执已关联' : 'Mock 回执已关联'
+    : task.phase === 'failed' ? '执行证据未确认' : '执行回执待审批'
+  const version = `EV-${evolution.iterationId.slice(-8).toUpperCase()}`
+
+  return (
+    <section className="kx-evolution-agent" aria-label="本轮 Evolution Agent 进化结果">
+      <header className="kx-evolution-agent-head">
+        <div className="kx-evolution-agent-mark"><BrainCircuit size={22} /><span>EV</span></div>
+        <div>
+          <span>AUTONOMOUS EVOLUTION · {version}</span>
+          <h4>{outcome.title}</h4>
+          <p>{evolution.reason}</p>
+        </div>
+        <em className={evolution.outcome}>{outcome.label}</em>
+      </header>
+
+      <div className="kx-evolution-route" aria-label="Champion 版本变化">
+        <div className="previous">
+          <span>上一 Champion</span>
+          <strong>{evolution.previousChampion?.strategy ?? '无 · 首次建立'}</strong>
+          <small>{evolution.previousChampion ? `${evolution.previousChampion.date} · ${evolution.previousChampion.decisionId}` : 'INITIAL BASELINE'}</small>
+        </div>
+        <div className="kx-evolution-route-engine">
+          <GitBranch size={16} />
+          <span>{evolution.inputs.candidateCount} 个候选</span>
+          <ArrowRight size={15} />
+        </div>
+        <div className="champion">
+          <span><Trophy size={12} /> 本轮 Champion</span>
+          <strong>{evolution.champion.name}</strong>
+          <small>{evolution.champion.signal}</small>
+        </div>
+      </div>
+
+      <dl className="kx-evolution-metrics">
+        <div><dt>收益</dt><dd>{evolution.champion.returnPct.toFixed(2)}%</dd></div>
+        <div><dt>最大回撤</dt><dd>{evolution.champion.drawdownPct.toFixed(2)}%</dd></div>
+        <div><dt>Sharpe</dt><dd>{evolution.champion.sharpe.toFixed(2)}</dd></div>
+        <div><dt>胜率</dt><dd>{evolution.champion.winRate.toFixed(1)}%</dd></div>
+        <div><dt>输入证据</dt><dd>{evolution.inputs.marketBars} bars · {evolution.inputs.knowledgeRecords} memories</dd></div>
+      </dl>
+
+      <div className="kx-evolution-audit">
+        <div><Archive size={15} /><span>进化归档</span><strong>{evolution.archive.decisionId ?? 'Task snapshot'}</strong><small>{evolution.archive.note}</small></div>
+        <div><FileCheck2 size={15} /><span>执行证据</span><strong>{executionEvidence}</strong><small>{formatTime(evolution.completedAt)} 完成本轮策略进化</small></div>
+      </div>
+
+      <div className="kx-evolution-boundary">
+        <span><Check size={13} /> 可自主进化：知识引用、候选生成、回测评估、Champion 晋级</span>
+        <span><LockKeyhole size={13} /> 不可进化：预算、Policy、人工批准、结算权限</span>
+      </div>
+    </section>
+  )
+}
+
+function ResearchArtifactDetails({ artifacts }: { artifacts: ResearchArtifacts }) {
+  const knowledge = artifacts.knowledgeBase
+  const marketContext = artifacts.marketContext
+  const knowledgeLabel = {
+    used: '已用于分析',
+    empty: '已读取 · 无记录',
+    skipped: '本次未读取',
+    unavailable: '知识上下文不可用',
+  }[knowledge.status]
+
+  return (
+    <div className="kx-research-artifacts">
+      <details className="kx-artifact-section" open>
+        <summary>
+          <span><Database size={14} /> Agent 分析的知识库</span>
+          <em className={knowledge.status}>{knowledgeLabel}</em>
+          <ChevronDown size={14} />
+        </summary>
+        <div className="kx-artifact-body">
+          <p className="kx-artifact-note">{knowledge.note}</p>
+          {knowledge.records.length > 0 ? (
+            <div className="kx-artifact-table-wrap knowledge" tabIndex={0} aria-label="Agent 实际引用的知识库记录">
+              <table className="kx-artifact-table">
+                <thead><tr><th>决策日期</th><th>标的</th><th>市场状态</th><th>历史选择</th><th>Decision ID</th></tr></thead>
+                <tbody>
+                  {knowledge.records.map((record) => (
+                    <tr key={record.id}>
+                      <td>{record.date}</td><td>{record.symbol}</td><td>{record.marketRegime}</td><td>{record.selectedStrategy || '未记录'}</td><td><code>{record.id}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="kx-artifact-empty">没有传入模型的历史决策记录</div>
+          )}
+          <dl className="kx-analysis-strip">
+            <div><dt>分析模式</dt><dd>{artifacts.analysis.mode === 'decision-agent' ? 'DecisionAgent + DeepSeek' : '确定性策略引擎'}</dd></div>
+            <div><dt>市场状态</dt><dd>{artifacts.analysis.marketRegime}</dd></div>
+            <div><dt>AI 提案</dt><dd>{artifacts.analysis.proposals.length} 个</dd></div>
+          </dl>
+          <p className="kx-analysis-evaluation">{artifacts.analysis.evaluation}</p>
+        </div>
+      </details>
+
+      {marketContext && (
+        <details className="kx-artifact-section" open>
+          <summary>
+            <span><ChartNoAxesCombined size={14} /> Agent 读取的市场上下文</span>
+            <em className="used">{marketContext.sources.filter((source) => source.status === 'used').length} 个接口可用</em>
+            <ChevronDown size={14} />
+          </summary>
+          <div className="kx-artifact-body">
+            <p className="kx-artifact-note">股票身份、一级行业和基准指数均来自本轮 PandaData 调用；相对指标只使用共同交易日计算。</p>
+            <dl className="kx-market-context-grid">
+              <div><dt>股票名称</dt><dd>{marketContext.stockProfile?.name || marketContext.stockProfile?.symbol || '未返回'}</dd></div>
+              <div><dt>上市状态</dt><dd>{formatListingStatus(marketContext.stockProfile?.status)}</dd></div>
+              <div><dt>板块 / 特殊类型</dt><dd>{[marketContext.stockProfile?.boardType, marketContext.stockProfile?.specialType].filter(Boolean).join(' · ') || '未返回'}</dd></div>
+              <div><dt>一级行业</dt><dd>{marketContext.industry ? `${marketContext.industry.name} · ${marketContext.industry.code}` : '未返回'}</dd></div>
+              <div><dt>上市日期</dt><dd>{marketContext.stockProfile?.listedDate ? formatCompactDisplayDate(marketContext.stockProfile.listedDate) : '未返回'}</dd></div>
+              <div><dt>最小委托数量</dt><dd>{marketContext.stockProfile?.minOrderAmount?.toLocaleString('zh-CN') ?? '未返回'}</dd></div>
+            </dl>
+            {marketContext.benchmark && (
+              <dl className="kx-benchmark-strip">
+                <div><dt>基准指数</dt><dd>{marketContext.benchmark.symbol}</dd></div>
+                <div><dt>共同交易日</dt><dd>{marketContext.benchmark.alignedBarCount}</dd></div>
+                <div><dt>个股收益</dt><dd>{formatSignedPercent(marketContext.benchmark.assetReturnPct)}</dd></div>
+                <div><dt>基准收益</dt><dd>{formatSignedPercent(marketContext.benchmark.benchmarkReturnPct)}</dd></div>
+                <div><dt>超额收益</dt><dd>{formatSignedPercent(marketContext.benchmark.excessReturnPct)}</dd></div>
+                <div><dt>相关性 / Beta</dt><dd>{formatOptionalMetric(marketContext.benchmark.correlation)} / {formatOptionalMetric(marketContext.benchmark.beta)}</dd></div>
+              </dl>
+            )}
+            <div className="kx-artifact-table-wrap sources" tabIndex={0} aria-label="PandaData 增强接口调用证据">
+              <table className="kx-artifact-table">
+                <thead><tr><th>调用方法</th><th>状态</th><th>读取行数</th><th>说明</th></tr></thead>
+                <tbody>
+                  {marketContext.sources.map((source) => (
+                    <tr key={source.method}>
+                      <td><code>{source.method}</code></td><td>{formatSourceStatus(source.status)}</td><td>{source.recordCount}</td><td>{source.note || '调用完成'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {marketContext.benchmark && (
+              <div className="kx-artifact-table-wrap benchmark" tabIndex={0} aria-label="Agent 实际读取的完整基准指数日线">
+                <table className="kx-artifact-table numeric">
+                  <thead><tr><th>#</th><th>基准交易日</th><th>收盘点位</th><th>成交量</th></tr></thead>
+                  <tbody>
+                    {marketContext.benchmark.bars.map((bar, index) => (
+                      <tr key={`${bar.date}-${index}`}>
+                        <td>{String(index + 1).padStart(3, '0')}</td><td>{formatCompactDisplayDate(bar.date)}</td><td>{bar.close.toLocaleString('zh-CN', { maximumFractionDigits: 4 })}</td><td>{bar.volume.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      <details className="kx-artifact-section" open>
+        <summary>
+          <span><GitBranch size={14} /> Agent 读取的完整日线</span>
+          <em className="used">{artifacts.marketData.length} 条</em>
+          <ChevronDown size={14} />
+        </summary>
+        <div className="kx-artifact-body">
+          <p className="kx-artifact-note">以下为本次研究与回测实际使用的输入序列，未做抽样或前端补值。</p>
+          <div className="kx-artifact-table-wrap market" tabIndex={0} aria-label="Agent 实际读取的完整日线数据">
+            <table className="kx-artifact-table numeric">
+              <thead><tr><th>#</th><th>交易日</th><th>收盘价</th><th>成交量</th></tr></thead>
+              <tbody>
+                {artifacts.marketData.map((bar, index) => (
+                  <tr key={`${bar.date}-${index}`}>
+                    <td>{String(index + 1).padStart(3, '0')}</td><td>{formatCompactDisplayDate(bar.date)}</td><td>{bar.close.toLocaleString('zh-CN', { maximumFractionDigits: 4 })}</td><td>{bar.volume.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function formatListingStatus(status?: number): string {
+  if (status === 1) return '正常上市'
+  if (status === 0) return '已退市'
+  if (status === -1) return '状态未知'
+  return '未返回'
+}
+
+function formatSourceStatus(status: 'used' | 'empty' | 'unavailable' | 'skipped'): string {
+  return { used: '已用于分析', empty: '成功 · 空数据', unavailable: '调用不可用', skipped: '本轮跳过' }[status]
+}
+
+function formatSignedPercent(value: number): string {
+  return `${value > 0 ? '+' : ''}${value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}%`
+}
+
+function formatOptionalMetric(value?: number): string {
+  return value === undefined ? '不可计算' : value.toLocaleString('zh-CN', { maximumFractionDigits: 3 })
+}
+
+function formatCompactDisplayDate(value: string): string {
+  return /^\d{8}$/.test(value)
+    ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`
+    : value
 }
 
 interface EvidenceLedgerRowProps {
@@ -1317,6 +1607,11 @@ function receiptState(task?: TaskSnapshot): StepState {
   if (trace?.receipt?.status === 'failed') return 'failed'
   if (trace?.receipt?.status === 'confirmed') return 'complete'
   return stateFor(task, ['approved', 'executing'], 'executed')
+}
+
+function evolutionState(task?: TaskSnapshot): StepState {
+  if (task?.researchArtifacts?.evolution) return 'complete'
+  return stateFor(task, ['researching', 'strategizing', 'backtesting'], 'risk_review')
 }
 
 function riskPaymentTrace(task?: TaskSnapshot): PactLedgerTrace | undefined {

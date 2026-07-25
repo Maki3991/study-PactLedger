@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { FastifyInstance } from 'fastify'
-import type { TaskSnapshot } from '../src/domain/trading.js'
+import type { StockRecommendationResult, TaskSnapshot } from '../src/domain/trading.js'
 import { SettlementAdapterError, type ExecutionAdapter } from './adapters/execution.js'
 import { buildApp } from './app.js'
 import { readInjectiveConfig } from './config/injective.js'
@@ -41,6 +41,57 @@ async function registerAndGetToken(app: FastifyInstance): Promise<string> {
 }
 
 const auth = (token: string) => ({ authorization: `Bearer ${token}` })
+
+const recommendationFixture: StockRecommendationResult = {
+  provider: 'panda-data',
+  benchmarkSymbol: '000300.SH',
+  universeSize: 40,
+  generatedAt: '2026-07-25T00:00:00.000Z',
+  analysisMode: 'evidence-ranking+deepseek',
+  modelSummary: '仅根据 PandaData 证据生成候选，不构成投资建议。',
+  recommendations: [{
+    symbol: '300750.SZ',
+    name: '宁德时代',
+    score: 72.5,
+    rationale: '13 周相对收益 +3.0%',
+    metrics: { close: 300, closeDate: '20260724', relativeReturn13w: 3, beta: 1.1 },
+  }],
+  sources: [
+    { method: 'get_index_weights', status: 'used', recordCount: 40 },
+    { method: 'get_stock_detail', status: 'used', recordCount: 40 },
+    { method: 'get_stock_daily_pre', status: 'used', recordCount: 5_000 },
+    { method: 'get_index_daily', status: 'used', recordCount: 145 },
+  ],
+  disclaimer: '仅用于研究，不构成投资建议。',
+}
+
+test('stock recommendations require auth and return auditable PandaData evidence', async () => {
+  const app = await buildApp({
+    stepDelay: 1_000,
+    stockRecommendations: { recommend: async () => recommendationFixture },
+  })
+  await app.ready()
+  const unauthorized = await app.inject({
+    method: 'POST',
+    url: '/api/stocks/recommendations',
+    payload: { limit: 3 },
+  })
+  assert.equal(unauthorized.statusCode, 401)
+
+  const token = await registerAndGetToken(app)
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/stocks/recommendations',
+    headers: auth(token),
+    payload: { limit: 3 },
+  })
+  assert.equal(response.statusCode, 200)
+  const result = response.json<StockRecommendationResult>()
+  assert.equal(result.provider, 'panda-data')
+  assert.equal(result.recommendations[0].symbol, '300750.SZ')
+  assert.equal(result.sources[2].method, 'get_stock_daily_pre')
+  await app.close()
+})
 
 test('auth flow supports register, login, session restore and logout', async () => {
   const app = await buildApp({ stepDelay: 5, executionAdapter: instantExecution })
@@ -149,7 +200,26 @@ test('stock task reaches approval and executes only after explicit approval', as
   assert.equal(current.firewallRules[1].current, '25%')
   assert.ok(current.timeline.some((event) => event.tone === 'warning'))
   assert.equal(current.quantEvidence?.provider, 'replay')
+  assert.equal(current.researchArtifacts?.marketData.length, current.quantEvidence?.barCount)
+  assert.equal(current.researchArtifacts?.marketContext?.sources.length, 4)
+  assert.ok(current.researchArtifacts?.marketContext?.sources.every((source) => source.status === 'skipped'))
+  assert.equal(current.researchArtifacts?.knowledgeBase.status, 'skipped')
+  assert.equal(current.researchArtifacts?.analysis.mode, 'deterministic')
+  assert.equal(current.researchArtifacts?.evolution?.outcome, 'baseline_created')
+  assert.equal(current.researchArtifacts?.evolution?.champion.name, current.candidates.find((candidate) => candidate.status === 'approved')?.name)
+  assert.equal(current.researchArtifacts?.evolution?.archive.status, 'task_snapshot_only')
   assert.equal(current.actionIntent?.status, 'awaiting_approval')
+
+  const knowledgeResponse = await app.inject({ method: 'GET', url: '/api/public/knowledge-base' })
+  assert.equal(knowledgeResponse.statusCode, 200)
+  const knowledge = knowledgeResponse.json<{
+    records: Array<{ taskId: string; symbol: string }>
+    total: number
+    totalRecords: number
+  }>()
+  assert.ok(Array.isArray(knowledge.records))
+  assert.equal(knowledge.records.length, 0)
+  assert.equal(knowledge.total, knowledge.totalRecords)
 
   const approvedResponse = await app.inject({ method: 'POST', url: `/api/tasks/${created.id}/approve`, headers: auth(token) })
   assert.equal(approvedResponse.statusCode, 200)

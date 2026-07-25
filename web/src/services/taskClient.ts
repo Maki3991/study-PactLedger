@@ -1,4 +1,4 @@
-import type { CreateTaskInput, InjectiveConfigStatus, PandaConfigStatus, TaskSnapshot, TaskStreamEvent } from '../domain/trading'
+import type { CreateTaskInput, InjectiveConfigStatus, PandaConfigStatus, StockRecommendationResult, TaskSnapshot, TaskStreamEvent } from '../domain/trading'
 import { authHeaders, getAuthToken } from './authClient'
 
 const request = async <T>(url: string, init?: RequestInit): Promise<T> => {
@@ -25,6 +25,11 @@ export const executeTask = (taskId: string): Promise<TaskSnapshot> => request(`/
 export const getInjectiveConfig = (): Promise<InjectiveConfigStatus> => request('/api/config/injective')
 
 export const getPandaConfig = (): Promise<PandaConfigStatus> => request('/api/config/panda')
+
+export const getStockRecommendations = (limit = 3): Promise<StockRecommendationResult> => request('/api/stocks/recommendations', {
+  method: 'POST',
+  body: JSON.stringify({ limit }),
+})
 
 export const subscribeToTask = (
   taskId: string,

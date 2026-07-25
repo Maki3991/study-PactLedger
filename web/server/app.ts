@@ -23,6 +23,11 @@ import { PoolMateTelegramRuntime, type TelegramIdentityProbe } from './poolmate/
 import { createMarketDataProvider } from './quant/marketData.js'
 import { QuantResearchService } from './quant/service.js'
 import { createResearchNarrator } from './quant/researchNarrator.js'
+import {
+  StockRecommendationError,
+  StockRecommendationService,
+  type StockRecommendationProvider,
+} from './quant/stockRecommendations.js'
 import { DecisionAgent } from './quant/decisionAgent.js'
 import { AgentMemory } from './quant/agentMemory.js'
 import { TaskRepository } from './repository.js'
@@ -48,6 +53,7 @@ interface BuildAppOptions {
   pandaConfig?: PandaDataConfig
   pandaModelConfig?: PandaModelConfig
   quantResearch?: QuantResearchService
+  stockRecommendations?: StockRecommendationProvider
   startTelegramBot?: boolean
   telegramBotToken?: string
   telegramProbe?: TelegramIdentityProbe
@@ -87,6 +93,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const agentMemory = new AgentMemory(options.databasePool)
   await agentMemory.initialize()
   const researchNarrator = createResearchNarrator(pandaModelConfig)
+  const stockRecommendations = options.stockRecommendations ?? new StockRecommendationService(pandaConfig, researchNarrator)
   const decisionAgent = new DecisionAgent(researchNarrator, agentMemory)
   const quantResearch = options.quantResearch ?? new QuantResearchService(
     createMarketDataProvider(pandaConfig),
@@ -357,18 +364,40 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/config/panda', async () => pandaStatus)
   app.get('/api/config/panda/model', async () => pandaModelStatus)
 
+  app.post<{ Body: { limit?: number } }>('/api/stocks/recommendations', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: { limit: { type: 'integer', minimum: 1, maximum: 5 } },
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
+    requireUser(request)
+    try {
+      return await stockRecommendations.recommend(request.body.limit)
+    } catch (error) {
+      const code = error instanceof StockRecommendationError ? error.code : 'PANDA_RECOMMENDATION_UNAVAILABLE'
+      const message = error instanceof Error ? error.message : '股票候选生成失败。'
+      return reply.code(503).send({ error: { code, message }, message })
+    }
+  })
+
   // ── Agent Knowledge Base ──
   app.get<{ Querystring: { symbol?: string; limit?: string } }>('/api/public/knowledge-base', async (request) => {
     const symbol = request.query.symbol
-    const limit = Math.min(Number(request.query.limit || 20), 50)
+    const requestedLimit = Number.parseInt(request.query.limit || '20', 10)
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 50) : 20
     if (symbol) {
       const records = await agentMemory.findBySymbol(symbol)
       return { records: records.slice(0, limit), total: records.length }
     }
-    // 无 symbol 时返回统计摘要
-    const count = await agentMemory.count()
+    const [records, count] = await Promise.all([
+      agentMemory.findRecent(limit),
+      agentMemory.count(),
+    ])
     const recentContext = await agentMemory.getRecentContext(90)
-    return { totalRecords: count, recentContext, hint: '使用 ?symbol=000001.SZ 查询特定股票的决策记录' }
+    return { records, total: count, totalRecords: count, recentContext }
   })
 
   app.post<{ Body: { scenario?: 'approved' | 'blocked'; intentId?: string } }>('/api/demo/poolmate/checkout', async (request, reply) => {

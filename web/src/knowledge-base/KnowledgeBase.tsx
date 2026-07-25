@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import {
   ArrowLeft,
+  ArrowRight,
   BarChart3,
   BrainCircuit,
   Database,
