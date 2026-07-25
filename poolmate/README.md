@@ -29,6 +29,18 @@ cd poolmate
 ./scripts/poolmate.sh up
 ```
 
+`POOLMATE_TUNNEL_MODE=quick` 时，脚本会把 Quick Tunnel 纳入同一次部署：创建或恢复 cloudflared、取得随机 HTTPS URL、写回 `deploy/.env`、重建应用，并从公网验证首页、health、配置状态和 LLM skill。Quick Tunnel 只用于本地测试和短期演示。
+
+正式长期部署使用固定域名：
+
+```text
+POOLMATE_TUNNEL_MODE=named
+POOLMATE_PUBLIC_BASE_URL=https://poolmate.example.com
+CLOUDFLARE_TUNNEL_TOKEN=服务端 Tunnel Token
+```
+
+Cloudflare 远程 Tunnel 的公开 hostname 应路由到 `http://frontend:8080`。也可以设置 `POOLMATE_TUNNEL_MODE=external`，由服务器上的 Caddy、Nginx、负载均衡或其他稳定 HTTPS 入口负责转发。
+
 脚本会根据自身位置定位 Compose 文件，不依赖当前机器的绝对路径。它还支持 `rebuild`、`restart`、`down`、`status`、`logs` 和 `health`；已有自定义环境可以用 `--env-file` 和 `--project` 复用。
 
 然后在已接入 Bot 的 Telegram 群里发送：

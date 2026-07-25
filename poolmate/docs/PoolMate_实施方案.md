@@ -1741,6 +1741,16 @@ Bot 私聊发送一次性入口：
 - 修改 Checkout hash；
 - 绕过 Compliance Gate。
 
+### 18.5 Telegram Mini App 公网入口
+
+公网入口属于部署生命周期，不允许依赖手工启动的临时进程：
+
+- `POOLMATE_TUNNEL_MODE=quick` 仅用于本地联调和短期演示。一键脚本负责启动 Compose 内的 Quick Tunnel、读取随机 `trycloudflare.com` URL、写回服务端环境、重建应用并执行公网 Smoke Test。URL 变化后，旧 Telegram 确认链接失效，必须通过提醒流程签发新链接。
+- `POOLMATE_TUNNEL_MODE=named` 用于长期部署。Cloudflare 远程管理 Tunnel 使用固定域名，`CLOUDFLARE_TUNNEL_TOKEN` 只通过服务端 `TUNNEL_TOKEN` 环境变量提供，公开 hostname 路由到 Compose 内的 `http://frontend:8080`。
+- `POOLMATE_TUNNEL_MODE=external` 用于已有稳定 HTTPS 入口的服务器，由 Caddy、Nginx、负载均衡或其他基础设施转发到 Frontend。
+
+任何模式完成部署后，都必须从公网验证首页、`/health` 和 `/api/public/config-status`，并确认返回的 `publicBaseUrl` 与实际 HTTPS 入口完全一致。Quick Tunnel 没有 SLA，不能作为正式 Telegram Mini App 地址。
+
 ---
 
 ## 19. 幂等与并发

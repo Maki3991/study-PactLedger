@@ -74,5 +74,30 @@ services:
       retries: 5
       start_period: 5s
 
+  quick-tunnel:
+    profiles: ["quick"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - --url
+      - http://frontend:8080
+
+  named-tunnel:
+    profiles: ["named"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --protocol
+      - http2
+      - run
+
 volumes:
   poolmate-data:

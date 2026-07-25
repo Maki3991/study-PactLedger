@@ -36,6 +36,7 @@ Environment overrides:
   POOLMATE_ENV_FILE
   POOLMATE_COMPOSE_PROJECT
   POOLMATE_BACKEND_PORT
+  POOLMATE_TUNNEL_MODE
 USAGE
 }
 
@@ -191,6 +192,45 @@ env_value() {
   fi
 }
 
+tunnel_mode() {
+  local mode
+  mode="$(env_value POOLMATE_TUNNEL_MODE | tr '[:upper:]' '[:lower:]')"
+  printf '%s\n' "${mode:-external}"
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local temporary
+  temporary="$(mktemp "${env_file}.tmp.XXXXXX")"
+  awk -F '=' -v key="$key" -v value="$value" '
+    BEGIN { found = 0 }
+    $1 == key {
+      print key "=" value
+      found = 1
+      next
+    }
+    { print }
+    END {
+      if (!found) print key "=" value
+    }
+  ' "$env_file" >"$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$env_file"
+}
+
+configure_tunnel_profile() {
+  case "$(tunnel_mode)" in
+    quick) compose_args+=(--profile quick) ;;
+    named) compose_args+=(--profile named) ;;
+    external) ;;
+    *)
+      echo "POOLMATE_TUNNEL_MODE must be quick, named, or external." >&2
+      exit 1
+      ;;
+  esac
+}
+
 validate_runtime_env() {
   case "$action" in
     up|update|rebuild|restart) ;;
@@ -222,6 +262,89 @@ validate_runtime_env() {
     echo "Refusing to start a Telegram bot that cannot perform command skill calling." >&2
     exit 1
   fi
+
+  case "$(tunnel_mode)" in
+    quick) ;;
+    named)
+      if [[ -z "$(env_value CLOUDFLARE_TUNNEL_TOKEN)" ]]; then
+        echo "CLOUDFLARE_TUNNEL_TOKEN is required for named tunnel mode." >&2
+        exit 1
+      fi
+      if [[ -z "$(env_value POOLMATE_PUBLIC_BASE_URL)" ]]; then
+        echo "POOLMATE_PUBLIC_BASE_URL is required for named tunnel mode." >&2
+        exit 1
+      fi
+      ;;
+    external)
+      if [[ -z "$(env_value POOLMATE_PUBLIC_BASE_URL)" ]]; then
+        echo "POOLMATE_PUBLIC_BASE_URL is required for external tunnel mode." >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+quick_tunnel_url() {
+  docker compose "${compose_args[@]}" logs --no-color quick-tunnel 2>/dev/null |
+    sed -nE 's#.*(https://[a-z0-9-]+\.trycloudflare\.com).*#\1#p' |
+    tail -n 1
+}
+
+wait_for_quick_tunnel_url() {
+  local url
+  for _ in $(seq 1 45); do
+    url="$(quick_tunnel_url)"
+    if [[ -n "$url" ]]; then
+      printf '%s\n' "$url"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Quick Tunnel did not publish a trycloudflare.com URL." >&2
+  docker compose "${compose_args[@]}" logs --tail 120 quick-tunnel >&2 || true
+  return 1
+}
+
+wait_for_public_url() {
+  local url="$1"
+  for _ in $(seq 1 10); do
+    if curl --fail --silent --show-error \
+      --max-time 15 "${url}/" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+prepare_public_ingress() {
+  local mode
+  local public_url
+  mode="$(tunnel_mode)"
+  case "$mode" in
+    quick)
+      echo "Preparing managed Quick Tunnel"
+      docker compose "${compose_args[@]}" up --detach quick-tunnel
+      public_url="$(wait_for_quick_tunnel_url)"
+      if ! wait_for_public_url "$public_url"; then
+        echo "Refreshing unavailable Quick Tunnel"
+        docker compose "${compose_args[@]}" up \
+          --detach --force-recreate quick-tunnel
+        public_url="$(wait_for_quick_tunnel_url)"
+        wait_for_public_url "$public_url"
+      fi
+      set_env_value POOLMATE_PUBLIC_BASE_URL "$public_url"
+      echo "Public URL: $public_url"
+      ;;
+    named)
+      echo "Starting managed Named Tunnel"
+      docker compose "${compose_args[@]}" up --detach named-tunnel
+      echo "Public URL: $(env_value POOLMATE_PUBLIC_BASE_URL)"
+      ;;
+    external)
+      echo "Using external HTTPS ingress: $(env_value POOLMATE_PUBLIC_BASE_URL)"
+      ;;
+  esac
 }
 
 wait_for_backend() {
@@ -320,33 +443,89 @@ verify_command_skill_call() {
   exit 1
 }
 
+verify_public_ingress() {
+  echo "Verifying public Mini App ingress"
+  for _ in $(seq 1 45); do
+    if docker compose "${compose_args[@]}" exec --no-TTY backend \
+      node -e '
+        const baseUrl = process.env.POOLMATE_PUBLIC_BASE_URL;
+        Promise.all([
+          fetch(`${baseUrl}/`),
+          fetch(`${baseUrl}/health`),
+          fetch(`${baseUrl}/api/public/config-status`)
+        ])
+          .then(async ([page, health, config]) => {
+            if (!page.ok || !health.ok || !config.ok) {
+              throw new Error("public request failed");
+            }
+            const contentType = page.headers.get("content-type") || "";
+            const healthBody = await health.json();
+            const configBody = await config.json();
+            const summary = {
+              publicBaseUrl: configBody.publicBaseUrl,
+              page: page.status,
+              health: healthBody.status,
+              bot: configBody.bot?.status,
+              llm: configBody.llm?.status
+            };
+            process.stdout.write(JSON.stringify(summary));
+            if (!contentType.includes("text/html")) process.exitCode = 1;
+            if (configBody.publicBaseUrl !== baseUrl) process.exitCode = 1;
+            if (healthBody.status !== "ok") process.exitCode = 1;
+            if (configBody.bot?.status !== "running") process.exitCode = 1;
+            if (configBody.llm?.status !== "configured") process.exitCode = 1;
+          })
+          .catch(() => process.exit(1));
+      ' 2>/dev/null; then
+      printf '\n'
+      return 0
+    fi
+    sleep 1
+  done
+  printf '\n' >&2
+  echo "Public Mini App ingress verification failed." >&2
+  docker compose "${compose_args[@]}" logs --tail 120 >&2 || true
+  exit 1
+}
+
+configure_tunnel_profile
 validate_runtime_env
 
 case "$action" in
   up)
-    docker compose "${compose_args[@]}" up --detach --build
+    prepare_public_ingress
+    docker compose "${compose_args[@]}" up --detach --build backend frontend
     wait_for_backend
     verify_runtime
     verify_command_skill_call
+    verify_public_ingress
     ;;
   update)
-    docker compose "${compose_args[@]}" up --detach --build --force-recreate --remove-orphans
+    prepare_public_ingress
+    docker compose "${compose_args[@]}" up --detach --build \
+      --force-recreate --remove-orphans backend frontend
     wait_for_backend
     verify_runtime
     verify_command_skill_call
+    verify_public_ingress
     docker compose "${compose_args[@]}" ps
     ;;
   rebuild)
-    docker compose "${compose_args[@]}" up --detach --build --force-recreate
+    prepare_public_ingress
+    docker compose "${compose_args[@]}" up --detach --build \
+      --force-recreate backend frontend
     wait_for_backend
     verify_runtime
     verify_command_skill_call
+    verify_public_ingress
     ;;
   restart)
-    docker compose "${compose_args[@]}" restart
+    prepare_public_ingress
+    docker compose "${compose_args[@]}" restart backend frontend
     wait_for_backend
     verify_runtime
     verify_command_skill_call
+    verify_public_ingress
     ;;
   down)
     docker compose "${compose_args[@]}" down
@@ -355,7 +534,7 @@ case "$action" in
     docker compose "${compose_args[@]}" ps
     ;;
   logs)
-    docker compose "${compose_args[@]}" logs --follow --tail 200 backend frontend
+    docker compose "${compose_args[@]}" logs --follow --tail 200
     ;;
   health)
     backend_port="$(backend_port)"
