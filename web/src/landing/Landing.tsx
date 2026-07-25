@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   ArrowRight,
   BadgeCheck,
@@ -7,13 +7,9 @@ import {
   Check,
   CircleDollarSign,
   CircleOff,
-  Database,
-  ExternalLink,
-  FileCheck2,
   Fingerprint,
   Gauge,
   LoaderCircle,
-  LockKeyhole,
   Network,
   ReceiptText,
   ShieldCheck,
@@ -21,39 +17,11 @@ import {
   WalletCards,
   Zap,
 } from 'lucide-react'
-import type {
-  PactLedgerBaseStatus,
-  PactLedgerExecutionState,
-  PactLedgerTrace,
-} from '../domain/pactledger'
+import type { PactLedgerTrace } from '../domain/pactledger'
 import {
   createPoolMateDemoIntentId,
-  fetchPactLedgerBaseStatus,
   runPoolMateCheckout,
 } from '../services/pactledgerClient'
-
-const executionCopy: Record<PactLedgerExecutionState, { label: string; detail: string; tone: string }> = {
-  mock_ready: {
-    label: 'MOCK READY',
-    detail: '当前结算为可复现 Mock；不会生成 Explorer 链接。',
-    tone: 'mock',
-  },
-  testnet_configuration_required: {
-    label: 'TESTNET CONFIG REQUIRED',
-    detail: 'SDK 路径已实现；钱包、denom 或收款地址仍未配置完整。',
-    tone: 'pending',
-  },
-  testnet_ready: {
-    label: 'TESTNET READY · UNCONFIRMED',
-    detail: '服务端具备广播条件，但数据库中尚无已确认 Testnet Receipt。',
-    tone: 'pending',
-  },
-  testnet_confirmed: {
-    label: 'TESTNET CONFIRMED',
-    detail: '已发现持久化的 Injective Testnet Receipt，可打开 Explorer 核验。',
-    tone: 'confirmed',
-  },
-}
 
 const baseCapabilities = [
   {
@@ -91,213 +59,165 @@ const injectiveReasons = [
 ]
 
 export function Landing() {
-  const [baseStatus, setBaseStatus] = useState<PactLedgerBaseStatus>()
-  const [statusError, setStatusError] = useState<string>()
-
-  useEffect(() => {
-    const controller = new AbortController()
-    fetchPactLedgerBaseStatus(controller.signal)
-      .then(setBaseStatus)
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          setStatusError(error instanceof Error ? error.message : '无法读取基座状态')
-        }
-      })
-    return () => controller.abort()
-  }, [])
-
   return (
     <div className="pl-page">
       <a className="pl-skip" href="#main">跳到主要内容</a>
       <header className="pl-nav">
         <a className="pl-brand" href="#top" aria-label="PactLedger 首页">
-          <span className="pl-brand-mark"><LockKeyhole size={15} /></span>
+          <span className="pl-brand-mark"><img src="/pactledger-mark-light.png" alt="" /></span>
           <span><strong>PactLedger</strong><small>Agent Spend Control</small></span>
         </a>
         <nav aria-label="首页导航">
-          <a href="#base">基座</a>
-          <a href="#injective">Injective</a>
-          <a href="#proof">实例证明</a>
+          <a href="#base">控制层</a>
+          <a href="#proof">应用案例</a>
+          <a href="#injective">结算</a>
         </nav>
-        <a className="pl-nav-cta" href="/kaleidox.html">运行主 Demo <ArrowRight size={14} /></a>
       </header>
 
       <main id="main">
         <section className="pl-hero" id="top">
           <div className="pl-hero-copy">
-            <p className="pl-track"><span>PRIMARY TRACK</span> INJECTIVE BLOCKCHAIN × AI</p>
-            <h1>Agent 可以提出花钱。<br /><em>只有规则允许它真正花钱。</em></h1>
-            <p className="pl-lead">
-              PactLedger 是 Agent 的可编程财务控制层。业务 Agent 不持有自由支配的资金权限；
-              每一笔服务采购或商户付款都必须经过 Intent、Policy、按需人工批准、Injective 结算与 Receipt。
-            </p>
-            <div className="pl-hero-actions">
-              <a className="pl-button pl-button-primary" href="/kaleidox.html">
-                看 KaleidoX 风险压力测试 <ArrowRight size={16} />
+            <img className="pl-hero-mark" src="/pactledger-mark-light.png" alt="" />
+            <h1><span>PactLedger</span><strong>Agent 的资金控制层</strong></h1>
+            <p className="pl-statement">Agent 可以提出花钱，规则决定是否放行</p>
+            <p className="pl-lead">统一管理预算、审批、结算与可验证回执。</p>
+            <div className="pl-hero-actions" aria-label="PactLedger 应用案例">
+              <a className="pl-case-entry" href="/kaleidox.html">
+                <span><small>应用案例 01</small><strong>KaleidoX</strong></span>
+                <ArrowRight size={16} />
               </a>
-              <a className="pl-button pl-button-secondary" href="/poolmate.html">
-                看 PoolMate 跨场景复用
+              <a className="pl-case-entry" href="/poolmate.html">
+                <span><small>应用案例 02</small><strong>PoolMate</strong></span>
+                <ArrowRight size={16} />
               </a>
             </div>
-            <p className="pl-truth-note">
-              <CircleOff size={13} /> PandaAI 提供 A 股数据；Injective 只结算 Agent 服务费与商户付款，不交易 A 股。
-            </p>
           </div>
-
-          <RuntimeConsole status={baseStatus} error={statusError} />
         </section>
 
-        <section className="pl-injective" id="injective" aria-labelledby="injective-title">
-          <div className="pl-section-label"><span>01</span> WHY INJECTIVE</div>
-          <div className="pl-injective-intro">
-            <h2 id="injective-title">不是把区块链贴在页脚。<br />它是 Agent 付款的结算轨道。</h2>
-            <p>
-              Policy 决定“能不能付”，Injective 证明“是否真的付了”。快速确认与极低费用让大量小额、自动化的 Agent 服务采购具备可行性。
-            </p>
-          </div>
-          <div className="pl-injective-grid">
-            {injectiveReasons.map((reason) => (
-              <article key={reason.label}>
-                <strong>{reason.value}</strong>
-                <h3>{reason.label}</h3>
-                <p>{reason.detail}</p>
-              </article>
-            ))}
+        <section className="pl-control-rail" aria-label="PactLedger 不可绕过的执行顺序">
+          <div className="pl-control-rail-shell">
+            <div className="pl-control-rail-title"><span>EVERY SPEND FOLLOWS</span><strong>不可绕过的执行顺序</strong></div>
+            <ol>
+              <li><span>01</span><strong>Intent</strong><small>提交付款意图</small></li>
+              <li><span>02</span><strong>Policy</strong><small>校验预算与权限</small></li>
+              <li><span>03</span><strong>Approval</strong><small>需要时由人批准</small></li>
+              <li><span>04</span><strong>Settlement</strong><small>批准后才能结算</small></li>
+              <li><span>05</span><strong>Receipt</strong><small>留下可审计回执</small></li>
+            </ol>
           </div>
         </section>
 
         <section className="pl-base" id="base" aria-labelledby="base-title">
-          <div className="pl-section-label"><span>02</span> THE CONTROL PLANE</div>
-          <div className="pl-base-heading">
-            <div>
-              <h2 id="base-title">基座负责财务制度。<br />实例只负责业务。</h2>
-              <p>股票研究、群聊拼单都可以变化；下面五个金融原语保持不变。</p>
+          <div className="pl-section-shell">
+            <div className="pl-section-label"><span>01</span> 资金控制基座</div>
+            <div className="pl-base-heading">
+              <div>
+                <h2 id="base-title">基座负责财务制度，<br />实例只负责业务。</h2>
+                <p>股票研究、群聊拼单都可以变化；下面五个金融原语保持不变。</p>
+              </div>
+              <code>Intent → PolicyDecision → Approval? → Settlement → Receipt</code>
             </div>
-            <code>Intent → PolicyDecision → Approval? → Settlement → Receipt</code>
-          </div>
-          <div className="pl-capability-list">
-            {baseCapabilities.map((capability, index) => (
-              <article key={capability.title}>
-                <span className="pl-cap-index">{String(index + 1).padStart(2, '0')}</span>
-                <capability.icon size={18} />
-                <h3>{capability.title}</h3>
-                <p>{capability.detail}</p>
-              </article>
-            ))}
+            <div className="pl-capability-list">
+              {baseCapabilities.map((capability, index) => (
+                <article key={capability.title}>
+                  <span className="pl-cap-index">{String(index + 1).padStart(2, '0')}</span>
+                  <capability.icon size={18} />
+                  <h3>{capability.title}</h3>
+                  <p>{capability.detail}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
 
         <section className="pl-proof" id="proof" aria-labelledby="proof-title">
-          <div className="pl-section-label"><span>03</span> TWO PROOF CASES</div>
-          <div className="pl-proof-head">
-            <h2 id="proof-title">业务换了，控制层没有换。</h2>
-            <p>一个实例证明高风险场景下必须踩刹车；另一个证明基座不是股票专用代码。</p>
-          </div>
-          <div className="pl-apps">
-            <a className="pl-app pl-app-kx" href="/kaleidox.html">
-              <span className="pl-app-type">REFERENCE APP 01 · RISK PRESSURE TEST</span>
-              <Bot size={22} />
-              <h3>KaleidoX</h3>
-              <p>股票 Agent 研究 A 股、比较策略并生成 Broker-ready 指令；PactLedger 约束预算、仓位、批准与 Agent 服务费。</p>
-              <ul>
-                <li><Check size={13} /> PandaAI 数据或明确 Replay</li>
-                <li><Check size={13} /> 40% 仓位建议被独立风控拒绝</li>
-                <li><Check size={13} /> Injective 结算 Risk / Execution 服务费</li>
-              </ul>
-              <span className="pl-app-link">打开控制台 <ArrowRight size={14} /></span>
-            </a>
-            <a className="pl-app pl-app-pm" href="/poolmate.html">
-              <span className="pl-app-type">REFERENCE APP 02 · CROSS-DOMAIN REUSE</span>
-              <Store size={22} />
-              <h3>PoolMate</h3>
-              <p>群聊 Agent 只新增消息理解、拼单状态与商户 checkout；账户、白名单、Intent、Policy 与 Receipt 全部复用。</p>
-              <ul>
-                <li><Check size={13} /> 白名单商户付款通过</li>
-                <li><Check size={13} /> “把钱转给我”被 Policy 拒绝</li>
-                <li><Check size={13} /> 拒绝请求不会进入 Settlement Adapter</li>
-              </ul>
-              <span className="pl-app-link">打开复用证明 <ArrowRight size={14} /></span>
-            </a>
-          </div>
+          <div className="pl-section-shell">
+            <div className="pl-section-label"><span>02</span> 两个应用案例</div>
+            <div className="pl-proof-head">
+              <h2 id="proof-title">两个案例，<br />同一套资金控制。</h2>
+              <p>KaleidoX 与 PoolMate 共享账户、预算、策略、审批、结算与回执能力。</p>
+            </div>
+            <div className="pl-apps">
+              <a className="pl-app pl-app-kx" href="/kaleidox.html">
+                <span className="pl-app-number">01</span>
+                <div className="pl-app-main">
+                  <span className="pl-app-type">应用案例 · 股票研究</span>
+                  <div className="pl-app-title"><Bot size={22} /><h3>KaleidoX</h3></div>
+                  <p>股票 Agent 研究 A 股、比较策略并生成 Broker-ready 指令；PactLedger 约束预算、仓位、批准与 Agent 服务费。</p>
+                  <span className="pl-app-link">打开 KaleidoX <ArrowRight size={14} /></span>
+                </div>
+                <ul>
+                  <li><Check size={13} /> PandaAI 数据或明确 Replay</li>
+                  <li><Check size={13} /> 40% 仓位建议被独立风控拒绝</li>
+                  <li><Check size={13} /> Injective 结算 Risk / Execution 服务费</li>
+                </ul>
+              </a>
+              <a className="pl-app pl-app-pm" href="/poolmate.html">
+                <span className="pl-app-number">02</span>
+                <div className="pl-app-main">
+                  <span className="pl-app-type">应用案例 · 群聊拼单</span>
+                  <div className="pl-app-title"><Store size={22} /><h3>PoolMate</h3></div>
+                  <p>群聊 Agent 只新增消息理解、拼单状态与商户 checkout；账户、白名单、Intent、Policy 与 Receipt 全部复用。</p>
+                  <span className="pl-app-link">打开 PoolMate <ArrowRight size={14} /></span>
+                </div>
+                <ul>
+                  <li><Check size={13} /> 白名单商户付款通过</li>
+                  <li><Check size={13} /> “把钱转给我”被 Policy 拒绝</li>
+                  <li><Check size={13} /> 拒绝请求不会进入 Settlement Adapter</li>
+                </ul>
+              </a>
+            </div>
 
-          <BaseTraceLab />
+            <BaseTraceLab />
+          </div>
+        </section>
+
+        <section className="pl-injective" id="injective" aria-labelledby="injective-title">
+          <div className="pl-section-shell">
+            <div className="pl-section-label"><span>03</span> Injective 结算</div>
+            <div className="pl-injective-intro">
+              <h2 id="injective-title">Policy 决定能不能付，<br />Injective 证明是否真的付了。</h2>
+              <p>
+                区块链不是页脚上的技术标签。批准后的 Agent 服务费与商户付款才进入结算适配器，并以交易哈希、区块高度和持久化 Receipt 留下证据。
+              </p>
+            </div>
+            <div className="pl-injective-grid">
+              {injectiveReasons.map((reason, index) => (
+                <article key={reason.label}>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <strong>{reason.value}</strong>
+                  <h3>{reason.label}</h3>
+                  <p>{reason.detail}</p>
+                </article>
+              ))}
+            </div>
+          </div>
         </section>
 
         <section className="pl-close">
-          <div>
-            <BadgeCheck size={22} />
-            <p>评委只需要记住一句话</p>
-            <h2>业务 Agent 可以进化，<br />它永远不能进化自己的资金权限。</h2>
+          <div className="pl-close-shell">
+            <img src="/pactledger-mark-light.png" alt="" />
+            <div>
+              <BadgeCheck size={22} />
+              <p>PACTLEDGER PRINCIPLE</p>
+              <h2>业务 Agent 可以进化，<br />它永远不能进化自己的资金权限。</h2>
+            </div>
           </div>
-          <a className="pl-button pl-button-primary" href="/kaleidox.html">开始 90 秒主 Demo <ArrowRight size={16} /></a>
         </section>
       </main>
 
-      <footer className="pl-footer">
-        <span><strong>PactLedger</strong> · Agent Treasury / Agent Spend Control</span>
-        <span>Injective Testnet · PandaAI · A2A · PostgreSQL</span>
+      <footer className="pl-footer" id="footer">
+        <div className="pl-footer-brand">
+          <strong>PactLedger</strong>
+          <span>Agent Treasury · Agent Spend Control</span>
+        </div>
+        <div className="pl-footer-flow">
+          <span>CONTROL PATH</span>
+          <code>Intent → Policy → Approval → Settlement → Receipt</code>
+        </div>
       </footer>
     </div>
   )
-}
-
-function RuntimeConsole({ status, error }: { status?: PactLedgerBaseStatus; error?: string }) {
-  const stateCopy = status ? executionCopy[status.execution.state] : undefined
-  const flow = status?.flow ?? ['Agent Intent', 'PactLedger Policy', 'Injective Settlement', 'Verifiable Receipt']
-  const icons = [Fingerprint, ShieldCheck, Blocks, FileCheck2]
-
-  return (
-    <aside className="pl-runtime" aria-label="PactLedger 实时运行状态">
-      <div className="pl-runtime-head">
-        <span><i /> PACTLEDGER / RUNTIME</span>
-        <strong className={`pl-runtime-state ${stateCopy?.tone ?? 'loading'}`}>
-          {!stateCopy && !error && <LoaderCircle size={12} className="pl-spin" />}
-          {error ? 'STATUS UNAVAILABLE' : stateCopy?.label ?? 'READING STATUS'}
-        </strong>
-      </div>
-      <div className="pl-runtime-flow">
-        {flow.map((step, index) => {
-          const Icon = icons[index]
-          const settlementPending = index >= 2 && status?.execution.state === 'testnet_configuration_required'
-          return (
-            <div className={`pl-runtime-step ${settlementPending ? 'pending' : ''}`} key={step}>
-              <span>{String(index + 1).padStart(2, '0')}</span>
-              <Icon size={17} />
-              <div>
-                <strong>{step}</strong>
-                <small>{flowDetail(index)}</small>
-              </div>
-              {index < flow.length - 1 && <ArrowRight size={14} />}
-            </div>
-          )
-        })}
-      </div>
-      <div className="pl-runtime-note" role="status">
-        {error ?? stateCopy?.detail ?? '正在读取服务端脱敏状态…'}
-      </div>
-      <dl className="pl-runtime-grid">
-        <RuntimeDatum label="Chain" value={status?.execution.chainId ?? '—'} />
-        <RuntimeDatum label="Signer" value={truthValue(status?.execution.walletConfigured)} />
-        <RuntimeDatum label="Payment asset" value={truthValue(status?.execution.paymentAssetConfigured)} />
-        <RuntimeDatum label="Payees" value={truthValue(status?.execution.payeesConfigured)} />
-        <RuntimeDatum label="Receipt store" value={status?.execution.receiptPersistence ?? '—'} />
-        <RuntimeDatum label="Adapter" value={status?.execution.adapter ?? '—'} />
-      </dl>
-      {status?.execution.latestConfirmedReceipt?.explorerUrl ? (
-        <a className="pl-explorer" href={status.execution.latestConfirmedReceipt.explorerUrl} target="_blank" rel="noreferrer">
-          <span><Database size={14} /> 已持久化 Testnet Receipt</span>
-          <strong>{shorten(status.execution.latestConfirmedReceipt.transactionHash)}</strong>
-          <ExternalLink size={14} />
-        </a>
-      ) : (
-        <div className="pl-no-receipt"><Database size={14} /> 当前没有可公开核验的已持久化 Testnet Receipt</div>
-      )}
-    </aside>
-  )
-}
-
-function RuntimeDatum({ label, value }: { label: string; value: string }) {
-  return <div><dt>{label}</dt><dd>{value}</dd></div>
 }
 
 function BaseTraceLab() {
@@ -321,10 +241,10 @@ function BaseTraceLab() {
   return (
     <div className="pl-lab">
       <div className="pl-lab-copy">
-        <span>LIVE API PROOF · SAFE MOCK SETTLEMENT</span>
+        <span>可操作 API 验证 · 固定 Mock 结算</span>
         <h3>十秒看懂基座：<br />合法付款通过，骗转账当场拒绝。</h3>
         <p>
-          两个按钮都调用生产 Fastify 中的同一个 Payment Intent、Policy Engine 与 Receipt Service。
+          两个按钮都调用同一个 Fastify Payment Intent、Policy Engine 与 Receipt Service。
           为避免公开页面触发真实资金，本验证固定使用 Mock Adapter，并明确标注。
         </p>
         <div className="pl-lab-actions">
@@ -396,23 +316,4 @@ function TraceNode({
   state: 'pass' | 'fail' | 'skip'
 }) {
   return <div className={state}><Icon size={14} /><span><small>{label}</small><strong>{value}</strong></span></div>
-}
-
-function flowDetail(index: number): string {
-  return [
-    'Agent 只能提出付款意图',
-    '预算、用途、白名单与审批',
-    '批准后才进入测试网广播',
-    '哈希、区块、Explorer 与持久化',
-  ][index]
-}
-
-function truthValue(value: boolean | undefined): string {
-  if (value === undefined) return '—'
-  return value ? 'configured' : 'missing'
-}
-
-function shorten(value?: string): string {
-  if (!value) return '—'
-  return value.length > 22 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value
 }

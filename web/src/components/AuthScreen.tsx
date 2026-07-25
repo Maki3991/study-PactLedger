@@ -8,7 +8,6 @@ import {
   LockKeyhole,
   ShieldCheck,
   UserRound,
-  Workflow,
 } from 'lucide-react'
 
 interface AuthScreenProps {
@@ -64,8 +63,8 @@ export function AuthScreen({ onLogin, onRegister }: AuthScreenProps) {
       <a className="kx-auth-back" href="/"><ArrowLeft size={14} /> 返回 PactLedger</a>
       <section className="kx-auth-story">
         <div className="kx-auth-brand">
-          <span className="kx-brand-glyph"><Workflow size={17} /></span>
-          <span><strong>KaleidoX</strong><small>on PactLedger</small></span>
+          <span className="kx-brand-glyph kx-brand-glyph-pact"><img src="/pactledger-mark.png" alt="" /></span>
+          <span><strong>PactLedger</strong><small>KaleidoX · Reference App 01</small></span>
         </div>
         <p className="kx-kicker">REFERENCE APP · 01</p>
         <h1>股票 Agent，<br />有能力，也有边界。</h1>

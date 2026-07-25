@@ -69,7 +69,7 @@ function App() {
   if (validating) {
     return (
       <div className="kx-boot">
-        <span className="kx-brand-glyph"><Workflow size={18} /></span>
+        <span className="kx-brand-glyph kx-brand-glyph-pact"><img src="/pactledger-mark.png" alt="" /></span>
         <LoaderCircle size={18} className="spin" />
         <p>正在恢复产品实例…</p>
       </div>
@@ -187,7 +187,7 @@ function KaleidoWorkspace({ user, onLogout }: WorkspaceProps) {
     <div className="kx-app">
       <header className="kx-nav">
         <a className="kx-nav-brand" href="/">
-          <span className="kx-brand-glyph"><Workflow size={16} /></span>
+          <span className="kx-brand-glyph kx-brand-glyph-pact"><img src="/pactledger-mark.png" alt="" /></span>
           <span><strong>PactLedger</strong><small>Base</small></span>
         </a>
         <div className="kx-product-path" aria-label="产品层级">
