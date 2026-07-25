@@ -837,6 +837,45 @@ test("natural-language mention calls general_help instead of order draft extract
   assert.doesNotMatch(String(reply?.payload.text), /unambiguous title/);
 });
 
+test("natural-language mention calls general_help even when draft extraction is disabled", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      assert.equal(request.text, "怎么用");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "general_help",
+        confidence: 0.97,
+        reason: "The user asks how to use PoolMate."
+      };
+    }
+  };
+  const disabled: OrderDraftExtractor = {
+    getStatus: () => "disabled",
+    async extract() {
+      throw new Error("draft extraction should not run for general_help");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    disabled,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(116, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /PoolMate help/);
+  assert.doesNotMatch(
+    String(reply?.payload.text),
+    /Natural-language drafts are disabled/
+  );
+});
+
 test("missing natural-language fields and disabled LLM never create drafts", async () => {
   const createPoolSkillInvoker: CommandSkillInvoker = {
     getStatus: () => "configured",

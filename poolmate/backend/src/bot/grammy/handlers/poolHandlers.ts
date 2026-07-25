@@ -815,12 +815,6 @@ export function registerPoolHandlers(
         );
         return;
       }
-      if (draftExtractor.getStatus() === "disabled") {
-        await context.reply(
-          "Natural-language drafts are disabled. Use /pool_new <targetUnits> <title>."
-        );
-        return;
-      }
 
       let skill;
       try {
@@ -847,6 +841,12 @@ export function registerPoolHandlers(
       }
       if (skill.id !== "create_pool") {
         await context.reply(formatSkillHelp(skill, "natural_language"));
+        return;
+      }
+      if (draftExtractor.getStatus() === "disabled") {
+        await context.reply(
+          "Natural-language drafts are disabled. Use /pool_new <targetUnits> <title>."
+        );
         return;
       }
 
