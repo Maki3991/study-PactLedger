@@ -14,7 +14,7 @@
 >
 > 部署状态：源码已完成最新能力；公网 `129.226.91.246:8787` 仍是旧版本，待重新部署、重启与 Smoke Test
 >
-> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base、安全关闭拼单、结构化采购意图和管理面板；最后一名参与者在 Telegram WebApp 确认后，本地 Mock 会自动经过 Policy、持久化 Mock Receipt 并回群播报，不再需要管理员手动提交；设置 `AIPING_API_KEY` 即自动使用普通模型 `DeepSeek-V3.2`，真实抽取请求已验证；新的产品故事已在本地代码实现：@Bot 后立即返回处理中卡片、解析后编辑同一卡片为可点击认领卡片，并允许未达/超过期望数量时按实际锁定份额报价和付款；本地 Backend tests `133/133`、Frontend tests `32/32`、后端 lint/typecheck/build 与前端 lint/build 已通过；真实 Telegram 群、公网部署、远程支付基座契约与真实链上结算仍未接通
+> 独立 PoolMate：`poolmate/` 已完成 grammY、可信 Checkout/确认、持久化支付编排、本地 Mock Payment Base、安全关闭拼单、结构化采购意图和管理面板；最后一名参与者在 Telegram WebApp 确认后，本地 Mock 会自动经过 Policy、持久化 Mock Receipt 并回群播报，不再需要管理员手动提交；设置 `AIPING_API_KEY` 即自动使用普通模型 `DeepSeek-V3.2`，真实抽取请求已验证；新的产品故事已在本地代码实现：@Bot 后立即返回处理中卡片、解析后编辑同一卡片为可点击认领卡片，并允许未达/超过期望数量时按实际锁定份额报价和付款；Bot 指令帮助由单一 Markdown skill `poolmate/backend/src/bot/help/SKILL.md` 维护，覆盖普通指令、LLM command skill calling 和 `/pool_test` 虚拟参与人调试指令；本地 Backend tests `143/143`、Frontend tests `32/32`、后端 lint/typecheck/build 与前端 lint/build 已通过；真实 Telegram 群、公网部署、远程支付基座契约与真实链上结算仍未接通
 
 ---
 
@@ -787,7 +787,7 @@ Agent 应用只写业务 Skill，不重复实现支付安全。
 - **产品门**：PactLedger 已统一为主产品。
 - **基座门**：通用 Policy / Trace、Receipt 持久化与幂等已通过 API tests。
 - **复用门**：PoolMate 已调用同一 Fastify 基座 API，合法与拒绝 Trace 均可复现。
-- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4、安全关闭拼单和新自然语言故事已完成本地验收；@Bot 后可立即发送处理中卡片、解析后同卡片进入 `COLLECTING`，并允许未达/达到/超过期望数量时按实际份额锁单；本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；未配置 LLM Key 时命令流程继续可用；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
+- **独立应用门**：顶层 `poolmate/` 的 P0 / P1 / P2 / P4、安全关闭拼单和新自然语言故事已完成本地验收；@Bot 后可立即发送处理中卡片、解析后同卡片进入 `COLLECTING`，并允许未达/达到/超过期望数量时按实际份额锁单；本地 Mock 可形成持久化 `Intent -> PolicyDecision -> Settlement -> Receipt` 并进入 `DEMO_CONFIRMED`；未配置 LLM Key 时命令流程继续可用；`/help`、`/pool_help <用户请求>` 和 `/pool_test <orderId> +/-N` 已由单一 Markdown command skill 覆盖，调试指令只增减虚拟认领人，不创建 Checkout、付款或 Receipt；P3 远程联调仍等待基座稳定契约和真实 Testnet 证据。
 
 从当前提交继续时，严格按以下顺序：
 

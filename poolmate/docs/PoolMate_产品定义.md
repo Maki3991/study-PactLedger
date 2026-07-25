@@ -159,6 +159,27 @@ MVP 可以采用 Telegram 私聊跳转的独立确认页面或钱包页面。该
 
 ## 5. 核心用户流程
 
+### 5.0 Bot 指令、帮助和调试入口
+
+PoolMate 的 Telegram 指令说明由一个明确的 Markdown skill 维护：`poolmate/backend/src/bot/help/SKILL.md`。它是帮助输出、LLM command skill calling 和本地关键词兜底的共同事实源；TypeScript 代码只负责读取、解析和校验这份 Markdown，不再把“skill”写成命令常量文件。
+
+当前 skill 覆盖的用户入口包括：
+
+| 类别 | 指令 | 产品语义 |
+|---|---|---|
+| 初始化 | `/start` | 建立用户与 Bot 的私聊入口，确认 Bot 可用。 |
+| 运行状态 | `/status` | 查看 Telegram Bot 与自然语言解析运行状态。 |
+| 帮助 | `/help` | 展示完整命令清单。 |
+| LLM skill calling | `/pool_help <用户请求>` | 先用 LLM 按 Markdown skill 调用用户意图对应的 command skill，再用本地关键词兜底推荐命令；不会执行高风险命令或推断订单 ID。 |
+| 创建拼单 | `@PoolMate ...` / `/pool_new <expectedUnits> <title>` | 自然语言立即展示处理中卡片，解析完成后同卡片进入认领；命令入口用于无 LLM 或解析失败时。 |
+| 认领 | `/pool_claim <orderId> [units]` | 在 `COLLECTING` 阶段认领或调整数量。 |
+| 退出 | `/pool_leave <orderId>` | 锁单前移除自己的认领。 |
+| 报价 | `/pool_quote <orderId>` | 发起人按当前实际份额锁单并请求最终 Checkout。 |
+| 状态 | `/pool_status <orderId>` | 查看订单、Checkout、确认、付款和 Receipt 状态。 |
+| 关闭 | `/pool_close <orderId>` | 在安全阶段关闭拼单，不创建 Receipt。 |
+| 提醒 | `/pool_remind <orderId>` | 轮换并重发未确认用户的私聊确认链接。 |
+| 手动调试 | `/pool_test <orderId> +N` / `/pool_test <orderId> -N` | 增减确定性的 `Virtual #001` 风格虚拟参与人，方便现场测试 under/exact/over expected；该指令只改变认领记录，不创建 Checkout、确认、付款、Receipt 或链上证据。 |
+
 ### 阶段 A：创建拼单
 
 1. 群成员通过 `/pool_new <expectedUnits> <title>`，或在群内明确 @mention Bot 后用自然语言发起拼单。

@@ -1,6 +1,7 @@
 import { Bot, type BotConfig, type PollingOptions } from "grammy";
 import type { BotStatus } from "@poolmate/shared";
 import type { OrderDraftExtractor } from "../../application/ports/orderDraftExtractor.js";
+import type { CommandSkillInvoker } from "../help/commandSkillInvoker.js";
 import type { BotAdapter } from "../botAdapter.js";
 import type { PoolMateBotUseCases } from "../poolMateBotUseCases.js";
 import { message, resolveLocale } from "../i18n.js";
@@ -22,6 +23,7 @@ export interface CreateGrammyBotConfig {
   fetch?: NonNullable<BotConfig<PoolMateContext>["client"]>["fetch"];
   getBotStatus(): BotStatus;
   draftExtractor?: OrderDraftExtractor;
+  commandSkillInvoker?: CommandSkillInvoker;
   useCases?: PoolMateBotUseCases;
 }
 
@@ -32,6 +34,7 @@ export interface BotRuntimeConfig {
   apiRoot?: string;
   proxyUrl?: string;
   draftExtractor?: OrderDraftExtractor;
+  commandSkillInvoker?: CommandSkillInvoker;
   useCases?: PoolMateBotUseCases;
 }
 
@@ -96,12 +99,14 @@ export function createPoolMateBot(
   });
   registerSystemHandlers(bot, {
     getBotStatus: config.getBotStatus,
-    getLlmStatus: () => config.draftExtractor?.getStatus() ?? "disabled"
+    getLlmStatus: () => config.draftExtractor?.getStatus() ?? "disabled",
+    commandSkillInvoker: config.commandSkillInvoker
   });
   if (config.useCases) {
     registerPoolHandlers(bot, {
       useCases: config.useCases,
-      draftExtractor: config.draftExtractor
+      draftExtractor: config.draftExtractor,
+      commandSkillInvoker: config.commandSkillInvoker
     });
   }
 
@@ -147,6 +152,7 @@ export function createBotRuntime(
           fetch: createProxyFetch(config.proxyUrl),
           getBotStatus: () => status,
           draftExtractor: config.draftExtractor,
+          commandSkillInvoker: config.commandSkillInvoker,
           useCases: config.useCases
         })
       : null;

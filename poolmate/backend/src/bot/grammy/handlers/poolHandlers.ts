@@ -5,6 +5,12 @@ import {
   OrderDraftExtractorError
 } from "../../../application/ports/orderDraftExtractor.js";
 import {
+  formatGeneralHelp,
+  formatSkillHelp,
+  invokeCommandSkill
+} from "../../help/commandSkillHelp.js";
+import type { CommandSkillInvoker } from "../../help/commandSkillInvoker.js";
+import {
   parsePoolMateCallbackData,
   type PoolMateCallbackData
 } from "../../callbackData.js";
@@ -15,6 +21,7 @@ import {
 import {
   parseNewPoolCommand,
   parseOrderCommand,
+  parsePoolTestCommand,
   parseOrderUnitsCommand
 } from "../../poolCommands.js";
 import type {
@@ -31,6 +38,7 @@ import { ORDER_INTENT_SCHEMA_VERSION } from "../../../domain/orderIntent.js";
 export interface PoolHandlerDependencies {
   useCases: PoolMateBotUseCases;
   draftExtractor?: OrderDraftExtractor;
+  commandSkillInvoker?: CommandSkillInvoker;
 }
 
 function actor(context: PoolMateContext): PoolMateBotActor {
@@ -54,6 +62,52 @@ function orderMessage(prefix: string, order: OrderDetailView): string {
     `State: ${order.state}`,
     `Claims: ${order.claimedUnits}/${order.targetUnits}`
   ].join("\n");
+}
+
+const VIRTUAL_DISPLAY_PATTERN = /^Virtual #(\d{3})$/;
+
+function virtualSlotLabel(slot: number): string {
+  return String(slot).padStart(3, "0");
+}
+
+function virtualActor(slot: number): PoolMateBotActor {
+  const label = virtualSlotLabel(slot);
+  return {
+    userId: `poolmate-virtual-${label}`,
+    displayName: `Virtual #${label}`
+  };
+}
+
+function virtualSlots(order: OrderDetailView): number[] {
+  return order.participants
+    .map((participant) => {
+      const match = VIRTUAL_DISPLAY_PATTERN.exec(participant.displayName);
+      return match ? Number(match[1]) : undefined;
+    })
+    .filter((slot): slot is number => Number.isSafeInteger(slot))
+    .sort((left, right) => left - right);
+}
+
+function nextVirtualSlots(order: OrderDetailView, count: number): number[] {
+  const used = new Set(virtualSlots(order));
+  const slots: number[] = [];
+  for (let slot = 1; slots.length < count; slot += 1) {
+    if (!used.has(slot)) slots.push(slot);
+  }
+  return slots;
+}
+
+function removableVirtualSlots(
+  order: OrderDetailView,
+  count: number
+): number[] {
+  return virtualSlots(order).slice(-count).reverse();
+}
+
+function collectingKeyboardOptions(order: OrderDetailView) {
+  return order.state === "COLLECTING"
+    ? { reply_markup: collectingOrderKeyboard(order.id) }
+    : {};
 }
 
 function orderIntent(
@@ -486,7 +540,7 @@ async function handleCallbackAction(
 
 export function registerPoolHandlers(
   bot: Bot<PoolMateContext>,
-  { useCases, draftExtractor }: PoolHandlerDependencies
+  { useCases, draftExtractor, commandSkillInvoker }: PoolHandlerDependencies
 ): void {
   bot.command("pool_new", async (context) => {
     if (context.chat.type !== "group" && context.chat.type !== "supergroup") {
@@ -548,6 +602,65 @@ export function registerPoolHandlers(
         order
       ),
       { reply_markup: collectingOrderKeyboard(order.id) }
+    );
+  });
+
+  bot.command("pool_test", async (context) => {
+    const telegramChatId = groupChatId(context);
+    if (!telegramChatId) {
+      await context.reply("Use /pool_test in the order's Telegram group.");
+      return;
+    }
+    const command = parsePoolTestCommand(context.message?.text ?? "");
+    if (!command) {
+      await context.reply(
+        "Usage: /pool_test <orderId> +N or /pool_test <orderId> -N"
+      );
+      return;
+    }
+
+    let order = await useCases.getPool({
+      telegramChatId,
+      orderId: command.orderId
+    });
+    const baseKey = telegramUpdateIdempotencyKey(context.update.update_id);
+    let changed = 0;
+    if (command.delta > 0) {
+      for (const slot of nextVirtualSlots(order, command.delta)) {
+        order = await useCases.claimPool({
+          sourceIdempotencyKey: `${baseKey}:virtual:add:${virtualSlotLabel(slot)}`,
+          telegramChatId,
+          orderId: command.orderId,
+          actor: virtualActor(slot),
+          units: 1
+        });
+        changed += 1;
+      }
+      await context.reply(
+        orderMessage(`Virtual participants added: ${changed}.`, order),
+        collectingKeyboardOptions(order)
+      );
+      return;
+    }
+
+    const slots = removableVirtualSlots(order, Math.abs(command.delta));
+    for (const slot of slots) {
+      order = await useCases.leavePool({
+        sourceIdempotencyKey: `${baseKey}:virtual:remove:${virtualSlotLabel(slot)}`,
+        telegramChatId,
+        orderId: command.orderId,
+        actor: virtualActor(slot)
+      });
+      changed += 1;
+    }
+    await context.reply(
+      orderMessage(
+        changed > 0
+          ? `Virtual participants removed: ${changed}.`
+          : "No virtual participants were available to remove.",
+        order
+      ),
+      collectingKeyboardOptions(order)
     );
   });
 
@@ -706,6 +819,34 @@ export function registerPoolHandlers(
         await context.reply(
           "Natural-language drafts are disabled. Use /pool_new <targetUnits> <title>."
         );
+        return;
+      }
+
+      let skill;
+      try {
+        skill = await invokeCommandSkill(commandSkillInvoker, {
+          text: requestText,
+          locale: context.from?.language_code,
+          surface: "telegram_mention"
+        });
+      } catch {
+        await context.reply(
+          "Natural-language command skill calling is unavailable. Use /help or /pool_new <targetUnits> <title>."
+        );
+        return;
+      }
+      if (!skill) {
+        await context.reply(
+          "PoolMate could not decide which command skill to call. Use /help or /pool_new <targetUnits> <title>."
+        );
+        return;
+      }
+      if (skill.id === "general_help") {
+        await context.reply(formatGeneralHelp());
+        return;
+      }
+      if (skill.id !== "create_pool") {
+        await context.reply(formatSkillHelp(skill, "natural_language"));
         return;
       }
 

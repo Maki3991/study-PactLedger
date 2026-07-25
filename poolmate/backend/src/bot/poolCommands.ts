@@ -1,5 +1,6 @@
 const ORDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,40}$/;
 const MAX_TARGET_UNITS = 1_000;
+const MAX_TEST_DELTA = 20;
 const MAX_TITLE_LENGTH = 120;
 
 export interface NewPoolCommand {
@@ -10,6 +11,11 @@ export interface NewPoolCommand {
 export interface OrderUnitsCommand {
   orderId: string;
   units: number;
+}
+
+export interface PoolTestCommand {
+  orderId: string;
+  delta: number;
 }
 
 function commandPayload(text: string, command: string): string {
@@ -64,4 +70,22 @@ export function parseOrderCommand(
 ): string | null {
   const payload = commandPayload(text, command);
   return validOrderId(payload) ? payload : null;
+}
+
+export function parsePoolTestCommand(text: string): PoolTestCommand | null {
+  const payload = commandPayload(text, "pool_test");
+  const match = /^(\S+)\s+(?:(add|remove)\s+)?([+-]?\d+)$/i.exec(payload);
+  if (!match || !validOrderId(match[1])) return null;
+
+  const verb = match[2]?.toLowerCase();
+  const rawDelta = Number(match[3]);
+  if (!Number.isSafeInteger(rawDelta) || rawDelta === 0) return null;
+  const delta =
+    verb === "add"
+      ? Math.abs(rawDelta)
+      : verb === "remove"
+        ? -Math.abs(rawDelta)
+        : rawDelta;
+  if (Math.abs(delta) > MAX_TEST_DELTA) return null;
+  return { orderId: match[1], delta };
 }

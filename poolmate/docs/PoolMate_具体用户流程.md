@@ -108,6 +108,35 @@
 
 ---
 
+## 4.1 Bot 指令与手动调试
+
+所有 Bot 指令说明统一维护在 `poolmate/backend/src/bot/help/SKILL.md`。这份 Markdown skill 同时服务三类场景：
+
+1. `/help` 输出完整指令清单。
+2. `/pool_help <用户请求>` 先交给 LLM 按 skill 判断用户想做什么，再用本地关键词兜底推荐命令。
+3. 测试人员查看并使用调试指令。
+
+常用指令：
+
+| 指令 | 用途 |
+|---|---|
+| `/start` | 建立 Bot 私聊入口。 |
+| `/status` | 查看 Bot 和自然语言解析状态。 |
+| `/help` | 展示完整命令说明。 |
+| `/pool_help <用户请求>` | 例如 `/pool_help 我想加两个虚拟人测试`，返回推荐命令；不会执行命令。 |
+| `/pool_new <expectedUnits> <title>` | 在没有 LLM 或解析失败时用命令发起拼单。 |
+| `/pool_claim <orderId> [units]` | 认领商品数量。 |
+| `/pool_leave <orderId>` | 锁单前退出认领。 |
+| `/pool_quote <orderId>` | 发起人按当前实际认领数量锁单并请求最终报价。 |
+| `/pool_status <orderId>` | 查看订单、确认、付款和凭证状态。 |
+| `/pool_close <orderId>` | 安全关闭拼单。 |
+| `/pool_remind <orderId>` | 重发待确认链接。 |
+| `/pool_test <orderId> +N` / `/pool_test <orderId> -N` | 手动增减确定性的虚拟参与人，用于演示和回归测试。 |
+
+`/pool_test` 是调试指令，不是业务能力：它只通过正常 claim/leave 用例增减 `Virtual #001`、`Virtual #002` 等虚拟参与人，方便测试未达期望、正好达到期望和超过期望三类场景；它不会创建 Checkout、不会打开确认、不会提交付款、不会生成 Receipt，也不会产生任何链上证据。
+
+---
+
 ## 5. 完整主流程
 
 ### 阶段 A：发起拼单

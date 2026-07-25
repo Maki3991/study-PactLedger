@@ -12,6 +12,7 @@ import {
 } from "../src/bot/callbackData.js";
 import type { OrderDraftExtractor } from "../src/application/ports/orderDraftExtractor.js";
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
+import type { CommandSkillInvoker } from "../src/bot/help/commandSkillInvoker.js";
 import type {
   ClaimPoolFromBotInput,
   ClosePoolFromBotInput,
@@ -232,7 +233,8 @@ function createHarness(
   useCases: PoolMateBotUseCases,
   failedPrivateChatId?: string,
   privateFailureLimit = Number.POSITIVE_INFINITY,
-  draftExtractor?: OrderDraftExtractor
+  draftExtractor?: OrderDraftExtractor,
+  commandSkillInvoker?: CommandSkillInvoker
 ) {
   const apiCalls: ApiCall[] = [];
   let privateFailures = 0;
@@ -242,6 +244,7 @@ function createHarness(
     allowedUserIds: ["101"],
     getBotStatus: () => "running",
     draftExtractor,
+    commandSkillInvoker,
     useCases
   });
   bot.botInfo = {
@@ -552,10 +555,101 @@ test("claim and leave replies identify the Telegram actor by @username", async (
   ]);
 });
 
+test("pool_test command adds and removes deterministic virtual participants", async () => {
+  const addHarness = createUseCases();
+  const addBot = createHarness(addHarness.useCases).bot;
+  await addBot.handleUpdate(commandUpdate(113, "/pool_test order-1 +2"));
+  assert.deepEqual(
+    addHarness.calls.claim.map((call) => ({
+      sourceIdempotencyKey: call.sourceIdempotencyKey,
+      orderId: call.orderId,
+      actor: call.actor,
+      units: call.units
+    })),
+    [
+      {
+        sourceIdempotencyKey: "telegram:update:v1:113:virtual:add:001",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-001", displayName: "Virtual #001" },
+        units: 1
+      },
+      {
+        sourceIdempotencyKey: "telegram:update:v1:113:virtual:add:002",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-002", displayName: "Virtual #002" },
+        units: 1
+      }
+    ]
+  );
+
+  const removeHarness = createUseCases();
+  removeHarness.useCases.getPool = async (input) => {
+    removeHarness.calls.get.push(input);
+    return {
+      ...baseOrder,
+      claimedUnits: 3,
+      participantCount: 3,
+      participants: [
+        ...baseOrder.participants,
+        {
+          id: "participant-virtual-1",
+          displayName: "Virtual #001",
+          units: 1,
+          joinedAt: "2026-07-25T10:02:00.000Z"
+        },
+        {
+          id: "participant-virtual-2",
+          displayName: "Virtual #002",
+          units: 1,
+          joinedAt: "2026-07-25T10:03:00.000Z"
+        }
+      ]
+    };
+  };
+  const remove = createHarness(removeHarness.useCases);
+  await remove.bot.handleUpdate(commandUpdate(114, "/pool_test order-1 -2"));
+  assert.deepEqual(
+    removeHarness.calls.leave.map((call) => ({
+      sourceIdempotencyKey: call.sourceIdempotencyKey,
+      orderId: call.orderId,
+      actor: call.actor
+    })),
+    [
+      {
+        sourceIdempotencyKey: "telegram:update:v1:114:virtual:remove:002",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-002", displayName: "Virtual #002" }
+      },
+      {
+        sourceIdempotencyKey: "telegram:update:v1:114:virtual:remove:001",
+        orderId: "order-1",
+        actor: { userId: "poolmate-virtual-001", displayName: "Virtual #001" }
+      }
+    ]
+  );
+  const reply = remove.apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /Virtual participants removed: 2/);
+});
+
 test("natural language accepts exact username text and Telegram bot mention entities", async () => {
   let extracted = 0;
+  let invoked = 0;
   const naturalRequest =
     "拼单 3瓶可乐，美团外卖 xx店铺名 https://example.test/item";
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      invoked += 1;
+      assert.equal(request.text, naturalRequest);
+      assert.equal(request.locale, "zh");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "create_pool",
+        confidence: 0.94,
+        reason: "The user is starting a group purchase."
+      };
+    }
+  };
   const extractor: OrderDraftExtractor = {
     getStatus: () => "configured",
     async extract(request) {
@@ -581,7 +675,8 @@ test("natural language accepts exact username text and Telegram bot mention enti
     useCases,
     undefined,
     Number.POSITIVE_INFINITY,
-    extractor
+    extractor,
+    commandSkillInvoker
   );
 
   await bot.handleUpdate(textUpdate(110, "今晚吃什么"));
@@ -598,6 +693,7 @@ test("natural language accepts exact username text and Telegram bot mention enti
     textUpdate(112, `PoolMate ${naturalRequest}`, "text_mention")
   );
 
+  assert.equal(invoked, 3);
   assert.equal(extracted, 3);
   assert.deepEqual(calls.create, [
     {
@@ -702,7 +798,56 @@ test("natural language accepts exact username text and Telegram bot mention enti
   );
 });
 
+test("natural-language mention calls general_help instead of order draft extraction", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(request) {
+      assert.equal(request.text, "怎么用");
+      assert.equal(request.locale, "zh");
+      assert.equal(request.surface, "telegram_mention");
+      return {
+        skillId: "general_help",
+        confidence: 0.97,
+        reason: "The user asks how to use PoolMate."
+      };
+    }
+  };
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run for general_help");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(115, "@poolmate_test_bot 怎么用"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(String(reply?.payload.text), /PoolMate help/);
+  assert.match(String(reply?.payload.text), /\/pool_new/);
+  assert.match(String(reply?.payload.text), /\/pool_test <orderId> \+N/);
+  assert.doesNotMatch(String(reply?.payload.text), /unambiguous title/);
+});
+
 test("missing natural-language fields and disabled LLM never create drafts", async () => {
+  const createPoolSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke() {
+      return {
+        skillId: "create_pool",
+        confidence: 0.93,
+        reason: "The user is starting a group purchase."
+      };
+    }
+  };
   const missing: OrderDraftExtractor = {
     getStatus: () => "configured",
     async extract() {
@@ -731,7 +876,8 @@ test("missing natural-language fields and disabled LLM never create drafts", asy
     first.useCases,
     undefined,
     Number.POSITIVE_INFINITY,
-    missing
+    missing,
+    createPoolSkillInvoker
   );
   await firstHarness.bot.handleUpdate(
     textUpdate(120, "@poolmate_test_bot 拼水果", true)

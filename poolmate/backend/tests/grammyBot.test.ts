@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPoolMateBot } from "../src/bot/grammy/createBot.js";
+import type { CommandSkillInvoker } from "../src/bot/help/commandSkillInvoker.js";
 import { DomainError } from "../src/domain/domainError.js";
 
 interface ApiCall {
@@ -8,13 +9,18 @@ interface ApiCall {
   payload: Record<string, unknown>;
 }
 
-function createHarness(allowedUserIds = ["101"], userAllowlistEnabled = true) {
+function createHarness(
+  allowedUserIds = ["101"],
+  userAllowlistEnabled = true,
+  commandSkillInvoker?: CommandSkillInvoker
+) {
   const calls: ApiCall[] = [];
   const bot = createPoolMateBot({
     token: "123456:test-token",
     userAllowlistEnabled,
     allowedUserIds,
-    getBotStatus: () => "running"
+    getBotStatus: () => "running",
+    commandSkillInvoker
   });
 
   bot.botInfo = {
@@ -65,7 +71,13 @@ function createHarness(allowedUserIds = ["101"], userAllowlistEnabled = true) {
   return { bot, calls };
 }
 
-function commandUpdate(updateId: number, userId: number, text: string) {
+function commandUpdate(
+  updateId: number,
+  userId: number,
+  text: string,
+  languageCode = "en"
+) {
+  const command = text.split(/\s/, 1)[0]!;
   return {
     update_id: updateId,
     message: {
@@ -75,7 +87,7 @@ function commandUpdate(updateId: number, userId: number, text: string) {
         id: userId,
         is_bot: false,
         first_name: "Test User",
-        language_code: "en"
+        language_code: languageCode
       },
       chat: {
         id: userId,
@@ -86,7 +98,7 @@ function commandUpdate(updateId: number, userId: number, text: string) {
       entities: [
         {
           offset: 0,
-          length: text.length,
+          length: command.length,
           type: "bot_command" as const
         }
       ]
@@ -124,6 +136,58 @@ test("grammY handles /start and /status without live Telegram calls", async () =
     String(calls[1].payload.text),
     /Natural-language drafts: disabled/
   );
+});
+
+test("help calls command skills through the LLM Markdown skill invoker", async () => {
+  const invoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke(input) {
+      assert.equal(input.text, "帮我加两个虚拟人测试");
+      assert.equal(input.locale, "zh");
+      assert.equal(input.surface, "telegram_command");
+      return {
+        skillId: "debug_virtual_participants",
+        confidence: 0.91,
+        reason: "The user wants virtual demo participants."
+      };
+    }
+  };
+  const { bot, calls } = createHarness(["101"], true, invoker);
+
+  await bot.handleUpdate(
+    commandUpdate(20, 101, "/pool_help 帮我加两个虚拟人测试", "zh")
+  );
+
+  assert.equal(calls.length, 1);
+  assert.match(String(calls[0].payload.text), /Command skill called \(llm\)/);
+  assert.match(String(calls[0].payload.text), /\/pool_test <orderId> \+N/);
+  assert.match(String(calls[0].payload.text), /Virtual #001/);
+});
+
+test("general help lists normal and debug commands from the Markdown skill", async () => {
+  const { bot, calls } = createHarness();
+
+  await bot.handleUpdate(commandUpdate(22, 101, "/help"));
+
+  assert.equal(calls.length, 1);
+  assert.match(String(calls[0].payload.text), /\/start/);
+  assert.match(String(calls[0].payload.text), /\/status/);
+  assert.match(String(calls[0].payload.text), /\/pool_new/);
+  assert.match(String(calls[0].payload.text), /\/pool_test <orderId> \+N/);
+  assert.match(String(calls[0].payload.text), /Debug command/);
+});
+
+test("help falls back to local skill keywords when the LLM is disabled", async () => {
+  const { bot, calls } = createHarness();
+
+  await bot.handleUpdate(commandUpdate(21, 101, "/help 我想看订单状态"));
+
+  assert.equal(calls.length, 1);
+  assert.match(
+    String(calls[0].payload.text),
+    /Command skill called \(keyword\)/
+  );
+  assert.match(String(calls[0].payload.text), /\/pool_status <orderId>/);
 });
 
 test("grammY silently blocks commands from users outside the allowlist", async () => {

@@ -16,6 +16,7 @@ import {
   MOCK_MERCHANT_PAYEE_ID
 } from "./infrastructure/merchant/mockMerchantAdapter.js";
 import { createOrderDraftExtractor } from "./infrastructure/llm/httpOrderDraftExtractor.js";
+import { createCommandSkillInvoker } from "./infrastructure/llm/httpCommandSkillInvoker.js";
 import {
   formatConfirmationUpdate,
   formatPaymentStatus
@@ -63,6 +64,7 @@ const paymentOrchestrationService = new PaymentOrchestrationService({
 });
 const botUseCases = new OrderServiceBotUseCases(orderService);
 const draftExtractor = createOrderDraftExtractor(config.llm);
+const commandSkillInvoker = createCommandSkillInvoker(config.llm);
 
 const botRuntime = createBotRuntime({
   // Withholding the token leaves the runtime in "disabled" state instead of
@@ -75,6 +77,7 @@ const botRuntime = createBotRuntime({
   apiRoot: config.telegram.apiRoot,
   proxyUrl: config.telegram.proxyUrl,
   draftExtractor,
+  commandSkillInvoker,
   useCases: botUseCases
 });
 const app = await createServer({
