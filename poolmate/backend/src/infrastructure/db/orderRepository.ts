@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import { and, asc, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import type {
   CheckoutItemView,
   FundingMode,
@@ -10,6 +10,20 @@ import type {
   SettlementMode
 } from "@poolmate/shared";
 import type { PoolMateDatabase } from "./database.js";
+import {
+  allocations as allocationTable,
+  checkoutSnapshots,
+  confirmationSets,
+  groups,
+  operationIdempotency as operationIdempotencyTable,
+  orderCancellations,
+  orders,
+  outbox,
+  participants as participantTable,
+  paymentProjections,
+  paymentRequests,
+  userConfirmations
+} from "./schema.js";
 
 export interface GroupRow {
   id: string;
@@ -204,158 +218,116 @@ export interface PaymentStateUpdate {
 
 export type PaymentSubmissionClaim = "claimed" | "busy" | "expired";
 
-function mapGroup(row: Record<string, unknown>): GroupRow {
+type OrmConnection = PoolMateDatabase["orm"];
+type GroupRecord = typeof groups.$inferSelect;
+type OrderRecord = typeof orders.$inferSelect;
+type CancellationRecord = typeof orderCancellations.$inferSelect;
+type ParticipantRecord = typeof participantTable.$inferSelect;
+type CheckoutRecord = typeof checkoutSnapshots.$inferSelect;
+type PaymentRequestRecord = typeof paymentRequests.$inferSelect;
+type PaymentProjectionRecord = typeof paymentProjections.$inferSelect;
+type OutboxRecord = typeof outbox.$inferSelect;
+
+function mapGroup(row: GroupRecord): GroupRow {
+  return row;
+}
+
+function mapOrder(
+  row: OrderRecord,
+  cancellation?: CancellationRecord | null
+): OrderRow {
   return {
-    id: String(row.id),
-    telegramChatId: String(row.telegram_chat_id),
-    title: String(row.title),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
+    id: row.id,
+    groupId: row.groupId,
+    ownerUserId: row.ownerUserId,
+    title: row.title,
+    state: (row.terminalState ?? row.state) as OrderState,
+    fundingMode: row.fundingMode as FundingMode,
+    targetUnits: row.targetUnits,
+    sourceIdempotencyKey: row.sourceIdempotencyKey,
+    requestHash: row.requestHash,
+    cancellation: cancellation
+      ? {
+          actorType:
+            cancellation.actorType as OrderCancellationView["actorType"],
+          actorId: cancellation.actorId,
+          reasonCode:
+            cancellation.reasonCode as OrderCancellationView["reasonCode"],
+          canceledAt: cancellation.createdAt
+        }
+      : null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   };
 }
 
-function mapOrder(row: Record<string, unknown>): OrderRow {
-  const terminalState =
-    row.terminal_state === null || row.terminal_state === undefined
-      ? null
-      : String(row.terminal_state);
-  const canceledAt = row.cancellation_created_at;
+function mapParticipant(row: ParticipantRecord): ParticipantRow {
+  return row;
+}
+
+function mapCheckout(row: CheckoutRecord): CheckoutRow {
   return {
-    id: String(row.id),
-    groupId: String(row.group_id),
-    ownerUserId: String(row.owner_user_id),
-    title: String(row.title),
-    state: (terminalState ?? String(row.state)) as OrderState,
-    fundingMode: String(row.funding_mode) as FundingMode,
-    targetUnits: Number(row.target_units),
-    sourceIdempotencyKey:
-      row.source_idempotency_key === null
-        ? null
-        : String(row.source_idempotency_key),
-    requestHash:
-      row.request_hash === null || row.request_hash === undefined
-        ? null
-        : String(row.request_hash),
-    cancellation:
-      canceledAt === null || canceledAt === undefined
-        ? null
-        : {
-            actorType: String(
-              row.cancellation_actor_type
-            ) as OrderCancellationView["actorType"],
-            actorId: String(row.cancellation_actor_id),
-            reasonCode: String(
-              row.cancellation_reason_code
-            ) as OrderCancellationView["reasonCode"],
-            canceledAt: String(canceledAt)
-          },
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
+    id: row.id,
+    orderId: row.orderId,
+    version: row.version,
+    hash: row.hash,
+    merchantId: row.merchantId,
+    merchantDisplayName: row.merchantDisplayName,
+    payeeId: row.payeeId,
+    hashAlgorithm: row.hashAlgorithm as "SHA-256",
+    canonicalizationVersion:
+      row.canonicalizationVersion as "poolmate-checkout-json-v1",
+    isCanonical: row.isCanonical,
+    items: JSON.parse(row.itemsJson) as CheckoutItemView[],
+    assetId: row.assetId,
+    goodsAmountAtomic: row.goodsAmountAtomic,
+    shippingAmountAtomic: row.shippingAmountAtomic,
+    discountAmountAtomic: row.discountAmountAtomic,
+    feeAmountAtomic: row.feeAmountAtomic,
+    totalAmountAtomic: row.totalAmountAtomic,
+    expiresAt: row.expiresAt,
+    quoteReference: row.quoteReference,
+    sourceIdempotencyKey: row.sourceIdempotencyKey,
+    requestHash: row.requestHash,
+    createdAt: row.createdAt
   };
 }
 
-function mapParticipant(row: Record<string, unknown>): ParticipantRow {
+function mapPaymentRequest(row: PaymentRequestRecord): PaymentRequestRow {
   return {
-    id: String(row.id),
-    orderId: String(row.order_id),
-    userId: String(row.user_id),
-    displayName: String(row.display_name),
-    units: Number(row.units),
-    joinedAt: String(row.joined_at),
-    updatedAt: String(row.updated_at)
-  };
-}
-
-function mapCheckout(row: Record<string, unknown>): CheckoutRow {
-  const items = JSON.parse(String(row.items_json)) as CheckoutItemView[];
-  return {
-    id: String(row.id),
-    orderId: String(row.order_id),
-    version: Number(row.version),
-    hash: String(row.hash),
-    merchantId: String(row.merchant_id),
-    merchantDisplayName: String(row.merchant_display_name),
-    payeeId: String(row.payee_id),
-    hashAlgorithm: String(row.hash_algorithm) as "SHA-256",
-    canonicalizationVersion: String(
-      row.canonicalization_version
-    ) as "poolmate-checkout-json-v1",
-    isCanonical: Number(row.is_canonical) === 1,
-    items,
-    assetId: String(row.asset_id),
-    goodsAmountAtomic: String(row.goods_amount_atomic),
-    shippingAmountAtomic: String(row.shipping_amount_atomic),
-    discountAmountAtomic: String(row.discount_amount_atomic),
-    feeAmountAtomic: String(row.fee_amount_atomic),
-    totalAmountAtomic: String(row.total_amount_atomic),
-    expiresAt: String(row.expires_at),
-    quoteReference: String(row.quote_reference),
-    sourceIdempotencyKey:
-      row.source_idempotency_key === null
-        ? null
-        : String(row.source_idempotency_key),
-    requestHash: row.request_hash === null ? null : String(row.request_hash),
-    createdAt: String(row.created_at)
-  };
-}
-
-function mapPaymentRequest(row: Record<string, unknown>): PaymentRequestRow {
-  return {
-    id: String(row.id),
-    orderId: String(row.order_id),
-    checkoutId: String(row.checkout_id),
-    checkoutVersion: Number(row.checkout_version),
-    checkoutHash: String(row.checkout_hash),
-    confirmationSetId: String(row.confirmation_set_id),
-    idempotencyKey: String(row.idempotency_key),
-    payerRef: String(row.payer_ref),
-    payeeId: String(row.payee_id),
-    assetId: String(row.asset_id),
-    amountAtomic: String(row.amount_atomic),
-    expiresAt: String(row.expires_at),
-    status: String(row.status) as PaymentRequestRow["status"],
-    createdAt: String(row.created_at)
+    id: row.id,
+    orderId: row.orderId,
+    checkoutId: row.checkoutId,
+    checkoutVersion: row.checkoutVersion,
+    checkoutHash: row.checkoutHash,
+    confirmationSetId: row.confirmationSetId,
+    idempotencyKey: row.idempotencyKey,
+    payerRef: row.payerRef,
+    payeeId: row.payeeId,
+    assetId: row.assetId,
+    amountAtomic: row.amountAtomic,
+    expiresAt: row.expiresAt,
+    status: row.status as PaymentRequestRow["status"],
+    createdAt: row.createdAt
   };
 }
 
 function mapPaymentProjection(
-  row: Record<string, unknown>
+  row: PaymentProjectionRecord
 ): PaymentProjectionRow {
   return {
-    paymentRequestId: String(row.payment_request_id),
-    operationId: String(row.operation_id),
-    status: String(row.status) as PaymentProjectionStatus,
-    settlementMode: String(row.settlement_mode) as SettlementMode,
-    errorCode: row.error_code === null ? null : String(row.error_code),
-    errorMessage: row.error_message === null ? null : String(row.error_message),
-    receiptId: row.receipt_id === null ? null : String(row.receipt_id),
-    transactionHash:
-      row.transaction_hash === null ? null : String(row.transaction_hash),
-    explorerUrl: row.explorer_url === null ? null : String(row.explorer_url),
-    confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
-    attempts: Number(row.attempts),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
+    ...row,
+    status: row.status as PaymentProjectionStatus,
+    settlementMode: row.settlementMode as SettlementMode
   };
 }
 
-function mapPaymentOutbox(row: Record<string, unknown>): PaymentOutboxRow {
-  return {
-    id: String(row.id),
-    paymentRequestId: String(row.payment_request_id),
-    operationId: String(row.operation_id),
-    status: String(row.status) as PaymentOutboxRow["status"],
-    attempts: Number(row.attempts),
-    lastErrorCode:
-      row.last_error_code === null ? null : String(row.last_error_code),
-    availableAt: String(row.available_at),
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
-  };
+function mapPaymentOutbox(row: OutboxRecord): PaymentOutboxRow {
+  return { ...row, status: row.status as PaymentOutboxRow["status"] };
 }
 
 export class OrderTransaction {
-  constructor(private readonly connection: Database.Database) {}
+  constructor(private readonly connection: OrmConnection) {}
 
   upsertGroup(input: {
     id: string;
@@ -364,50 +336,58 @@ export class OrderTransaction {
     now: string;
   }): GroupRow {
     this.connection
-      .prepare(
-        `INSERT INTO pm_groups (id, telegram_chat_id, title, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(telegram_chat_id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`
-      )
-      .run(input.id, input.telegramChatId, input.title, input.now, input.now);
+      .insert(groups)
+      .values({
+        id: input.id,
+        telegramChatId: input.telegramChatId,
+        title: input.title,
+        createdAt: input.now,
+        updatedAt: input.now
+      })
+      .onConflictDoUpdate({
+        target: groups.telegramChatId,
+        set: { title: input.title, updatedAt: input.now }
+      })
+      .run();
     return this.getGroupByChatId(input.telegramChatId)!;
   }
 
   getGroup(id: string): GroupRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_groups WHERE id = ?")
-      .get(id) as Record<string, unknown> | undefined;
+      .select()
+      .from(groups)
+      .where(eq(groups.id, id))
+      .get();
     return row ? mapGroup(row) : undefined;
   }
 
   getGroupByChatId(telegramChatId: string): GroupRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_groups WHERE telegram_chat_id = ?")
-      .get(telegramChatId) as Record<string, unknown> | undefined;
+      .select()
+      .from(groups)
+      .where(eq(groups.telegramChatId, telegramChatId))
+      .get();
     return row ? mapGroup(row) : undefined;
   }
 
   insertOrder(row: OrderRow): OrderRow {
     const result = this.connection
-      .prepare(
-        `INSERT OR IGNORE INTO pm_orders
-         (id, group_id, owner_user_id, title, state, funding_mode, target_units,
-          source_idempotency_key, request_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        row.id,
-        row.groupId,
-        row.ownerUserId,
-        row.title,
-        row.state,
-        row.fundingMode,
-        row.targetUnits,
-        row.sourceIdempotencyKey,
-        row.requestHash,
-        row.createdAt,
-        row.updatedAt
-      );
+      .insert(orders)
+      .values({
+        id: row.id,
+        groupId: row.groupId,
+        ownerUserId: row.ownerUserId,
+        title: row.title,
+        state: row.state,
+        fundingMode: row.fundingMode,
+        targetUnits: row.targetUnits,
+        sourceIdempotencyKey: row.sourceIdempotencyKey,
+        requestHash: row.requestHash,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
+      })
+      .onConflictDoNothing()
+      .run();
     if (result.changes === 0 && row.sourceIdempotencyKey) {
       const existing = this.getOrderBySourceKey(row.sourceIdempotencyKey);
       if (existing) return existing;
@@ -416,78 +396,58 @@ export class OrderTransaction {
   }
 
   getOrder(id: string): OrderRow | undefined {
-    const row = this.connection
-      .prepare(
-        `SELECT o.*, c.actor_type AS cancellation_actor_type,
-                c.actor_id AS cancellation_actor_id,
-                c.reason_code AS cancellation_reason_code,
-                c.created_at AS cancellation_created_at
-         FROM pm_orders o
-         LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
-         WHERE o.id = ?`
-      )
-      .get(id) as Record<string, unknown> | undefined;
-    return row ? mapOrder(row) : undefined;
+    return this.findOrder(eq(orders.id, id));
   }
 
   getOrderBySourceKey(key: string): OrderRow | undefined {
+    return this.findOrder(eq(orders.sourceIdempotencyKey, key));
+  }
+
+  private findOrder(condition: ReturnType<typeof eq>): OrderRow | undefined {
     const row = this.connection
-      .prepare(
-        `SELECT o.*, c.actor_type AS cancellation_actor_type,
-                c.actor_id AS cancellation_actor_id,
-                c.reason_code AS cancellation_reason_code,
-                c.created_at AS cancellation_created_at
-         FROM pm_orders o
-         LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
-         WHERE o.source_idempotency_key = ?`
-      )
-      .get(key) as Record<string, unknown> | undefined;
-    return row ? mapOrder(row) : undefined;
+      .select({ order: orders, cancellation: orderCancellations })
+      .from(orders)
+      .leftJoin(orderCancellations, eq(orderCancellations.orderId, orders.id))
+      .where(condition)
+      .get();
+    return row ? mapOrder(row.order, row.cancellation) : undefined;
   }
 
   claimOrderRequestHash(id: string, requestHash: string): boolean {
     return (
       this.connection
-        .prepare(
-          `UPDATE pm_orders SET request_hash = ?
-           WHERE id = ? AND request_hash IS NULL`
-        )
-        .run(requestHash, id).changes === 1
+        .update(orders)
+        .set({ requestHash })
+        .where(and(eq(orders.id, id), isNull(orders.requestHash)))
+        .run().changes === 1
     );
   }
 
   listOrders(): OrderRow[] {
-    return (
-      this.connection
-        .prepare(
-          `SELECT o.*, c.actor_type AS cancellation_actor_type,
-                  c.actor_id AS cancellation_actor_id,
-                  c.reason_code AS cancellation_reason_code,
-                  c.created_at AS cancellation_created_at
-           FROM pm_orders o
-           LEFT JOIN pm_order_cancellations c ON c.order_id = o.id
-           ORDER BY o.updated_at DESC, o.id`
-        )
-        .all() as Record<string, unknown>[]
-    ).map(mapOrder);
+    return this.connection
+      .select({ order: orders, cancellation: orderCancellations })
+      .from(orders)
+      .leftJoin(orderCancellations, eq(orderCancellations.orderId, orders.id))
+      .orderBy(desc(orders.updatedAt), asc(orders.id))
+      .all()
+      .map((row) => mapOrder(row.order, row.cancellation));
   }
 
   updateOrderState(id: string, state: OrderState, now: string): void {
     this.connection
-      .prepare(
-        `UPDATE pm_orders SET state = ?, updated_at = ?
-         WHERE id = ? AND terminal_state IS NULL`
-      )
-      .run(state, now, id);
+      .update(orders)
+      .set({ state, updatedAt: now })
+      .where(and(eq(orders.id, id), isNull(orders.terminalState)))
+      .run();
   }
 
   cancellationByIdempotencyKey(key: string): OrderRow | undefined {
-    const row = this.connection
-      .prepare(
-        "SELECT order_id FROM pm_order_cancellations WHERE idempotency_key = ?"
-      )
-      .get(key) as { order_id: string } | undefined;
-    return row ? this.getOrder(row.order_id) : undefined;
+    const cancellation = this.connection
+      .select({ orderId: orderCancellations.orderId })
+      .from(orderCancellations)
+      .where(eq(orderCancellations.idempotencyKey, key))
+      .get();
+    return cancellation ? this.getOrder(cancellation.orderId) : undefined;
   }
 
   cancelOrder(input: {
@@ -500,67 +460,77 @@ export class OrderTransaction {
     now: string;
   }): void {
     this.connection
-      .prepare(
-        `INSERT INTO pm_order_cancellations
-         (order_id, idempotency_key, request_hash, actor_type, actor_id,
-          reason_code, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        input.orderId,
-        input.idempotencyKey,
-        input.requestHash,
-        input.actorType,
-        input.actorId,
-        input.reasonCode,
-        input.now
-      );
+      .insert(orderCancellations)
+      .values({
+        orderId: input.orderId,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        reasonCode: input.reasonCode,
+        createdAt: input.now
+      })
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_orders
-         SET terminal_state = 'CANCELED', updated_at = ?
-         WHERE id = ? AND terminal_state IS NULL`
-      )
-      .run(input.now, input.orderId);
+      .update(orders)
+      .set({ terminalState: "CANCELED", updatedAt: input.now })
+      .where(and(eq(orders.id, input.orderId), isNull(orders.terminalState)))
+      .run();
   }
 
   terminatePaymentForCanceledOrder(orderId: string, now: string): void {
     const request = this.paymentRequest(orderId);
     if (!request) return;
     this.connection
-      .prepare(
-        `UPDATE pm_payment_requests
-         SET status = 'failed', updated_at = ?
-         WHERE id = ? AND status = 'ready'`
+      .update(paymentRequests)
+      .set({ status: "failed", updatedAt: now })
+      .where(
+        and(
+          eq(paymentRequests.id, request.id),
+          eq(paymentRequests.status, "ready")
+        )
       )
-      .run(now, request.id);
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_payment_projections
-         SET status = 'FAILED', error_code = 'ORDER_CANCELED',
-             error_message = 'Order canceled before payment submission.',
-             updated_at = ?
-         WHERE payment_request_id = ? AND status IN ('READY', 'UNAVAILABLE')`
+      .update(paymentProjections)
+      .set({
+        status: "FAILED",
+        errorCode: "ORDER_CANCELED",
+        errorMessage: "Order canceled before payment submission.",
+        updatedAt: now
+      })
+      .where(
+        and(
+          eq(paymentProjections.paymentRequestId, request.id),
+          inArray(paymentProjections.status, ["READY", "UNAVAILABLE"])
+        )
       )
-      .run(now, request.id);
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_outbox
-         SET status = 'completed', last_error_code = 'ORDER_CANCELED',
-             available_at = ?, updated_at = ?
-         WHERE payment_request_id = ? AND status IN ('pending', 'blocked')`
+      .update(outbox)
+      .set({
+        status: "completed",
+        lastErrorCode: "ORDER_CANCELED",
+        availableAt: now,
+        updatedAt: now
+      })
+      .where(
+        and(
+          eq(outbox.paymentRequestId, request.id),
+          inArray(outbox.status, ["pending", "blocked"])
+        )
       )
-      .run(now, now, request.id);
+      .run();
   }
 
   participants(orderId: string): ParticipantRow[] {
-    return (
-      this.connection
-        .prepare(
-          "SELECT * FROM pm_participants WHERE order_id = ? ORDER BY joined_at, id"
-        )
-        .all(orderId) as Record<string, unknown>[]
-    ).map(mapParticipant);
+    return this.connection
+      .select()
+      .from(participantTable)
+      .where(eq(participantTable.orderId, orderId))
+      .orderBy(asc(participantTable.joinedAt), asc(participantTable.id))
+      .all()
+      .map(mapParticipant);
   }
 
   getParticipantByUser(
@@ -568,210 +538,236 @@ export class OrderTransaction {
     userId: string
   ): ParticipantRow | undefined {
     const row = this.connection
-      .prepare(
-        "SELECT * FROM pm_participants WHERE order_id = ? AND user_id = ?"
+      .select()
+      .from(participantTable)
+      .where(
+        and(
+          eq(participantTable.orderId, orderId),
+          eq(participantTable.userId, userId)
+        )
       )
-      .get(orderId, userId) as Record<string, unknown> | undefined;
+      .get();
     return row ? mapParticipant(row) : undefined;
   }
 
   upsertParticipant(row: ParticipantRow): void {
     this.connection
-      .prepare(
-        `INSERT INTO pm_participants
-         (id, order_id, user_id, display_name, units, joined_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(order_id, user_id) DO UPDATE SET
-           display_name = excluded.display_name,
-           units = excluded.units,
-           updated_at = excluded.updated_at`
-      )
-      .run(
-        row.id,
-        row.orderId,
-        row.userId,
-        row.displayName,
-        row.units,
-        row.joinedAt,
-        row.updatedAt
-      );
+      .insert(participantTable)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [participantTable.orderId, participantTable.userId],
+        set: {
+          displayName: row.displayName,
+          units: row.units,
+          updatedAt: row.updatedAt
+        }
+      })
+      .run();
   }
 
   deleteParticipant(orderId: string, userId: string): boolean {
     return (
       this.connection
-        .prepare(
-          "DELETE FROM pm_participants WHERE order_id = ? AND user_id = ?"
+        .delete(participantTable)
+        .where(
+          and(
+            eq(participantTable.orderId, orderId),
+            eq(participantTable.userId, userId)
+          )
         )
-        .run(orderId, userId).changes > 0
+        .run().changes > 0
     );
   }
 
   latestCheckout(orderId: string): CheckoutRow | undefined {
     const row = this.connection
-      .prepare(
-        "SELECT * FROM pm_checkout_snapshots WHERE order_id = ? ORDER BY version DESC LIMIT 1"
-      )
-      .get(orderId) as Record<string, unknown> | undefined;
+      .select()
+      .from(checkoutSnapshots)
+      .where(eq(checkoutSnapshots.orderId, orderId))
+      .orderBy(desc(checkoutSnapshots.version))
+      .limit(1)
+      .get();
     return row ? mapCheckout(row) : undefined;
   }
 
   latestCanonicalCheckout(orderId: string): CheckoutRow | undefined {
     const row = this.connection
-      .prepare(
-        `SELECT * FROM pm_checkout_snapshots
-         WHERE order_id = ? AND is_canonical = 1
-         ORDER BY version DESC LIMIT 1`
+      .select()
+      .from(checkoutSnapshots)
+      .where(
+        and(
+          eq(checkoutSnapshots.orderId, orderId),
+          eq(checkoutSnapshots.isCanonical, true)
+        )
       )
-      .get(orderId) as Record<string, unknown> | undefined;
+      .orderBy(desc(checkoutSnapshots.version))
+      .limit(1)
+      .get();
     return row ? mapCheckout(row) : undefined;
   }
 
   checkoutBySourceKey(sourceIdempotencyKey: string): CheckoutRow | undefined {
     const row = this.connection
-      .prepare(
-        "SELECT * FROM pm_checkout_snapshots WHERE source_idempotency_key = ?"
-      )
-      .get(sourceIdempotencyKey) as Record<string, unknown> | undefined;
+      .select()
+      .from(checkoutSnapshots)
+      .where(eq(checkoutSnapshots.sourceIdempotencyKey, sourceIdempotencyKey))
+      .get();
     return row ? mapCheckout(row) : undefined;
   }
 
   claimCheckoutRequestHash(id: string, requestHash: string): boolean {
     return (
       this.connection
-        .prepare(
-          `UPDATE pm_checkout_snapshots SET request_hash = ?
-           WHERE id = ? AND request_hash IS NULL`
+        .update(checkoutSnapshots)
+        .set({ requestHash })
+        .where(
+          and(
+            eq(checkoutSnapshots.id, id),
+            isNull(checkoutSnapshots.requestHash)
+          )
         )
-        .run(requestHash, id).changes === 1
+        .run().changes === 1
     );
   }
 
   supersedeConfirmations(orderId: string, now: string): void {
+    const checkoutIds = this.connection
+      .select({ id: checkoutSnapshots.id })
+      .from(checkoutSnapshots)
+      .where(eq(checkoutSnapshots.orderId, orderId));
     this.connection
-      .prepare(
-        `UPDATE pm_user_confirmations
-         SET status = 'superseded', updated_at = ?
-         WHERE status IN ('pending', 'confirmed', 'declined') AND checkout_id IN
-           (SELECT id FROM pm_checkout_snapshots WHERE order_id = ?)`
+      .update(userConfirmations)
+      .set({ status: "superseded", updatedAt: now })
+      .where(
+        and(
+          inArray(userConfirmations.status, [
+            "pending",
+            "confirmed",
+            "declined"
+          ]),
+          inArray(userConfirmations.checkoutId, checkoutIds)
+        )
       )
-      .run(now, orderId);
+      .run();
   }
 
   insertCheckout(row: NewCheckout): void {
     this.connection
-      .prepare(
-        `INSERT INTO pm_checkout_snapshots
-         (id, order_id, version, hash, merchant_id, merchant_display_name,
-          payee_id, hash_algorithm, canonicalization_version, is_canonical, items_json,
-          asset_id, goods_amount_atomic, shipping_amount_atomic,
-          discount_amount_atomic, fee_amount_atomic, total_amount_atomic,
-          expires_at, quote_reference, source_idempotency_key, request_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        row.id,
-        row.orderId,
-        row.version,
-        row.hash,
-        row.merchantId,
-        row.merchantDisplayName,
-        row.payeeId,
-        row.hashAlgorithm,
-        row.canonicalizationVersion,
-        JSON.stringify(row.items),
-        row.assetId,
-        row.goodsAmountAtomic,
-        row.shippingAmountAtomic,
-        row.discountAmountAtomic,
-        row.feeAmountAtomic,
-        row.totalAmountAtomic,
-        row.expiresAt,
-        row.quoteReference,
-        row.sourceIdempotencyKey,
-        row.requestHash,
-        row.createdAt
-      );
-    const allocationStatement = this.connection.prepare(
-      `INSERT INTO pm_allocations
-       (id, checkout_id, participant_id, asset_id, amount_atomic, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const confirmationStatement = this.connection.prepare(
-      `INSERT INTO pm_user_confirmations
-       (id, checkout_id, participant_id, token_hash, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?)`
-    );
+      .insert(checkoutSnapshots)
+      .values({
+        id: row.id,
+        orderId: row.orderId,
+        version: row.version,
+        hash: row.hash,
+        merchantId: row.merchantId,
+        merchantDisplayName: row.merchantDisplayName,
+        payeeId: row.payeeId,
+        hashAlgorithm: row.hashAlgorithm,
+        canonicalizationVersion: row.canonicalizationVersion,
+        isCanonical: true,
+        itemsJson: JSON.stringify(row.items),
+        assetId: row.assetId,
+        goodsAmountAtomic: row.goodsAmountAtomic,
+        shippingAmountAtomic: row.shippingAmountAtomic,
+        discountAmountAtomic: row.discountAmountAtomic,
+        feeAmountAtomic: row.feeAmountAtomic,
+        totalAmountAtomic: row.totalAmountAtomic,
+        expiresAt: row.expiresAt,
+        quoteReference: row.quoteReference,
+        sourceIdempotencyKey: row.sourceIdempotencyKey,
+        requestHash: row.requestHash,
+        createdAt: row.createdAt
+      })
+      .run();
     for (const allocation of row.allocations) {
-      allocationStatement.run(
-        allocation.id,
-        row.id,
-        allocation.participantId,
-        allocation.assetId,
-        allocation.amountAtomic,
-        row.createdAt
-      );
-      confirmationStatement.run(
-        allocation.confirmationId,
-        row.id,
-        allocation.participantId,
-        allocation.tokenHash,
-        row.createdAt,
-        row.createdAt
-      );
+      this.connection
+        .insert(allocationTable)
+        .values({
+          id: allocation.id,
+          checkoutId: row.id,
+          participantId: allocation.participantId,
+          assetId: allocation.assetId,
+          amountAtomic: allocation.amountAtomic,
+          createdAt: row.createdAt
+        })
+        .run();
+      this.connection
+        .insert(userConfirmations)
+        .values({
+          id: allocation.confirmationId,
+          checkoutId: row.id,
+          participantId: allocation.participantId,
+          tokenHash: allocation.tokenHash,
+          status: "pending",
+          createdAt: row.createdAt,
+          updatedAt: row.createdAt
+        })
+        .run();
     }
   }
 
   allocations(checkoutId: string): AllocationRow[] {
     return this.connection
-      .prepare(
-        `SELECT p.id AS participant_id, p.user_id, p.display_name, p.units,
-                a.asset_id, a.amount_atomic, c.status AS confirmation_status,
-                c.confirmed_at, c.declined_at
-         FROM pm_allocations a
-         JOIN pm_participants p ON p.id = a.participant_id
-         JOIN pm_user_confirmations c
-           ON c.checkout_id = a.checkout_id AND c.participant_id = a.participant_id
-         WHERE a.checkout_id = ?
-         ORDER BY p.joined_at, p.id`
+      .select({
+        participant: participantTable,
+        allocation: allocationTable,
+        confirmation: userConfirmations
+      })
+      .from(allocationTable)
+      .innerJoin(
+        participantTable,
+        eq(participantTable.id, allocationTable.participantId)
       )
-      .all(checkoutId)
-      .map((row) => {
-        const value = row as Record<string, unknown>;
-        return {
-          participantId: String(value.participant_id),
-          userId: String(value.user_id),
-          displayName: String(value.display_name),
-          units: Number(value.units),
-          assetId: String(value.asset_id),
-          amountAtomic: String(value.amount_atomic),
-          confirmationStatus: String(
-            value.confirmation_status
-          ) as AllocationRow["confirmationStatus"],
-          confirmedAt:
-            value.confirmed_at === null ? null : String(value.confirmed_at),
-          declinedAt:
-            value.declined_at === null ? null : String(value.declined_at)
-        };
-      });
+      .innerJoin(
+        userConfirmations,
+        and(
+          eq(userConfirmations.checkoutId, allocationTable.checkoutId),
+          eq(userConfirmations.participantId, allocationTable.participantId)
+        )
+      )
+      .where(eq(allocationTable.checkoutId, checkoutId))
+      .orderBy(asc(participantTable.joinedAt), asc(participantTable.id))
+      .all()
+      .map(({ participant, allocation, confirmation }) => ({
+        participantId: participant.id,
+        userId: participant.userId,
+        displayName: participant.displayName,
+        units: participant.units,
+        assetId: allocation.assetId,
+        amountAtomic: allocation.amountAtomic,
+        confirmationStatus:
+          confirmation.status as AllocationRow["confirmationStatus"],
+        confirmedAt: confirmation.confirmedAt,
+        declinedAt: confirmation.declinedAt
+      }));
   }
 
   paymentRequest(orderId: string): PaymentRequestRow | undefined {
     const row = this.connection
-      .prepare(
-        `SELECT r.* FROM pm_payment_requests r
-         JOIN pm_checkout_snapshots c ON c.id = r.checkout_id
-         WHERE r.order_id = ? AND c.is_canonical = 1
-         ORDER BY r.created_at DESC LIMIT 1`
+      .select({ request: paymentRequests })
+      .from(paymentRequests)
+      .innerJoin(
+        checkoutSnapshots,
+        eq(checkoutSnapshots.id, paymentRequests.checkoutId)
       )
-      .get(orderId) as Record<string, unknown> | undefined;
-    return row ? mapPaymentRequest(row) : undefined;
+      .where(
+        and(
+          eq(paymentRequests.orderId, orderId),
+          eq(checkoutSnapshots.isCanonical, true)
+        )
+      )
+      .orderBy(desc(paymentRequests.createdAt))
+      .limit(1)
+      .get();
+    return row ? mapPaymentRequest(row.request) : undefined;
   }
 
   paymentRequestById(id: string): PaymentRequestRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_payment_requests WHERE id = ?")
-      .get(id) as Record<string, unknown> | undefined;
+      .select()
+      .from(paymentRequests)
+      .where(eq(paymentRequests.id, id))
+      .get();
     return row ? mapPaymentRequest(row) : undefined;
   }
 
@@ -779,10 +775,10 @@ export class OrderTransaction {
     paymentRequestId: string
   ): PaymentProjectionRow | undefined {
     const row = this.connection
-      .prepare(
-        "SELECT * FROM pm_payment_projections WHERE payment_request_id = ?"
-      )
-      .get(paymentRequestId) as Record<string, unknown> | undefined;
+      .select()
+      .from(paymentProjections)
+      .where(eq(paymentProjections.paymentRequestId, paymentRequestId))
+      .get();
     return row ? mapPaymentProjection(row) : undefined;
   }
 
@@ -790,15 +786,19 @@ export class OrderTransaction {
     operationId: string
   ): PaymentProjectionRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_payment_projections WHERE operation_id = ?")
-      .get(operationId) as Record<string, unknown> | undefined;
+      .select()
+      .from(paymentProjections)
+      .where(eq(paymentProjections.operationId, operationId))
+      .get();
     return row ? mapPaymentProjection(row) : undefined;
   }
 
   paymentOutbox(paymentRequestId: string): PaymentOutboxRow | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM pm_outbox WHERE payment_request_id = ?")
-      .get(paymentRequestId) as Record<string, unknown> | undefined;
+      .select()
+      .from(outbox)
+      .where(eq(outbox.paymentRequestId, paymentRequestId))
+      .get();
     return row ? mapPaymentOutbox(row) : undefined;
   }
 
@@ -806,103 +806,135 @@ export class OrderTransaction {
     settlementMode: Exclude<SettlementMode, "disabled">,
     now: string
   ): string[] {
-    return (
-      this.connection
-        .prepare(
-          `SELECT r.order_id
-           FROM pm_payment_requests r
-           JOIN pm_payment_projections p ON p.payment_request_id = r.id
-           JOIN pm_outbox o ON o.payment_request_id = r.id
-           JOIN pm_orders orders ON orders.id = r.order_id
-           WHERE p.settlement_mode = ?
-             AND orders.terminal_state IS NULL
-             AND (
-               p.status IN ('SUBMITTED', 'UNKNOWN')
-               OR (
-                 p.status = 'SUBMITTING'
-                 AND o.status = 'processing'
-                 AND o.available_at <= ?
-               )
-             )
-           ORDER BY p.updated_at, r.order_id`
+    return this.connection
+      .select({ orderId: paymentRequests.orderId })
+      .from(paymentRequests)
+      .innerJoin(
+        paymentProjections,
+        eq(paymentProjections.paymentRequestId, paymentRequests.id)
+      )
+      .innerJoin(outbox, eq(outbox.paymentRequestId, paymentRequests.id))
+      .innerJoin(orders, eq(orders.id, paymentRequests.orderId))
+      .where(
+        and(
+          eq(paymentProjections.settlementMode, settlementMode),
+          isNull(orders.terminalState),
+          or(
+            inArray(paymentProjections.status, ["SUBMITTED", "UNKNOWN"]),
+            and(
+              eq(paymentProjections.status, "SUBMITTING"),
+              eq(outbox.status, "processing"),
+              lte(outbox.availableAt, now)
+            )
+          )
         )
-        .all(settlementMode, now) as Array<{ order_id: string }>
-    ).map((row) => String(row.order_id));
+      )
+      .orderBy(asc(paymentProjections.updatedAt), asc(paymentRequests.orderId))
+      .all()
+      .map((row) => row.orderId);
   }
 
   confirmationByTokenHash(
     tokenHash: string
   ): ConfirmationLookupRow | undefined {
     const row = this.connection
-      .prepare(
-        `SELECT c.id AS confirmation_id, c.participant_id,
-                c.status AS confirmation_status, c.confirmed_at, c.declined_at,
-                p.user_id AS participant_user_id,
-                p.display_name AS participant_display_name, p.units AS participant_units,
-                o.title AS order_title,
-                coalesce(o.terminal_state, o.state) AS order_state,
-                a.amount_atomic AS allocation_amount_atomic,
-                s.*
-         FROM pm_user_confirmations c
-         JOIN pm_participants p ON p.id = c.participant_id
-         JOIN pm_checkout_snapshots s ON s.id = c.checkout_id
-         JOIN pm_orders o ON o.id = s.order_id
-         JOIN pm_allocations a
-           ON a.checkout_id = s.id AND a.participant_id = c.participant_id
-         WHERE c.token_hash = ?`
+      .select({
+        confirmation: userConfirmations,
+        participant: participantTable,
+        checkout: checkoutSnapshots,
+        order: orders,
+        allocation: allocationTable
+      })
+      .from(userConfirmations)
+      .innerJoin(
+        participantTable,
+        eq(participantTable.id, userConfirmations.participantId)
       )
-      .get(tokenHash) as Record<string, unknown> | undefined;
+      .innerJoin(
+        checkoutSnapshots,
+        eq(checkoutSnapshots.id, userConfirmations.checkoutId)
+      )
+      .innerJoin(orders, eq(orders.id, checkoutSnapshots.orderId))
+      .innerJoin(
+        allocationTable,
+        and(
+          eq(allocationTable.checkoutId, checkoutSnapshots.id),
+          eq(allocationTable.participantId, participantTable.id)
+        )
+      )
+      .where(eq(userConfirmations.tokenHash, tokenHash))
+      .get();
     if (!row) return undefined;
     return {
-      ...mapCheckout(row),
-      confirmationId: String(row.confirmation_id),
-      participantId: String(row.participant_id),
-      participantUserId: String(row.participant_user_id),
-      participantDisplayName: String(row.participant_display_name),
-      participantUnits: Number(row.participant_units),
-      orderTitle: String(row.order_title),
-      orderState: String(row.order_state) as OrderState,
-      confirmationStatus: String(
-        row.confirmation_status
-      ) as ConfirmationLookupRow["confirmationStatus"],
-      confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
-      declinedAt: row.declined_at === null ? null : String(row.declined_at),
-      allocationAmountAtomic: String(row.allocation_amount_atomic)
+      ...mapCheckout(row.checkout),
+      confirmationId: row.confirmation.id,
+      participantId: row.participant.id,
+      participantUserId: row.participant.userId,
+      participantDisplayName: row.participant.displayName,
+      participantUnits: row.participant.units,
+      orderTitle: row.order.title,
+      orderState: (row.order.terminalState ?? row.order.state) as OrderState,
+      confirmationStatus: row.confirmation
+        .status as ConfirmationLookupRow["confirmationStatus"],
+      confirmedAt: row.confirmation.confirmedAt,
+      declinedAt: row.confirmation.declinedAt,
+      allocationAmountAtomic: row.allocation.amountAtomic
     };
   }
 
   expireConfirmation(id: string, now: string): void {
     this.connection
-      .prepare(
-        `UPDATE pm_user_confirmations
-         SET status = 'expired', updated_at = ?
-         WHERE id = ? AND status = 'pending'`
+      .update(userConfirmations)
+      .set({ status: "expired", updatedAt: now })
+      .where(
+        and(
+          eq(userConfirmations.id, id),
+          eq(userConfirmations.status, "pending")
+        )
       )
-      .run(now, id);
+      .run();
   }
 
   confirm(id: string, actorUserId: string, now: string): boolean {
-    const result = this.connection
-      .prepare(
-        `UPDATE pm_user_confirmations
-         SET status = 'confirmed', acted_by_user_id = ?, confirmed_at = ?,
-             declined_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'pending'`
-      )
-      .run(actorUserId, now, now, id);
-    return result.changes > 0;
+    return (
+      this.connection
+        .update(userConfirmations)
+        .set({
+          status: "confirmed",
+          actedByUserId: actorUserId,
+          confirmedAt: now,
+          declinedAt: null,
+          updatedAt: now
+        })
+        .where(
+          and(
+            eq(userConfirmations.id, id),
+            eq(userConfirmations.status, "pending")
+          )
+        )
+        .run().changes > 0
+    );
   }
 
   decline(id: string, actorUserId: string, now: string): boolean {
-    const result = this.connection
-      .prepare(
-        `UPDATE pm_user_confirmations
-         SET status = 'declined', acted_by_user_id = ?, declined_at = ?,
-             confirmed_at = NULL, updated_at = ?
-         WHERE id = ? AND status = 'pending'`
-      )
-      .run(actorUserId, now, now, id);
-    return result.changes > 0;
+    return (
+      this.connection
+        .update(userConfirmations)
+        .set({
+          status: "declined",
+          actedByUserId: actorUserId,
+          declinedAt: now,
+          confirmedAt: null,
+          updatedAt: now
+        })
+        .where(
+          and(
+            eq(userConfirmations.id, id),
+            eq(userConfirmations.status, "pending")
+          )
+        )
+        .run().changes > 0
+    );
   }
 
   rotateConfirmationToken(
@@ -912,81 +944,88 @@ export class OrderTransaction {
   ): boolean {
     return (
       this.connection
-        .prepare(
-          `UPDATE pm_user_confirmations
-           SET token_hash = ?, updated_at = ?
-           WHERE id = ? AND status = 'pending'`
+        .update(userConfirmations)
+        .set({ tokenHash: nextTokenHash, updatedAt: now })
+        .where(
+          and(
+            eq(userConfirmations.id, confirmationId),
+            eq(userConfirmations.status, "pending")
+          )
         )
-        .run(nextTokenHash, now, confirmationId).changes > 0
+        .run().changes > 0
     );
   }
 
   pendingConfirmations(checkoutId: string): PendingConfirmationRow[] {
-    return (
-      this.connection
-        .prepare(
-          `SELECT c.id AS confirmation_id, c.participant_id,
-                  p.user_id, p.display_name
-           FROM pm_user_confirmations c
-           JOIN pm_participants p ON p.id = c.participant_id
-           WHERE c.checkout_id = ? AND c.status = 'pending'
-           ORDER BY p.joined_at, p.id`
+    return this.connection
+      .select({
+        confirmation: userConfirmations,
+        participant: participantTable
+      })
+      .from(userConfirmations)
+      .innerJoin(
+        participantTable,
+        eq(participantTable.id, userConfirmations.participantId)
+      )
+      .where(
+        and(
+          eq(userConfirmations.checkoutId, checkoutId),
+          eq(userConfirmations.status, "pending")
         )
-        .all(checkoutId) as Record<string, unknown>[]
-    ).map((row) => ({
-      confirmationId: String(row.confirmation_id),
-      participantId: String(row.participant_id),
-      userId: String(row.user_id),
-      displayName: String(row.display_name)
-    }));
+      )
+      .orderBy(asc(participantTable.joinedAt), asc(participantTable.id))
+      .all()
+      .map(({ confirmation, participant }) => ({
+        confirmationId: confirmation.id,
+        participantId: participant.id,
+        userId: participant.userId,
+        displayName: participant.displayName
+      }));
   }
 
   allConfirmationsConfirmed(checkoutId: string): boolean {
-    const row = this.connection
-      .prepare(
-        `SELECT COUNT(*) AS total,
-                SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed
-         FROM pm_user_confirmations WHERE checkout_id = ?`
-      )
-      .get(checkoutId) as { total: number; confirmed: number | null };
-    return row.total > 0 && row.confirmed === row.total;
+    const confirmations = this.connection
+      .select({ status: userConfirmations.status })
+      .from(userConfirmations)
+      .where(eq(userConfirmations.checkoutId, checkoutId))
+      .all();
+    return (
+      confirmations.length > 0 &&
+      confirmations.every((row) => row.status === "confirmed")
+    );
   }
 
   operationIdempotency(key: string): OperationIdempotencyRow | undefined {
     const row = this.connection
-      .prepare(
-        "SELECT * FROM pm_operation_idempotency WHERE idempotency_key = ?"
-      )
-      .get(key) as Record<string, unknown> | undefined;
+      .select()
+      .from(operationIdempotencyTable)
+      .where(eq(operationIdempotencyTable.idempotencyKey, key))
+      .get();
     if (!row) return undefined;
     return {
-      idempotencyKey: String(row.idempotency_key),
-      operation: String(row.operation) as OperationIdempotencyRow["operation"],
-      orderId: String(row.order_id),
-      actorUserId: String(row.actor_user_id),
-      requestHash: String(row.request_hash),
-      result: JSON.parse(String(row.result_json)) as OrderDetailView,
-      createdAt: String(row.created_at)
+      idempotencyKey: row.idempotencyKey,
+      operation: row.operation as OperationIdempotencyRow["operation"],
+      orderId: row.orderId,
+      actorUserId: row.actorUserId,
+      requestHash: row.requestHash,
+      result: JSON.parse(row.resultJson) as OrderDetailView,
+      createdAt: row.createdAt
     };
   }
 
   insertOperationIdempotency(row: OperationIdempotencyRow): void {
     this.connection
-      .prepare(
-        `INSERT INTO pm_operation_idempotency
-         (idempotency_key, operation, order_id, actor_user_id, request_hash,
-          result_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        row.idempotencyKey,
-        row.operation,
-        row.orderId,
-        row.actorUserId,
-        row.requestHash,
-        JSON.stringify(row.result),
-        row.createdAt
-      );
+      .insert(operationIdempotencyTable)
+      .values({
+        idempotencyKey: row.idempotencyKey,
+        operation: row.operation,
+        orderId: row.orderId,
+        actorUserId: row.actorUserId,
+        requestHash: row.requestHash,
+        resultJson: JSON.stringify(row.result),
+        createdAt: row.createdAt
+      })
+      .run();
   }
 
   ensureConfirmationSet(input: {
@@ -996,44 +1035,29 @@ export class OrderTransaction {
     now: string;
   }): string {
     this.connection
-      .prepare(
-        `INSERT OR IGNORE INTO pm_confirmation_sets
-         (id, order_id, checkout_id, created_at) VALUES (?, ?, ?, ?)`
-      )
-      .run(input.id, input.orderId, input.checkoutId, input.now);
-    const row = this.connection
-      .prepare("SELECT id FROM pm_confirmation_sets WHERE checkout_id = ?")
-      .get(input.checkoutId) as { id: string };
-    return row.id;
+      .insert(confirmationSets)
+      .values({
+        id: input.id,
+        orderId: input.orderId,
+        checkoutId: input.checkoutId,
+        createdAt: input.now
+      })
+      .onConflictDoNothing()
+      .run();
+    return this.connection
+      .select({ id: confirmationSets.id })
+      .from(confirmationSets)
+      .where(eq(confirmationSets.checkoutId, input.checkoutId))
+      .get()!.id;
   }
 
   ensurePaymentRequest(row: NewPaymentRequest): boolean {
     return (
       this.connection
-        .prepare(
-          `INSERT OR IGNORE INTO pm_payment_requests
-           (id, order_id, checkout_id, checkout_version, checkout_hash,
-            confirmation_set_id, idempotency_key, payer_ref, payee_id, asset_id,
-            amount_atomic, expires_at, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          row.id,
-          row.orderId,
-          row.checkoutId,
-          row.checkoutVersion,
-          row.checkoutHash,
-          row.confirmationSetId,
-          row.idempotencyKey,
-          row.payerRef,
-          row.payeeId,
-          row.assetId,
-          row.amountAtomic,
-          row.expiresAt,
-          row.status,
-          row.createdAt,
-          row.updatedAt
-        ).changes > 0
+        .insert(paymentRequests)
+        .values(row)
+        .onConflictDoNothing()
+        .run().changes > 0
     );
   }
 
@@ -1056,28 +1080,32 @@ export class OrderTransaction {
       throw new Error("Payment request identity conflict.");
     }
     this.connection
-      .prepare(
-        `INSERT OR IGNORE INTO pm_payment_projections
-         (payment_request_id, operation_id, status, settlement_mode, attempts,
-          created_at, updated_at)
-         VALUES (?, ?, 'READY', 'disabled', 0, ?, ?)`
-      )
-      .run(request.id, input.operationId, input.now, input.now);
+      .insert(paymentProjections)
+      .values({
+        paymentRequestId: request.id,
+        operationId: input.operationId,
+        status: "READY",
+        settlementMode: "disabled",
+        attempts: 0,
+        createdAt: input.now,
+        updatedAt: input.now
+      })
+      .onConflictDoNothing()
+      .run();
     this.connection
-      .prepare(
-        `INSERT OR IGNORE INTO pm_outbox
-         (id, payment_request_id, operation_id, status, attempts, available_at,
-          created_at, updated_at)
-         VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)`
-      )
-      .run(
-        input.outboxId,
-        request.id,
-        input.operationId,
-        input.now,
-        input.now,
-        input.now
-      );
+      .insert(outbox)
+      .values({
+        id: input.outboxId,
+        paymentRequestId: request.id,
+        operationId: input.operationId,
+        status: "pending",
+        attempts: 0,
+        availableAt: input.now,
+        createdAt: input.now,
+        updatedAt: input.now
+      })
+      .onConflictDoNothing()
+      .run();
     return created;
   }
 
@@ -1089,45 +1117,58 @@ export class OrderTransaction {
   ): PaymentSubmissionClaim {
     const request = this.paymentRequestById(paymentRequestId);
     if (!request) return "busy";
-    if (
-      !Number.isFinite(new Date(request.expiresAt).getTime()) ||
-      new Date(request.expiresAt).getTime() <= new Date(now).getTime()
-    ) {
+    const expiry = new Date(request.expiresAt).getTime();
+    if (!Number.isFinite(expiry) || expiry <= new Date(now).getTime())
       return "expired";
+    const paymentOutbox = this.paymentOutbox(paymentRequestId);
+    const projection = this.paymentProjection(paymentRequestId);
+    const order = this.getOrder(request.orderId);
+    if (
+      !paymentOutbox ||
+      !projection ||
+      !order ||
+      order.state === "CANCELED" ||
+      !["pending", "blocked"].includes(paymentOutbox.status) ||
+      paymentOutbox.availableAt > now ||
+      !["READY", "UNAVAILABLE"].includes(projection.status)
+    ) {
+      return "busy";
     }
     const claimed = this.connection
-      .prepare(
-        `UPDATE pm_outbox
-         SET status = 'processing', attempts = attempts + 1,
-             last_error_code = NULL, available_at = ?, updated_at = ?
-         WHERE payment_request_id = ? AND status IN ('pending', 'blocked')
-           AND available_at <= ?
-           AND EXISTS (
-             SELECT 1
-             FROM pm_payment_requests r
-             JOIN pm_orders orders ON orders.id = r.order_id
-             JOIN pm_payment_projections p ON p.payment_request_id = r.id
-             WHERE r.id = pm_outbox.payment_request_id
-               AND orders.terminal_state IS NULL
-               AND p.status IN ('READY', 'UNAVAILABLE')
-           )`
+      .update(outbox)
+      .set({
+        status: "processing",
+        attempts: paymentOutbox.attempts + 1,
+        lastErrorCode: null,
+        availableAt: leaseUntil,
+        updatedAt: now
+      })
+      .where(
+        and(
+          eq(outbox.paymentRequestId, paymentRequestId),
+          inArray(outbox.status, ["pending", "blocked"]),
+          lte(outbox.availableAt, now)
+        )
       )
-      .run(leaseUntil, now, paymentRequestId, now).changes;
+      .run().changes;
     if (claimed === 0) return "busy";
     this.connection
-      .prepare(
-        `UPDATE pm_payment_requests
-         SET status = 'submitting', updated_at = ? WHERE id = ?`
-      )
-      .run(now, paymentRequestId);
+      .update(paymentRequests)
+      .set({ status: "submitting", updatedAt: now })
+      .where(eq(paymentRequests.id, paymentRequestId))
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_payment_projections
-         SET status = 'SUBMITTING', settlement_mode = ?, error_code = NULL,
-             error_message = NULL, attempts = attempts + 1, updated_at = ?
-         WHERE payment_request_id = ?`
-      )
-      .run(settlementMode, now, paymentRequestId);
+      .update(paymentProjections)
+      .set({
+        status: "SUBMITTING",
+        settlementMode,
+        errorCode: null,
+        errorMessage: null,
+        attempts: projection.attempts + 1,
+        updatedAt: now
+      })
+      .where(eq(paymentProjections.paymentRequestId, paymentRequestId))
+      .run();
     return "claimed";
   }
 
@@ -1136,61 +1177,79 @@ export class OrderTransaction {
     leaseUntil: string,
     now: string
   ): boolean {
-    const interrupted = this.connection
-      .prepare(
-        `UPDATE pm_payment_projections
-         SET status = 'UNKNOWN', error_code = 'PAYMENT_OPERATION_UNKNOWN',
-             error_message = 'Submission lease expired and requires recovery.',
-             updated_at = ?
-         WHERE payment_request_id = ? AND status = 'SUBMITTING'
-           AND EXISTS (
-             SELECT 1 FROM pm_outbox
-             WHERE payment_request_id = ? AND status = 'processing'
-               AND available_at <= ?
-           )`
-      )
-      .run(now, paymentRequestId, paymentRequestId, now).changes;
-    if (interrupted > 0) {
+    let projection = this.paymentProjection(paymentRequestId);
+    let paymentOutbox = this.paymentOutbox(paymentRequestId);
+    if (!projection || !paymentOutbox) return false;
+    if (
+      projection.status === "SUBMITTING" &&
+      paymentOutbox.status === "processing" &&
+      paymentOutbox.availableAt <= now
+    ) {
       this.connection
-        .prepare(
-          `UPDATE pm_payment_requests SET status = 'unknown', updated_at = ?
-           WHERE id = ? AND status = 'submitting'`
-        )
-        .run(now, paymentRequestId);
+        .update(paymentProjections)
+        .set({
+          status: "UNKNOWN",
+          errorCode: "PAYMENT_OPERATION_UNKNOWN",
+          errorMessage: "Submission lease expired and requires recovery.",
+          updatedAt: now
+        })
+        .where(eq(paymentProjections.paymentRequestId, paymentRequestId))
+        .run();
       this.connection
-        .prepare(
-          `UPDATE pm_outbox SET status = 'unknown', updated_at = ?
-           WHERE payment_request_id = ? AND status = 'processing'`
+        .update(paymentRequests)
+        .set({ status: "unknown", updatedAt: now })
+        .where(
+          and(
+            eq(paymentRequests.id, paymentRequestId),
+            eq(paymentRequests.status, "submitting")
+          )
         )
-        .run(now, paymentRequestId);
+        .run();
+      this.connection
+        .update(outbox)
+        .set({ status: "unknown", updatedAt: now })
+        .where(
+          and(
+            eq(outbox.paymentRequestId, paymentRequestId),
+            eq(outbox.status, "processing")
+          )
+        )
+        .run();
       const request = this.paymentRequestById(paymentRequestId);
-      if (request) {
+      if (request)
         this.updateOrderState(request.orderId, "PAYMENT_UNKNOWN", now);
-      }
+      projection = this.paymentProjection(paymentRequestId);
+      paymentOutbox = this.paymentOutbox(paymentRequestId);
+    }
+    if (
+      !projection ||
+      !paymentOutbox ||
+      !["SUBMITTED", "UNKNOWN"].includes(projection.status) ||
+      !(
+        ["unknown", "completed"].includes(paymentOutbox.status) ||
+        (paymentOutbox.status === "processing" &&
+          paymentOutbox.availableAt <= now)
+      )
+    ) {
+      return false;
     }
     const claimed = this.connection
-      .prepare(
-        `UPDATE pm_outbox
-         SET status = 'processing', attempts = attempts + 1,
-             last_error_code = NULL, available_at = ?, updated_at = ?
-         WHERE payment_request_id = ?
-           AND (status IN ('unknown', 'completed')
-             OR (status = 'processing' AND available_at <= ?))
-           AND EXISTS (
-             SELECT 1 FROM pm_payment_projections
-             WHERE payment_request_id = ?
-               AND status IN ('SUBMITTED', 'UNKNOWN')
-           )`
-      )
-      .run(leaseUntil, now, paymentRequestId, now, paymentRequestId).changes;
+      .update(outbox)
+      .set({
+        status: "processing",
+        attempts: paymentOutbox.attempts + 1,
+        lastErrorCode: null,
+        availableAt: leaseUntil,
+        updatedAt: now
+      })
+      .where(eq(outbox.paymentRequestId, paymentRequestId))
+      .run().changes;
     if (claimed === 0) return false;
     this.connection
-      .prepare(
-        `UPDATE pm_payment_projections
-         SET attempts = attempts + 1, updated_at = ?
-         WHERE payment_request_id = ? AND status IN ('SUBMITTED', 'UNKNOWN')`
-      )
-      .run(now, paymentRequestId);
+      .update(paymentProjections)
+      .set({ attempts: projection.attempts + 1, updatedAt: now })
+      .where(eq(paymentProjections.paymentRequestId, paymentRequestId))
+      .run();
     return true;
   }
 
@@ -1202,43 +1261,35 @@ export class OrderTransaction {
     const request = this.paymentRequestById(paymentRequestId);
     if (!request) throw new Error("Payment request not found.");
     this.connection
-      .prepare(
-        "UPDATE pm_payment_requests SET status = ?, updated_at = ? WHERE id = ?"
-      )
-      .run(update.requestStatus, update.now, paymentRequestId);
+      .update(paymentRequests)
+      .set({ status: update.requestStatus, updatedAt: update.now })
+      .where(eq(paymentRequests.id, paymentRequestId))
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_payment_projections
-         SET status = ?, settlement_mode = ?, error_code = ?, error_message = ?,
-             receipt_id = ?, transaction_hash = ?, explorer_url = ?, confirmed_at = ?,
-             updated_at = ?
-         WHERE payment_request_id = ?`
-      )
-      .run(
-        update.projectionStatus,
-        update.settlementMode,
-        update.errorCode ?? null,
-        update.errorMessage ?? null,
-        update.receipt?.receiptId ?? null,
-        update.receipt?.transactionHash ?? null,
-        update.receipt?.explorerUrl ?? null,
-        update.receipt?.confirmedAt ?? null,
-        update.now,
-        paymentRequestId
-      );
+      .update(paymentProjections)
+      .set({
+        status: update.projectionStatus,
+        settlementMode: update.settlementMode,
+        errorCode: update.errorCode ?? null,
+        errorMessage: update.errorMessage ?? null,
+        receiptId: update.receipt?.receiptId ?? null,
+        transactionHash: update.receipt?.transactionHash ?? null,
+        explorerUrl: update.receipt?.explorerUrl ?? null,
+        confirmedAt: update.receipt?.confirmedAt ?? null,
+        updatedAt: update.now
+      })
+      .where(eq(paymentProjections.paymentRequestId, paymentRequestId))
+      .run();
     this.connection
-      .prepare(
-        `UPDATE pm_outbox
-         SET status = ?, last_error_code = ?, available_at = ?, updated_at = ?
-         WHERE payment_request_id = ?`
-      )
-      .run(
-        update.outboxStatus,
-        update.errorCode ?? null,
-        update.availableAt,
-        update.now,
-        paymentRequestId
-      );
+      .update(outbox)
+      .set({
+        status: update.outboxStatus,
+        lastErrorCode: update.errorCode ?? null,
+        availableAt: update.availableAt,
+        updatedAt: update.now
+      })
+      .where(eq(outbox.paymentRequestId, paymentRequestId))
+      .run();
     this.updateOrderState(request.orderId, update.orderState, update.now);
   }
 
@@ -1310,13 +1361,13 @@ export class OrderRepository {
   constructor(private readonly database: PoolMateDatabase) {}
 
   read<T>(operation: (transaction: OrderTransaction) => T): T {
-    return this.database.read((connection) =>
+    return this.database.ormRead((connection) =>
       operation(new OrderTransaction(connection))
     );
   }
 
   immediate<T>(operation: (transaction: OrderTransaction) => T): T {
-    return this.database.immediate((connection) =>
+    return this.database.ormImmediate((connection) =>
       operation(new OrderTransaction(connection))
     );
   }

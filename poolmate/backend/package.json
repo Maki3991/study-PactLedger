@@ -17,6 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "migrate": "tsx scripts/migrate.ts",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:check": "drizzle-kit check --config drizzle.config.ts",
     "healthcheck": "tsx scripts/healthcheck.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "ci": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run healthcheck && npm run audit:prod"
@@ -40,6 +42,7 @@
     "@types/node": "^25.5.0",
     "@typescript-eslint/eslint-plugin": "^8.57.0",
     "@typescript-eslint/parser": "^8.57.0",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.2",
     "globals": "^17.4.0",
     "jiti": "^2.7.0",

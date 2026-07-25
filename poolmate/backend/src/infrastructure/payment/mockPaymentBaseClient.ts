@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import type Database from "better-sqlite3";
+import { eq } from "drizzle-orm";
 import type { PoolMatePaymentRequest } from "@poolmate/shared";
 import type {
   PaymentBaseClient,
   PaymentBaseOutcome
 } from "../../application/ports/paymentBaseClient.js";
 import type { PoolMateDatabase } from "../db/database.js";
+import {
+  mockPaymentOperations,
+  mockPolicyDecisions,
+  mockSettlementReceipts
+} from "../db/schema.js";
 
 interface MockPolicyCheck {
   code: string;
@@ -20,16 +25,16 @@ interface MockPolicyDecision {
 }
 
 interface MockOperationRow {
-  operation_id: string;
-  payment_request_id: string;
-  idempotency_key: string;
-  request_hash: string;
-  request_json: string;
+  operationId: string;
+  paymentRequestId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  requestJson: string;
   state: "POLICY_REJECTED" | "DEMO_CONFIRMED";
-  policy_code: string;
-  policy_reason: string;
-  receipt_id: string | null;
-  confirmed_at: string | null;
+  policyCode: string;
+  policyReason: string;
+  receiptId: string | null;
+  confirmedAt: string | null;
 }
 
 export interface MockPaymentBaseClientOptions {
@@ -65,35 +70,55 @@ function canonicalRequest(request: PoolMatePaymentRequest): string {
 }
 
 function loadOperation(
-  connection: Database.Database,
+  connection: PoolMateDatabase["orm"],
   operationId: string
 ): MockOperationRow | undefined {
-  return connection
-    .prepare(
-      `SELECT o.*, d.code AS policy_code, d.reason AS policy_reason,
-              r.id AS receipt_id, r.confirmed_at
-       FROM pm_mock_payment_operations o
-       JOIN pm_mock_policy_decisions d ON d.operation_id = o.operation_id
-       LEFT JOIN pm_mock_settlement_receipts r ON r.operation_id = o.operation_id
-       WHERE o.operation_id = ?`
+  const row = connection
+    .select({
+      operation: mockPaymentOperations,
+      decision: mockPolicyDecisions,
+      receipt: mockSettlementReceipts
+    })
+    .from(mockPaymentOperations)
+    .innerJoin(
+      mockPolicyDecisions,
+      eq(mockPolicyDecisions.operationId, mockPaymentOperations.operationId)
     )
-    .get(operationId) as MockOperationRow | undefined;
+    .leftJoin(
+      mockSettlementReceipts,
+      eq(mockSettlementReceipts.operationId, mockPaymentOperations.operationId)
+    )
+    .where(eq(mockPaymentOperations.operationId, operationId))
+    .get();
+  if (!row) return undefined;
+  return {
+    operationId: row.operation.operationId,
+    paymentRequestId: row.operation.paymentRequestId,
+    idempotencyKey: row.operation.idempotencyKey,
+    requestHash: row.operation.requestHash,
+    requestJson: row.operation.requestJson,
+    state: row.operation.state as MockOperationRow["state"],
+    policyCode: row.decision.code,
+    policyReason: row.decision.reason,
+    receiptId: row.receipt?.id ?? null,
+    confirmedAt: row.receipt?.confirmedAt ?? null
+  };
 }
 
 function asOutcome(row: MockOperationRow): PaymentBaseOutcome {
   if (row.state === "POLICY_REJECTED") {
     return {
       status: "failed",
-      operationId: row.operation_id,
+      operationId: row.operationId,
       settlementMode: "mock",
-      errorCode: row.policy_code,
-      errorMessage: row.policy_reason
+      errorCode: row.policyCode,
+      errorMessage: row.policyReason
     };
   }
-  if (!row.receipt_id || !row.confirmed_at) {
+  if (!row.receiptId || !row.confirmedAt) {
     return {
       status: "unknown",
-      operationId: row.operation_id,
+      operationId: row.operationId,
       settlementMode: "mock",
       errorCode: "PAYMENT_OPERATION_UNKNOWN",
       errorMessage: "Persisted Mock receipt evidence is incomplete."
@@ -101,12 +126,12 @@ function asOutcome(row: MockOperationRow): PaymentBaseOutcome {
   }
   return {
     status: "confirmed",
-    operationId: row.operation_id,
+    operationId: row.operationId,
     settlementMode: "mock",
-    receiptId: row.receipt_id,
+    receiptId: row.receiptId,
     transactionHash: "",
     explorerUrl: "",
-    confirmedAt: row.confirmed_at
+    confirmedAt: row.confirmedAt
   };
 }
 
@@ -143,14 +168,14 @@ export class MockPaymentBaseClient implements PaymentBaseClient {
     const evaluatedAt = this.now().toISOString();
     const decision = this.evaluate(request, operationId, evaluatedAt);
 
-    return this.database.immediate((connection) => {
+    return this.database.ormImmediate((connection) => {
       const existing = loadOperation(connection, operationId);
       if (existing) {
         if (
-          existing.payment_request_id !== request.id ||
-          existing.idempotency_key !== request.idempotencyKey ||
-          existing.request_hash !== requestHash ||
-          existing.request_json !== requestJson
+          existing.paymentRequestId !== request.id ||
+          existing.idempotencyKey !== request.idempotencyKey ||
+          existing.requestHash !== requestHash ||
+          existing.requestJson !== requestJson
         ) {
           return {
             status: "failed",
@@ -166,57 +191,49 @@ export class MockPaymentBaseClient implements PaymentBaseClient {
 
       const approved = decision.outcome === "approved";
       connection
-        .prepare(
-          `INSERT INTO pm_mock_payment_operations
-           (operation_id, payment_request_id, idempotency_key, request_hash,
-            request_json, state, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
+        .insert(mockPaymentOperations)
+        .values({
           operationId,
-          request.id,
-          request.idempotencyKey,
+          paymentRequestId: request.id,
+          idempotencyKey: request.idempotencyKey,
           requestHash,
           requestJson,
-          approved ? "DEMO_CONFIRMED" : "POLICY_REJECTED",
-          evaluatedAt
-        );
+          state: approved ? "DEMO_CONFIRMED" : "POLICY_REJECTED",
+          createdAt: evaluatedAt
+        })
+        .run();
       connection
-        .prepare(
-          `INSERT INTO pm_mock_policy_decisions
-           (id, operation_id, outcome, code, reason, checks_json, evaluated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          `pmpd_${digest(`decision:${operationId}`).slice(0, 32)}`,
+        .insert(mockPolicyDecisions)
+        .values({
+          id: `pmpd_${digest(`decision:${operationId}`).slice(0, 32)}`,
           operationId,
-          decision.outcome,
-          decision.code,
-          decision.reason,
-          JSON.stringify(decision.checks),
+          outcome: decision.outcome,
+          code: decision.code,
+          reason: decision.reason,
+          checksJson: JSON.stringify(decision.checks),
           evaluatedAt
-        );
+        })
+        .run();
       if (approved) {
         connection
-          .prepare(
-            `INSERT INTO pm_mock_settlement_receipts
-             (id, operation_id, status, transaction_hash, explorer_url,
-              confirmed_at, created_at)
-             VALUES (?, ?, 'DEMO_CONFIRMED', '', '', ?, ?)`
-          )
-          .run(
-            `pmrc_mock_${digest(`receipt:${operationId}`).slice(0, 32)}`,
+          .insert(mockSettlementReceipts)
+          .values({
+            id: `pmrc_mock_${digest(`receipt:${operationId}`).slice(0, 32)}`,
             operationId,
-            evaluatedAt,
-            evaluatedAt
-          );
+            status: "DEMO_CONFIRMED",
+            transactionHash: "",
+            explorerUrl: "",
+            confirmedAt: evaluatedAt,
+            createdAt: evaluatedAt
+          })
+          .run();
       }
       return asOutcome(loadOperation(connection, operationId)!);
     });
   }
 
   async recover(operationId: string): Promise<PaymentBaseOutcome> {
-    const existing = this.database.read((connection) =>
+    const existing = this.database.ormRead((connection) =>
       loadOperation(connection, operationId)
     );
     return existing
