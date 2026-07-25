@@ -388,8 +388,14 @@ function RuntimeView({ api, onNavigate }: RuntimeViewProps) {
               <dd>{config.data?.paymentBase.settlementMode ?? "Not reported"}</dd>
             </div>
             <div>
-              <dt>Allowed bot users</dt>
-              <dd>{config.data?.bot.allowedUserCount ?? "Not reported"}</dd>
+              <dt>Telegram user allowlist</dt>
+              <dd>
+                {config.data
+                  ? config.data.bot.userAllowlistEnabled
+                    ? `${config.data.bot.allowedUserCount} users`
+                    : "Disabled"
+                  : "Not reported"}
+              </dd>
             </div>
             <div>
               <dt>Public base URL</dt>

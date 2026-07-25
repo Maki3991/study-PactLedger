@@ -19,7 +19,7 @@ function deferred(): {
 test("bot runtime is disabled without a Telegram token", async () => {
   let created = false;
   const runtime = createBotRuntime(
-    { allowedUserIds: ["101"] },
+    { userAllowlistEnabled: false, allowedUserIds: ["101"] },
     {
       createBot: () => {
         created = true;
@@ -35,10 +35,42 @@ test("bot runtime is disabled without a Telegram token", async () => {
   assert.equal(created, false);
 });
 
-test("bot runtime fails closed when no Telegram users are allowed", async () => {
+test("bot runtime starts without users when the allowlist is disabled", async () => {
+  const polling = deferred();
   let created = false;
   const runtime = createBotRuntime(
-    { token: "test-token", allowedUserIds: [] },
+    {
+      token: "test-token",
+      userAllowlistEnabled: false,
+      allowedUserIds: []
+    },
+    {
+      createBot: () => {
+        created = true;
+        return {
+          init: async () => undefined,
+          start: () => polling.promise,
+          stop: async () => polling.resolve()
+        };
+      }
+    }
+  );
+
+  assert.equal(runtime.getStatus(), "configured");
+  await runtime.start();
+  assert.equal(runtime.getStatus(), "running");
+  assert.equal(created, true);
+  await runtime.stop();
+});
+
+test("bot runtime fails closed when the enabled allowlist is empty", async () => {
+  let created = false;
+  const runtime = createBotRuntime(
+    {
+      token: "test-token",
+      userAllowlistEnabled: true,
+      allowedUserIds: []
+    },
     {
       createBot: () => {
         created = true;
@@ -58,7 +90,11 @@ test("bot runtime reports configured, running, and configured lifecycle", async 
   let initialized = false;
   let stopped = false;
   const runtime = createBotRuntime(
-    { token: "test-token", allowedUserIds: ["101"] },
+    {
+      token: "test-token",
+      userAllowlistEnabled: true,
+      allowedUserIds: ["101"]
+    },
     {
       createBot: () => ({
         init: async () => {
@@ -88,7 +124,11 @@ test("bot runtime exposes Telegram initialization failures", async () => {
   console.error = () => undefined;
   try {
     const runtime = createBotRuntime(
-      { token: "test-token", allowedUserIds: ["101"] },
+      {
+        token: "test-token",
+        userAllowlistEnabled: true,
+        allowedUserIds: ["101"]
+      },
       {
         createBot: () => ({
           init: async () => {

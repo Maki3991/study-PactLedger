@@ -23,7 +23,12 @@ const config: ConfigStatusResponse = {
     appliedMigrations: 1,
     pendingMigrations: 0
   },
-  bot: { framework: "grammy", status: "disabled", allowedUserCount: 0 },
+  bot: {
+    framework: "grammy",
+    status: "disabled",
+    userAllowlistEnabled: false,
+    allowedUserCount: 0
+  },
   paymentBase: { status: "not_configured", settlementMode: "disabled" }
 };
 

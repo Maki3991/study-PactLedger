@@ -7,6 +7,7 @@ test("loadConfig uses safe independent defaults", () => {
 
   assert.equal(config.app.port, 8788);
   assert.equal(config.telegram.token, undefined);
+  assert.equal(config.telegram.userAllowlistEnabled, false);
   assert.deepEqual(config.telegram.allowedUserIds, []);
   assert.equal(config.paymentBase.apiKey, undefined);
   assert.equal(config.paymentBase.settlementMode, "disabled");
@@ -66,6 +67,7 @@ test("loadConfig normalizes non-secret runtime settings", () => {
     {
       POOLMATE_HOST: "0.0.0.0",
       POOLMATE_PORT: "9000",
+      TELEGRAM_USER_ALLOWLIST_ENABLED: "true",
       TELEGRAM_ALLOWED_USER_IDS: "42, 42, 84",
       PAYMENT_BASE_URL: "https://payments.example.test",
       PAYMENT_BASE_API_KEY: "secret",
@@ -77,8 +79,20 @@ test("loadConfig normalizes non-secret runtime settings", () => {
   );
 
   assert.equal(config.app.port, 9000);
+  assert.equal(config.telegram.userAllowlistEnabled, true);
   assert.deepEqual(config.telegram.allowedUserIds, ["42", "84"]);
   assert.equal(config.paymentBase.url, "https://payments.example.test");
   assert.equal(config.paymentBase.submitPath, "/v1/payment-operations");
   assert.equal(config.paymentBase.timeoutMs, 5_000);
+});
+
+test("loadConfig rejects an ambiguous Telegram allowlist switch", () => {
+  assert.throws(
+    () =>
+      loadConfig(
+        { TELEGRAM_USER_ALLOWLIST_ENABLED: "yes" },
+        "/tmp/poolmate-config-test"
+      ),
+    /must be true or false/
+  );
 });

@@ -60,6 +60,7 @@ export class SystemStatusService {
       bot: {
         framework: "grammy",
         status: botStatus,
+        userAllowlistEnabled: config.telegram.userAllowlistEnabled,
         allowedUserCount: config.telegram.allowedUserIds.length
       },
       paymentBase: {

@@ -48,6 +48,7 @@ const botUseCases = new OrderServiceBotUseCases(orderService);
 
 const botRuntime = createBotRuntime({
   token: config.telegram.token,
+  userAllowlistEnabled: config.telegram.userAllowlistEnabled,
   allowedUserIds: config.telegram.allowedUserIds,
   apiRoot: config.telegram.apiRoot,
   proxyUrl: config.telegram.proxyUrl,

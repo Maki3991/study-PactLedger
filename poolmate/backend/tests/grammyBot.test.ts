@@ -7,10 +7,11 @@ interface ApiCall {
   payload: Record<string, unknown>;
 }
 
-function createHarness(allowedUserIds = ["101"]) {
+function createHarness(allowedUserIds = ["101"], userAllowlistEnabled = true) {
   const calls: ApiCall[] = [];
   const bot = createPoolMateBot({
     token: "123456:test-token",
+    userAllowlistEnabled,
     allowedUserIds,
     getBotStatus: () => "running"
   });
@@ -127,6 +128,15 @@ test("grammY silently blocks commands from users outside the allowlist", async (
   await bot.handleUpdate(commandUpdate(4, 999, "/status"));
 
   assert.deepEqual(calls, []);
+});
+
+test("grammY accepts users when the allowlist is disabled", async () => {
+  const { bot, calls } = createHarness([], false);
+
+  await bot.handleUpdate(commandUpdate(30, 999, "/start"));
+
+  assert.equal(calls.length, 1);
+  assert.match(String(calls[0].payload.text), /PoolMate is ready/);
 });
 
 test("grammY access middleware checks callback query origin", async () => {

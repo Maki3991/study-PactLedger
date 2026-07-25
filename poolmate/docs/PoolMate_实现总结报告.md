@@ -118,12 +118,14 @@ PAYMENT_BASE_TIMEOUT_MS
 
 Token 和支付凭证均无 `VITE_` 前缀。启用 Telegram 时 `POOLMATE_PUBLIC_BASE_URL` 必须是外部 HTTPS Frontend origin。
 
+`TELEGRAM_USER_ALLOWLIST_ENABLED` 默认 `false`。关闭时 `TELEGRAM_ALLOWED_USER_IDS` 不参与访问判断；开启时列表为空会使 Bot 进入 `error`，名单外 update 被拒绝。该开关只控制 Telegram 用户级限制，不替代群归属、订单 owner、管理员 API 或确认身份校验。
+
 ## 8. 验收结果
 
 | 验收项 | 结果 |
 |---|---|
 | Backend typecheck / lint / format | 通过 |
-| Backend tests | `86/86` 通过 |
+| Backend tests | `89/89` 通过 |
 | Backend build / empty DB healthcheck | 通过，5 个 migration |
 | Backend production dependency audit | 0 个 high/critical |
 | Frontend lint / typecheck / tests / build | 通过，`28/28` |
@@ -144,7 +146,7 @@ Token 和支付凭证均无 `VITE_` 前缀。启用 Telegram 时 `POOLMATE_PUBLI
 
 1. PactLedger 发布并版本化稳定的远端支付提交和 operation 查询契约，明确鉴权、幂等、审批、原子金额、错误码与 Receipt schema。
 2. 配置独立服务的 Payment Base URL、路径、服务端凭证和 Testnet mode，完成一次真实 `merchant_pay` 并保存 Explorer、Receipt JSON 和数据库证据。
-3. 配置真实 Telegram Token、allowlist 和外部 HTTPS Mini App，使用至少三名真实用户完成群聊、私聊确认、重复 callback 与过期 Checkout smoke。
+3. 配置真实 Telegram Token 和外部 HTTPS Mini App，按部署需要决定是否启用 user allowlist，并使用至少三名真实用户完成群聊、私聊确认、重复 callback 与过期 Checkout smoke。
 4. 在真实 Telegram Web/Desktop 容器中验证页面加载、安全响应头、键盘导航和移动端布局。
 5. 在基座未提供成员入金和 Reservation 证据前，继续禁用 `prefunded_participants`。
 

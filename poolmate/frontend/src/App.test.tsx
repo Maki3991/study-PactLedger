@@ -26,7 +26,12 @@ const config: ConfigStatusResponse = {
     appliedMigrations: 1,
     pendingMigrations: 0
   },
-  bot: { framework: "grammy", status: "disabled", allowedUserCount: 0 },
+  bot: {
+    framework: "grammy",
+    status: "disabled",
+    userAllowlistEnabled: false,
+    allowedUserCount: 0
+  },
   paymentBase: { status: "not_configured", settlementMode: "disabled" }
 };
 
@@ -55,6 +60,9 @@ describe("PoolMate operations dashboard", () => {
     expect(
       screen.getByText(/No external payment base is configured/)
     ).toBeInTheDocument();
+    expect(
+      screen.getByText("Telegram user allowlist").parentElement
+    ).toHaveTextContent("Disabled");
     expect(screen.queryByText(/paid/i)).not.toBeInTheDocument();
   });
 

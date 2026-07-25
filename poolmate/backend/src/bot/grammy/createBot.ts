@@ -14,6 +14,7 @@ const DEFAULT_API_ROOT = "https://api.telegram.org";
 
 export interface CreateGrammyBotConfig {
   token: string;
+  userAllowlistEnabled: boolean;
   allowedUserIds: string[];
   apiRoot?: string;
   proxyUrl?: string;
@@ -25,6 +26,7 @@ export interface CreateGrammyBotConfig {
 
 export interface BotRuntimeConfig {
   token?: string;
+  userAllowlistEnabled: boolean;
   allowedUserIds: string[];
   apiRoot?: string;
   proxyUrl?: string;
@@ -58,7 +60,9 @@ export function createPoolMateBot(
     }
   });
 
-  bot.use(createAccessMiddleware(config.allowedUserIds));
+  bot.use(
+    createAccessMiddleware(config.userAllowlistEnabled, config.allowedUserIds)
+  );
   registerSystemHandlers(bot, {
     getBotStatus: config.getBotStatus,
     getAgentStatus: config.getAgentStatus
@@ -83,7 +87,8 @@ export function createBotRuntime(
   dependencies: BotRuntimeDependencies = {}
 ): BotAdapter {
   const token = config.token?.trim() || "";
-  const accessConfigured = config.allowedUserIds.length > 0;
+  const accessConfigured =
+    !config.userAllowlistEnabled || config.allowedUserIds.length > 0;
   let status: BotStatus = token
     ? accessConfigured
       ? "configured"
@@ -98,6 +103,7 @@ export function createBotRuntime(
     token && accessConfigured
       ? createBot({
           token,
+          userAllowlistEnabled: config.userAllowlistEnabled,
           allowedUserIds: config.allowedUserIds,
           apiRoot: config.apiRoot,
           fetch: createProxyFetch(config.proxyUrl),

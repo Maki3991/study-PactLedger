@@ -75,6 +75,7 @@ export interface ConfigStatusResponse {
   bot: {
     framework: "grammy";
     status: BotStatus;
+    userAllowlistEnabled: boolean;
     allowedUserCount: number;
   };
   paymentBase: {

@@ -169,6 +169,7 @@ function createHarness(
   let privateFailures = 0;
   const bot = createPoolMateBot({
     token: "123456:test-token",
+    userAllowlistEnabled: true,
     allowedUserIds: ["101"],
     getBotStatus: () => "running",
     useCases

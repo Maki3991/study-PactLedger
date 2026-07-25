@@ -18,6 +18,7 @@ export interface PoolMateConfig {
   };
   telegram: {
     token?: string;
+    userAllowlistEnabled: boolean;
     allowedUserIds: string[];
     apiRoot: string;
     proxyUrl?: string;
@@ -67,6 +68,18 @@ function parseCsv(value: string | undefined): string[] {
 function optional(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
+}
+
+function parseBoolean(
+  value: string | undefined,
+  fallback: boolean,
+  name: string
+): boolean {
+  const normalized = optional(value)?.toLowerCase();
+  if (normalized === undefined) return fallback;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`${name} must be true or false.`);
 }
 
 function parseSettlementMode(value: string | undefined): SettlementMode {
@@ -134,6 +147,11 @@ export function loadConfig(
     },
     telegram: {
       token: telegramToken,
+      userAllowlistEnabled: parseBoolean(
+        env.TELEGRAM_USER_ALLOWLIST_ENABLED,
+        false,
+        "TELEGRAM_USER_ALLOWLIST_ENABLED"
+      ),
       allowedUserIds: parseCsv(env.TELEGRAM_ALLOWED_USER_IDS),
       apiRoot: optional(env.TELEGRAM_API_ROOT) ?? "https://api.telegram.org",
       proxyUrl: optional(env.TELEGRAM_PROXY_URL)

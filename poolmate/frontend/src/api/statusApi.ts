@@ -82,6 +82,7 @@ export function isConfigStatusResponse(
     isNonNegativeInteger(value.database.pendingMigrations) &&
     value.bot.framework === "grammy" &&
     isOneOf(value.bot.status, botStatusValues) &&
+    typeof value.bot.userAllowlistEnabled === "boolean" &&
     isNonNegativeInteger(value.bot.allowedUserCount) &&
     isOneOf(value.paymentBase.status, paymentStatusValues) &&
     isOneOf(value.paymentBase.settlementMode, settlementModeValues)
