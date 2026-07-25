@@ -69,7 +69,12 @@ export async function invokeCommandSkill(
     );
   }
   const result = await invoker.invoke(input);
-  return result.confidence >= 0.6 && result.skillId !== "unknown"
-    ? findPoolMateHelpSkill(result.skillId)
-    : undefined;
+  console.info("[poolmate] command skill invocation", {
+    surface: input.surface,
+    skillId: result.skillId,
+    confidence: result.confidence
+  });
+  return result.skillId === "unknown"
+    ? undefined
+    : findPoolMateHelpSkill(result.skillId);
 }

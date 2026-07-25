@@ -843,7 +843,7 @@ export function registerPoolHandlers(
       }
       if (!skill) {
         await context.reply(
-          "PoolMate could not decide which command skill to call. Use /help or /pool_new <targetUnits> <title>."
+          "The LLM did not call a PoolMate command skill for this request. No command was executed."
         );
         return;
       }

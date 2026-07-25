@@ -902,6 +902,43 @@ test("natural-language mention reports command skill calling as not configured",
   assert.doesNotMatch(String(reply?.payload.text), /could not decide/);
 });
 
+test("natural-language mention reports an explicit LLM unknown without executing a command", async () => {
+  const commandSkillInvoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke() {
+      return {
+        skillId: "unknown",
+        confidence: 0.88,
+        reason: "The request is unrelated to PoolMate."
+      };
+    }
+  };
+  const extractor: OrderDraftExtractor = {
+    getStatus: () => "configured",
+    async extract() {
+      throw new Error("draft extraction should not run for unknown");
+    }
+  };
+  const { useCases, calls } = createUseCases();
+  const { bot, apiCalls } = createHarness(
+    useCases,
+    undefined,
+    Number.POSITIVE_INFINITY,
+    extractor,
+    commandSkillInvoker
+  );
+
+  await bot.handleUpdate(textUpdate(118, "@poolmate_test_bot 今天天气怎么样"));
+
+  assert.equal(calls.create.length, 0);
+  const reply = apiCalls.find((call) => call.method === "sendMessage");
+  assert.match(
+    String(reply?.payload.text),
+    /LLM did not call a PoolMate command skill/
+  );
+  assert.match(String(reply?.payload.text), /No command was executed/);
+});
+
 test("missing natural-language fields and disabled LLM never create drafts", async () => {
   const createPoolSkillInvoker: CommandSkillInvoker = {
     getStatus: () => "configured",

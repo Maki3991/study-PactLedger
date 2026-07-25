@@ -203,6 +203,14 @@ validate_runtime_env() {
     exit 1
   fi
 
+  case "$(env_value POOLMATE_LLM_ENABLED | tr '[:upper:]' '[:lower:]')" in
+    false|0|no|off)
+      echo "POOLMATE_LLM_ENABLED disables natural-language command skill calling in $env_file." >&2
+      echo "Refusing to start a Telegram bot with LLM command skills disabled." >&2
+      exit 1
+      ;;
+  esac
+
   if [[ -z "$(env_value AIPING_API_KEY)" \
     && -z "$(env_value DEEPSEEK_API_KEY)" \
     && -z "$(env_value POOLMATE_LLM_API_KEY)" ]]; then
@@ -213,24 +221,97 @@ validate_runtime_env() {
 }
 
 wait_for_backend() {
-  local port
-  local url
-  port="$(backend_port)"
-  port="${port:-8788}"
-  url="http://127.0.0.1:${port}/health"
-  echo "Waiting for backend health: $url"
+  echo "Waiting for backend container health"
   for _ in $(seq 1 60); do
-    if curl --fail --silent --show-error "$url" >/tmp/poolmate-health.json 2>/dev/null; then
-      cat /tmp/poolmate-health.json
+    if docker compose "${compose_args[@]}" exec --no-TTY backend \
+      node -e '
+        fetch("http://127.0.0.1:8788/health/ready")
+          .then(async (response) => {
+            const body = await response.text();
+            if (!response.ok) process.exit(1);
+            process.stdout.write(body);
+          })
+          .catch(() => process.exit(1));
+      ' 2>/dev/null; then
       printf '\n'
-      rm -f /tmp/poolmate-health.json
       return 0
     fi
     sleep 1
   done
-  rm -f /tmp/poolmate-health.json
-  echo "Backend did not become healthy: $url" >&2
+  echo "Backend container did not become healthy." >&2
   docker compose "${compose_args[@]}" ps >&2 || true
+  docker compose "${compose_args[@]}" logs --tail 120 backend >&2 || true
+  exit 1
+}
+
+verify_runtime() {
+  echo "Verifying Telegram bot and LLM runtime"
+  if docker compose "${compose_args[@]}" exec --no-TTY backend \
+    node -e '
+      fetch("http://127.0.0.1:8788/api/public/config-status")
+        .then(async (response) => {
+          if (!response.ok) throw new Error("config status request failed");
+          const status = await response.json();
+          const summary = {
+            bot: status.bot?.status,
+            llm: status.llm?.status,
+            model: status.llm?.model
+          };
+          process.stdout.write(JSON.stringify(summary));
+          if (status.bot?.status !== "running") process.exitCode = 1;
+          if (status.llm?.status !== "configured") process.exitCode = 1;
+        })
+        .catch(() => process.exit(1));
+    '; then
+    printf '\n'
+    return 0
+  fi
+  printf '\n' >&2
+  echo "PoolMate runtime verification failed: bot and LLM must both be configured." >&2
+  docker compose "${compose_args[@]}" logs --tail 120 backend >&2 || true
+  exit 1
+}
+
+verify_command_skill_call() {
+  echo "Verifying live LLM command skill call"
+  if docker compose "${compose_args[@]}" exec --no-TTY backend \
+    node --input-type=module -e '
+      import { loadConfig } from "./dist/config.js";
+      import { createCommandSkillInvoker } from "./dist/infrastructure/llm/httpCommandSkillInvoker.js";
+
+      const invoker = createCommandSkillInvoker(loadConfig().llm);
+      invoker
+        .invoke({
+          text: "怎么用",
+          locale: "zh",
+          surface: "telegram_mention"
+        })
+        .then((result) => {
+          process.stdout.write(
+            JSON.stringify({
+              skillId: result.skillId,
+              confidence: result.confidence
+            })
+          );
+          if (result.skillId !== "general_help") process.exitCode = 1;
+        })
+        .catch((error) => {
+          process.stderr.write(
+            JSON.stringify({
+              error:
+                typeof error?.code === "string"
+                  ? error.code
+                  : "LLM_COMMAND_SKILL_SMOKE_FAILED"
+            })
+          );
+          process.exit(1);
+        });
+    '; then
+    printf '\n'
+    return 0
+  fi
+  printf '\n' >&2
+  echo "PoolMate LLM smoke test failed: expected general_help for 怎么用." >&2
   docker compose "${compose_args[@]}" logs --tail 120 backend >&2 || true
   exit 1
 }
@@ -241,19 +322,27 @@ case "$action" in
   up)
     docker compose "${compose_args[@]}" up --detach --build
     wait_for_backend
+    verify_runtime
+    verify_command_skill_call
     ;;
   update)
     docker compose "${compose_args[@]}" up --detach --build --force-recreate --remove-orphans
     wait_for_backend
+    verify_runtime
+    verify_command_skill_call
     docker compose "${compose_args[@]}" ps
     ;;
   rebuild)
     docker compose "${compose_args[@]}" up --detach --build --force-recreate
     wait_for_backend
+    verify_runtime
+    verify_command_skill_call
     ;;
   restart)
     docker compose "${compose_args[@]}" restart
     wait_for_backend
+    verify_runtime
+    verify_command_skill_call
     ;;
   down)
     docker compose "${compose_args[@]}" down

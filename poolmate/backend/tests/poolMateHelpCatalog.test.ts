@@ -7,6 +7,8 @@ import {
   findPoolMateHelpSkill,
   parsePoolMateHelpSkillMarkdown
 } from "../src/bot/help/poolMateHelpCatalog.js";
+import { invokeCommandSkill } from "../src/bot/help/commandSkillHelp.js";
+import type { CommandSkillInvoker } from "../src/bot/help/commandSkillInvoker.js";
 
 test("PoolMate help command skill is loaded from Markdown", () => {
   assert.match(POOLMATE_HELP_SKILL_MARKDOWN, /^# PoolMate Bot Command Skill/);
@@ -37,4 +39,25 @@ test("PoolMate Markdown skill parser rejects missing command skills", () => {
     () => parsePoolMateHelpSkillMarkdown("# Empty skill\n"),
     /does not define any command skills/
   );
+});
+
+test("a valid LLM command skill call is not discarded by a confidence threshold", async () => {
+  const invoker: CommandSkillInvoker = {
+    getStatus: () => "configured",
+    async invoke() {
+      return {
+        skillId: "general_help",
+        confidence: 0.42,
+        reason: "The user asks how to use PoolMate."
+      };
+    }
+  };
+
+  const skill = await invokeCommandSkill(invoker, {
+    text: "怎么用",
+    locale: "zh",
+    surface: "telegram_mention"
+  });
+
+  assert.equal(skill?.id, "general_help");
 });
