@@ -67,12 +67,13 @@ function Reveal({ children, className = '', delay = 0 }: { children: ReactNode; 
 
 /* ------------------------------ bot status ------------------------------ */
 
-interface BotStatusData {
-  ok: boolean
-  configured?: boolean
-  running?: boolean
-  username?: string
-  reasonCode?: string
+interface BotStatusData { ok: boolean; username?: string; inviteUrl?: string; reasonCode?: string }
+
+const BOT_STATUS_REASON: Record<string, string> = {
+  BOT_NOT_CONFIGURED: '未配置',
+  BOT_NOT_STARTED: '未启动',
+  BOT_UNREACHABLE: 'Telegram 不可达',
+  BOT_POLLING_STOPPED: '轮询已停止',
 }
 
 function BotStatusWidget() {
@@ -83,10 +84,10 @@ function BotStatusWidget() {
     setChecking(true)
     try {
       const res = await fetch('/api/public/poolmate/bot-status')
-      if (!res.ok) throw new Error(`BOT_STATUS_HTTP_${res.status}`)
+      if (!res.ok) throw new Error(`Bot status request failed: ${res.status}`)
       setStatus(await res.json() as BotStatusData)
     } catch {
-      setStatus({ ok: false, reasonCode: 'BOT_STATUS_UNAVAILABLE' })
+      setStatus({ ok: false, reasonCode: 'NETWORK_ERROR' })
     } finally {
       setChecking(false)
     }
@@ -101,7 +102,9 @@ function BotStatusWidget() {
   const label = checking
     ? 'Bot 检测中…'
     : !status ? '—'
-    : status.ok && status.running ? `@${status.username} · 在线` : `Bot 当前不可用 · ${status.reasonCode ?? 'UNKNOWN'}`
+    : status.ok
+      ? `@${status.username} · 在线`
+      : `Bot 离线 · ${BOT_STATUS_REASON[status.reasonCode ?? ''] ?? '网络错误'}`
 
   return (
     <div className="pm-bot-status">
