@@ -24,7 +24,10 @@ import {
   runPoolMateCheckout,
 } from '../services/pactledgerClient'
 
-const TELEGRAM_GROUP_URL = import.meta.env.VITE_POOLMATE_TELEGRAM_URL?.trim()
+// The public demo entry must remain usable even while the server-side Telegram
+// polling runtime is unavailable. This invite URL is intentionally public and
+// does not carry any bot token or other credential.
+const TELEGRAM_GROUP_URL = 'https://t.me/+XAl1xVJIHjhjM2Zl'
 
 function TelegramCta({ className, children }: { className: string; children: ReactNode }) {
   if (!TELEGRAM_GROUP_URL) {
@@ -64,7 +67,13 @@ function Reveal({ children, className = '', delay = 0 }: { children: ReactNode; 
 
 /* ------------------------------ bot status ------------------------------ */
 
-interface BotStatusData { ok: boolean; username?: string; inviteUrl?: string; reason?: string }
+interface BotStatusData {
+  ok: boolean
+  configured?: boolean
+  running?: boolean
+  username?: string
+  reasonCode?: string
+}
 
 function BotStatusWidget() {
   const [status, setStatus] = useState<BotStatusData | null>(null)
@@ -73,10 +82,11 @@ function BotStatusWidget() {
   const check = useCallback(async () => {
     setChecking(true)
     try {
-      const res = await fetch('/api/poolmate/bot-status')
+      const res = await fetch('/api/public/poolmate/bot-status')
+      if (!res.ok) throw new Error(`BOT_STATUS_HTTP_${res.status}`)
       setStatus(await res.json() as BotStatusData)
     } catch {
-      setStatus({ ok: false, reason: '网络错误，无法连接后端' })
+      setStatus({ ok: false, reasonCode: 'BOT_STATUS_UNAVAILABLE' })
     } finally {
       setChecking(false)
     }
@@ -91,17 +101,15 @@ function BotStatusWidget() {
   const label = checking
     ? 'Bot 检测中…'
     : !status ? '—'
-    : status.ok ? `@${status.username} · 在线` : `Bot 离线 · ${status.reason ?? '未知'}`
+    : status.ok && status.running ? `@${status.username} · 在线` : `Bot 当前不可用 · ${status.reasonCode ?? 'UNKNOWN'}`
 
   return (
     <div className="pm-bot-status">
       <span className={`pm-bot-dot ${dotClass}`} />
       <span className="pm-bot-label">{label}</span>
-      {status?.ok && status.inviteUrl && (
-        <a className="pm-bot-open" href={status.inviteUrl} target="_blank" rel="noreferrer">
-          打开群 →
-        </a>
-      )}
+      <a className="pm-bot-open" href={TELEGRAM_GROUP_URL} target="_blank" rel="noreferrer">
+        进入 Telegram →
+      </a>
       <button className="pm-bot-refresh" type="button" title="重新检测" disabled={checking} onClick={() => void check()}>
         {checking ? <LoaderCircle size={12} className="pm-spin" /> : <RotateCcw size={12} />}
       </button>
@@ -428,14 +436,14 @@ export function PoolMate() {
           </p>
           <div className="pm-hero-cta">
             <TelegramCta className="pm-btn pm-btn-primary">
-              {TELEGRAM_GROUP_URL ? '在 Telegram 中打开' : 'Telegram 群待配置'} <ArrowRight size={16} />
+              在 Telegram 中打开 <ArrowRight size={16} />
             </TelegramCta>
             <a className="pm-btn pm-btn-text" href="#how">
               看业务流程 <ChevronRight size={16} />
             </a>
             <a className="pm-btn pm-btn-text" href="#base-proof">运行基座校验 <ChevronRight size={16} /></a>
           </div>
-          <p className="pm-hero-note">{TELEGRAM_GROUP_URL ? '评委现场点击进群 · 30 秒体验完整拼单闭环' : '页面演示可直接体验 · 配置 VITE_POOLMATE_TELEGRAM_URL 后开放进群入口'}</p>
+          <p className="pm-hero-note">Bot 不可用时也可直接进入 Telegram 群；链上状态与 Mock Receipt 仍会如实标注。</p>
           <BotStatusWidget />
         </Reveal>
         <Reveal className="pm-hero-phone" delay={150}>
@@ -522,9 +530,9 @@ export function PoolMate() {
           <div className="pm-final-card">
             <BadgeCheck size={26} className="pm-final-icon" />
             <h2>第二个参考应用，证明基座不是量化专用。</h2>
-            <p>{TELEGRAM_GROUP_URL ? '进群发起一单拼单，观察相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务。' : '当前页面演示相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务；配置群链接后即可开放现场入口。'}</p>
+            <p>进群发起一单拼单，观察相同的 Account、Policy、Intent 与 Receipt 如何承载完全不同的业务。</p>
             <TelegramCta className="pm-btn pm-btn-primary pm-btn-lg">
-              {TELEGRAM_GROUP_URL ? '加入 Telegram 群 · 现场拼一单' : 'Telegram 群入口待配置'} <ArrowRight size={17} />
+              加入 Telegram 群 · 现场拼一单 <ArrowRight size={17} />
             </TelegramCta>
             <div className="pm-final-meta">
               <span><Wallet size={13} /> 独立 Treasury 账户</span>
